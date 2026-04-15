@@ -26,7 +26,7 @@ DEFAULT_COLORS = {
 def load_config(project=None):
     """Load config for a project. Falls back to global default if no project config exists."""
     defaults = {
-        "last_move_dir": "/mnt/1TBSSD",
+        "last_move_dir": os.path.expanduser("~"),
         "keep_viewer_open": True,
         "dbl_click_spread": False,
         "last_project": "",
@@ -72,10 +72,10 @@ def reset_to_default(project):
 
 class FolderPickerDialog(QDialog):
     """Single-click folder selector. Single-click selects, double-click navigates."""
-    def __init__(self, parent=None, initialdir="/mnt/1TBSSD", title="Select Folder"):
+    def __init__(self, parent=None, initialdir=None, title="Select Folder"):
         super().__init__(parent)
         self.result = None
-        self._current = os.path.abspath(initialdir) if os.path.isdir(initialdir) else os.path.expanduser("~")
+        self._current = os.path.abspath(initialdir) if initialdir and os.path.isdir(initialdir) else os.path.expanduser("~")
         self.setWindowTitle(title)
         self.resize(600, 520)
         self._build_ui()

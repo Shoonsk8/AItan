@@ -280,7 +280,7 @@ class AISearchApp(QMainWindow):
                 self.setGeometry(x, y, w, h)
             else:
                 self.resize(1500, 980)
-        self.last_move_dir = self.config.get("last_move_dir", "/mnt/1TBSSD")
+        self.last_move_dir = self.config.get("last_move_dir", os.path.expanduser("~"))
         self.keep_viewer_open = self.config.get("keep_viewer_open", True)
 
         self.data              = None

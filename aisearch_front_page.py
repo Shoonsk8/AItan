@@ -57,7 +57,7 @@ def open_external_viewer(path, keep_open=True):
 
 def create_context_menu(parent_widget, app_instance):
     menu = QMenu(parent_widget)
-    menu.addAction("📂 Open Folder (Nemo)", app_instance.open_folder)
+    menu.addAction("📂 Open Folder", app_instance.open_folder)
     menu.addAction("📝 Rename (F2)",        lambda: app_instance.rename_file(from_menu=True))
     menu.addAction("📦 Move to... (M)",     app_instance.move_to_folder_manually)
     menu.addSeparator()
@@ -221,39 +221,60 @@ def execute_manual_move(old_path, target_dir, data, project_name, mode="size_che
 
 
 def trash_file(path):
-    """Move to XDG trash. Returns (trash_path, None) or (None, error_str)."""
-    import time
-    trash_dir  = os.path.expanduser("~/.local/share/Trash")
-    files_dir  = os.path.join(trash_dir, "files")
-    info_dir   = os.path.join(trash_dir, "info")
-    os.makedirs(files_dir, exist_ok=True)
-    os.makedirs(info_dir,  exist_ok=True)
-    stem, ext  = os.path.splitext(os.path.basename(path))
-    trash_name = os.path.basename(path)
-    dest       = os.path.join(files_dir, trash_name)
-    i = 2
-    while os.path.exists(dest):
-        trash_name = f"{stem}_{i}{ext}"; dest = os.path.join(files_dir, trash_name); i += 1
-    info_path = os.path.join(info_dir, trash_name + ".trashinfo")
-    try:
-        with open(info_path, 'w') as f:
-            f.write(f"[Trash Info]\nPath={os.path.abspath(path)}\n"
-                    f"DeletionDate={time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
-        shutil.move(path, dest)
-        return dest, None
-    except Exception as e:
-        if os.path.exists(info_path): os.remove(info_path)
-        return None, str(e)
+    """Move file to trash. Returns (trash_path, None) or (None, error_str).
+    On Linux uses XDG trash; on Windows/macOS uses ~/.aisearch_trash for undo support."""
+    import sys, time
+    stem, ext = os.path.splitext(os.path.basename(path))
+
+    if sys.platform == "linux":
+        # XDG trash — full .trashinfo for desktop integration
+        trash_dir = os.path.expanduser("~/.local/share/Trash")
+        files_dir = os.path.join(trash_dir, "files")
+        info_dir  = os.path.join(trash_dir, "info")
+        os.makedirs(files_dir, exist_ok=True)
+        os.makedirs(info_dir,  exist_ok=True)
+        trash_name = os.path.basename(path)
+        dest       = os.path.join(files_dir, trash_name)
+        i = 2
+        while os.path.exists(dest):
+            trash_name = f"{stem}_{i}{ext}"; dest = os.path.join(files_dir, trash_name); i += 1
+        info_path = os.path.join(info_dir, trash_name + ".trashinfo")
+        try:
+            with open(info_path, 'w') as f:
+                f.write(f"[Trash Info]\nPath={os.path.abspath(path)}\n"
+                        f"DeletionDate={time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+            shutil.move(path, dest)
+            return dest, None
+        except Exception as e:
+            if os.path.exists(info_path): os.remove(info_path)
+            return None, str(e)
+    else:
+        # Windows / macOS: stage in ~/.aisearch_trash so undo (restore) works
+        trash_dir = os.path.join(os.path.expanduser("~"), ".aisearch_trash")
+        os.makedirs(trash_dir, exist_ok=True)
+        trash_name = os.path.basename(path)
+        dest = os.path.join(trash_dir, trash_name)
+        i = 2
+        while os.path.exists(dest):
+            trash_name = f"{stem}_{i}{ext}"; dest = os.path.join(trash_dir, trash_name); i += 1
+        try:
+            shutil.move(path, dest)
+            return dest, None
+        except Exception as e:
+            return None, str(e)
+
 
 def restore_from_trash(trash_path, original_path):
     """Restore a trashed file back to its original location."""
     try:
         os.makedirs(os.path.dirname(os.path.abspath(original_path)), exist_ok=True)
         shutil.move(trash_path, original_path)
+        # Clean up XDG .trashinfo if present (Linux only)
         info_path = os.path.join(
             os.path.expanduser("~/.local/share/Trash/info"),
             os.path.basename(trash_path) + ".trashinfo")
-        if os.path.exists(info_path): os.remove(info_path)
+        if os.path.exists(info_path):
+            os.remove(info_path)
         return True, None
     except Exception as e:
         return False, str(e)

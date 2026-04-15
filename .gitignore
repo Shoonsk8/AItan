@@ -19,7 +19,7 @@ tag_usage_*.json
 1.92/
 1.93/
 1.94/
-*.txt
+1.*.txt
 
 # --- Old / archive dirs ---
 old/

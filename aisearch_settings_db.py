@@ -966,7 +966,7 @@ class _DbMixin:
         elif sys.platform == "darwin":
             initial = os.path.expanduser("~/Pictures")
         else:
-            initial = "/mnt/1TBSSD" if os.path.exists("/mnt/1TBSSD") else os.path.expanduser("~")
+            initial = os.path.expanduser("~")
         picker = FolderPickerDialog(self, initialdir=initial, title="Select Folder")
         if picker.result:
             existing = self._get_dir_paths()
