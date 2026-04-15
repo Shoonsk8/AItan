@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor,
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 
-VERSION = "1.93"
+VERSION = "1.94"
 
 
 def _read_embedded_meta(path):

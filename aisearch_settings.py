@@ -8,7 +8,7 @@ from aisearch_settings_attrs import _AttrsMixin
 from aisearch_settings_filename import _FilenameMixin
 from aisearch_settings_person import _PersonMixin
 
-VERSION = "1.93"
+VERSION = "1.94"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, QDialog):

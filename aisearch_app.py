@@ -21,7 +21,7 @@ import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
 
-VERSION = "1.93"
+VERSION = "1.94"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
