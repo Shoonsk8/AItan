@@ -1391,6 +1391,25 @@ class AISearchApp(QMainWindow):
             _sw._update_scan_project_label()
         if _sw and hasattr(_sw, '_refresh_person_tab'):
             _sw._refresh_person_tab(name)
+        # Sync auto_rename UI to the newly loaded project config
+        _ar = self.config.get("auto_rename", False)
+        if _sw:
+            for _attr in ("chk_rename_on_scan", "check_auto_rename"):
+                _chk = getattr(_sw, _attr, None)
+                if _chk and _chk.isChecked() != _ar:
+                    _chk.blockSignals(True)
+                    _chk.setChecked(_ar)
+                    _chk.blockSignals(False)
+        _pw = getattr(getattr(self, "preview_handler", None), "window", None)
+        if _pw:
+            _chk = getattr(_pw, "_chk_auto_rename", None)
+            if _chk and _chk.isChecked() != _ar:
+                _chk.blockSignals(True)
+                _chk.setChecked(_ar)
+                _chk.blockSignals(False)
+            _btn = getattr(_pw, "_btn_auto_rename", None)
+            if _btn:
+                _btn.setVisible(_ar)
 
     def load_db(self):
         name = self.current_project.strip()
