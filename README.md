@@ -1,8 +1,8 @@
-# AIsearch
+# あいたん AItan — AI Media Search
 
 AI-powered desktop app for searching, tagging, and organising image and video collections.
 
-**Version 1.93** — built with PyQt6, CLIP, and optional face recognition.
+**Version 1.94** — built with PyQt6, CLIP, and optional face recognition.
 
 ![AIsearch icon](aisearch_icon.png)
 

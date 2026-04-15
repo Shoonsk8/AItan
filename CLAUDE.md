@@ -1,4 +1,4 @@
-# AIsearch — Claude Code Project Guide
+# あいたん AItan — Claude Code Project Guide
 
 ## What This Is
 PyQt6 desktop app for AI-powered image/video search, tagging, and organization.

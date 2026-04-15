@@ -1,6 +1,6 @@
 """
 aisearch_taggroups_editor.py
-Standalone PyQt6 editor for AIsearch coded-field tag groups.
+Standalone PyQt6 editor for AItan coded-field tag groups.
 
 Usage:
     python aisearch_taggroups_editor.py
@@ -81,7 +81,7 @@ class TagGroupsEditor(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AIsearch — Tag Groups Editor")
+        self.setWindowTitle("あいたん AItan — Tag Groups Editor")
         self.resize(920, 740)
 
         self._manager = AttributeManager()
@@ -139,7 +139,7 @@ class TagGroupsEditor(QMainWindow):
         # Quick-load AIsearch preset
         top.addWidget(QLabel("Preset:"))
         self._preset_cb = QComboBox()
-        self._preset_cb.addItem("— AIsearch field —")
+        self._preset_cb.addItem("— AItan field —")
         for p in _AISEARCH_PRESETS:
             style, cols = FIELD_DEFS[p]
             self._preset_cb.addItem(f"{p}  ({_STYLE_LABELS[style]})", p)

@@ -252,7 +252,7 @@ class AISearchApp(QMainWindow):
         # drop target — without this, external drags (file manager) never enter
         # the window on Linux/xcb and child widgets never see them.
         self.setAcceptDrops(True)
-        self.setWindowTitle(f"AI Visual Search Pro - Master Edition Ver {VERSION}")
+        self.setWindowTitle(f"あいたん AItan — AI Media Search  Ver {VERSION}")
         self.resize(1500, 980)
 
         # Load global config first to get last_project, then reload per-project
