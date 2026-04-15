@@ -1,0 +1,40 @@
+# --- Data files (never commit) ---
+aisearch_config*.json
+attrs_*.json
+attribute_workspace*.json
+faces_*.json
+faces_*.json.*
+features_*.pt
+feedback_*.pt
+filename_rules.json
+filename_rename_rules.json
+person_aliases.json
+person_registry.json
+person_right_groups.json
+dups_*.json
+tag_usage_*.json
+
+# --- Version backup dirs and notes ---
+1.91/
+1.92/
+1.93/
+1.94/
+*.txt
+
+# --- Old / archive dirs ---
+old/
+AIVIS/
+AIVisualSearch/
+Facial Expression Library/
+
+# --- Runtime / env ---
+__pycache__/
+venv/
+*.pyc
+*.pyo
+
+# --- Claude internal ---
+.claude/
+
+# --- Misc ---
+Untitled Document

@@ -1,0 +1,3057 @@
+import os, shutil, subprocess, io, torch, threading, queue, json, datetime
+from PIL import Image
+
+
+
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                              QLabel, QPushButton, QTableWidget, QTableWidgetItem,
+                              QAbstractItemView, QHeaderView, QFrame,
+                              QMessageBox, QDialog, QCheckBox, QApplication,
+                              QLineEdit, QSpinBox, QProgressBar, QComboBox, QTextEdit,
+                              QGridLayout)
+from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent
+from PyQt6.QtGui import QPixmap, QShortcut, QKeySequence, QIcon, QCursor, QDrag, QColor, QFont
+
+from sentence_transformers import util as st_util
+import aisearch_logic as logic
+from aisearch_settings import SettingsView
+import aisearch_front_page as front_page
+import aisearch_config as cfg
+import aisearch_feedback as feedback
+import aisearch_preview
+import aisearch_attrs as attrs_mod
+
+VERSION = "1.93"
+
+
+# ── Custom table item types for correct column sorting ──────────────────────
+
+class NumericItem(QTableWidgetItem):
+    def __lt__(self, other):
+        try:   return float(self.text()) < float(other.text())
+        except: return super().__lt__(other)
+
+class SizeItem(QTableWidgetItem):
+    def _bytes(self, text):
+        try:
+            p = text.split(); num = float(p[0]); unit = p[1].upper()
+            return num * {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3}.get(unit, 1)
+        except: return 0.0
+    def __lt__(self, other):
+        return self._bytes(self.text()) < self._bytes(other.text())
+
+class DateItem(QTableWidgetItem):
+    """Table cell that stores a raw mtime, displays JD + readable date, sorts by mtime."""
+    def __init__(self, mtime):
+        self._mtime = mtime
+        super().__init__(DateItem._fmt(mtime))
+        self.setFlags(self.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+    @staticmethod
+    def _fmt(mtime):
+        try:
+            dt = datetime.datetime.fromtimestamp(mtime)
+            a  = (14 - dt.month) // 12
+            y  = dt.year + 4800 - a
+            m  = dt.month + 12 * a - 3
+            jd = (dt.day + (153 * m + 2) // 5
+                  + 365 * y + y // 4 - y // 100 + y // 400 - 32045)
+            return f"JD{jd} · {dt.strftime('%Y-%m-%d %H:%M')}"
+        except Exception:
+            return ""
+
+    def __lt__(self, other):
+        try:    return self._mtime < other._mtime
+        except: return super().__lt__(other)
+
+
+# ── Drop zone label ──────────────────────────────────────────────────────────
+
+class DropZoneLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__("DROP IMAGE", parent)
+        self.setAcceptDrops(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._drop_callback = None
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls(): event.accept()
+        else: event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls(): event.accept()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if os.path.exists(path) and self._drop_callback:
+                self._drop_callback(path)
+                break
+        event.accept()
+
+
+# ── Results table ────────────────────────────────────────────────────────────
+
+class FileTable(QTableWidget):
+    def __init__(self, parent=None):
+        super().__init__(0, 5, parent)
+        self.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSortingEnabled(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.horizontalHeader().setSortIndicatorShown(True)
+        self.horizontalHeader().setStretchLastSection(False)
+        for _col in range(5):
+            self.horizontalHeader().setSectionResizeMode(_col, QHeaderView.ResizeMode.Interactive)
+        self.verticalHeader().setVisible(False)
+        self.setShowGrid(False)
+        self.setAlternatingRowColors(True)
+        self.setColumnWidth(0,  90)
+        self.setColumnWidth(1, 100)
+        self.setColumnWidth(3, 300)
+        self.setColumnWidth(4, 130)
+
+        self.move_callback      = None
+        self.delete_callback    = None
+        self.rename_callback    = None
+        self.left_key_callback  = None
+        self.right_key_callback = None
+        self.drop_callback      = None
+        self._drag_src_row    = None
+        self._drag_press_pos  = None
+        self._drag_active     = False
+        self._tab_held        = False
+        self._collapse_to_row = -1
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.viewport().installEventFilter(self)
+
+    def get_row_path(self, row):
+        item = self.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def set_row_path(self, row, path):
+        item = self.item(row, 0)
+        if item: item.setData(Qt.ItemDataRole.UserRole, path)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            item = self.itemAt(event.pos())
+            row  = self.row(item) if item else -1
+            self._drag_src_row   = row
+            self._drag_press_pos = event.pos()
+            self._drag_active    = False
+            sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
+            if row >= 0 and row in sel_rows:
+                if self._tab_held:
+                    # Tab+click: deselect the clicked row
+                    index = self.model().index(row, 0)
+                    self.selectionModel().select(
+                        index,
+                        QItemSelectionModel.SelectionFlag.Deselect |
+                        QItemSelectionModel.SelectionFlag.Rows)
+                    return
+                if len(sel_rows) > 1:
+                    # Plain click on selected row: defer collapse to release
+                    # (so drag can still operate on the full multi-selection)
+                    self._collapse_to_row = row
+                    index = self.model().index(row, 0)
+                    self.selectionModel().setCurrentIndex(
+                        index, QItemSelectionModel.SelectionFlag.NoUpdate)
+                    return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_src_row is not None:
+            if (event.pos() - self._drag_press_pos).manhattanLength() > 5:
+                self._drag_active = True
+            if self._drag_active:
+                item     = self.itemAt(event.pos())
+                tgt_row  = self.row(item) if item else -1
+                sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
+                if tgt_row >= 0 and tgt_row not in sel_rows:
+                    self.setCursor(QCursor(Qt.CursorShape.DragMoveCursor))
+                else:
+                    self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                return   # don't let Qt change selection during drag
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        if self._drag_active and self._drag_src_row is not None:
+            item     = self.itemAt(event.pos())
+            tgt_row  = self.row(item) if item else -1
+            sel_rows = [idx.row() for idx in self.selectionModel().selectedRows()]
+            if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
+                self.move_callback(sel_rows, tgt_row)
+        elif not self._drag_active and self._collapse_to_row >= 0:
+            # Plain click on multi-selected row with no drag: collapse to single row
+            index = self.model().index(self._collapse_to_row, 0)
+            self.selectionModel().select(
+                index,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect |
+                QItemSelectionModel.SelectionFlag.Rows)
+            self.selectionModel().setCurrentIndex(
+                index, QItemSelectionModel.SelectionFlag.NoUpdate)
+        self._drag_src_row    = None
+        self._drag_active     = False
+        self._collapse_to_row = -1
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj is self.viewport():
+            t = event.type()
+            if t == event.Type.DragEnter:
+                if event.mimeData().hasUrls() and not self._drag_active:
+                    event.acceptProposedAction(); return True
+            elif t == event.Type.DragMove:
+                if event.mimeData().hasUrls() and not self._drag_active:
+                    event.acceptProposedAction(); return True
+            elif t == event.Type.Drop:
+                if event.mimeData().hasUrls() and not self._drag_active:
+                    for url in event.mimeData().urls():
+                        path = url.toLocalFile()
+                        if os.path.exists(path) and self.drop_callback:
+                            self.drop_callback(path)
+                            break
+                    event.acceptProposedAction(); return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Delete and self.delete_callback:
+            self.delete_callback()
+        elif event.key() == Qt.Key.Key_F2 and self.rename_callback:
+            self.rename_callback()
+        elif event.key() == Qt.Key.Key_Left and self.left_key_callback:
+            self.left_key_callback()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Right and self.right_key_callback:
+            self.right_key_callback()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Tab:
+            if not event.isAutoRepeat():
+                self._tab_held = True
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Tab and not event.isAutoRepeat():
+            self._tab_held = False
+        super().keyReleaseEvent(event)
+
+
+# ── Main application window ──────────────────────────────────────────────────
+
+class AISearchApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # Must be set on the top-level window so the OS/WM advertises it as a
+        # drop target — without this, external drags (file manager) never enter
+        # the window on Linux/xcb and child widgets never see them.
+        self.setAcceptDrops(True)
+        self.setWindowTitle(f"AI Visual Search Pro - Master Edition Ver {VERSION}")
+        self.resize(1500, 980)
+
+        # Load global config first to get last_project, then reload per-project
+        _global_cfg    = cfg.load_config()
+        db_files = sorted(
+            [f for f in os.listdir('.') if f.startswith('features_') and f.endswith('.pt')],
+            key=os.path.getmtime, reverse=True
+        )
+        fallback       = db_files[0].replace('features_', '').replace('.pt', '') if db_files else ""
+        saved          = _global_cfg.get("last_project", "")
+        self.current_project = saved if saved and os.path.exists(f"features_{saved}.pt") else fallback
+
+        self.config        = cfg.load_config(self.current_project)
+        self.config["last_project"] = self.current_project  # ensure it's set
+        saved_geom = self.config.get("main_geometry")
+        if saved_geom and len(saved_geom) == 4:
+            from PyQt6.QtGui import QGuiApplication
+            x, y, w, h = saved_geom
+            screens = QGuiApplication.screens()
+            on_screen = any(
+                s.geometry().contains(x + w // 2, y + h // 2)
+                for s in screens
+            )
+            if on_screen:
+                self.setGeometry(x, y, w, h)
+            else:
+                self.resize(1500, 980)
+        self.last_move_dir = self.config.get("last_move_dir", "/mnt/1TBSSD")
+        self.keep_viewer_open = self.config.get("keep_viewer_open", True)
+
+        self.data              = None
+        self.base_dirs         = []
+        self.query_path        = None
+        self.query_emb         = None
+        self._lock_preview     = False
+        self.feedback_data     = None
+        self._dup_display_data = None
+        self._undo_stack       = []
+        self.attrs_data        = {}
+        self._collapsed_groups = set()
+        self._watcher          = None
+        self._browse_dir       = None
+
+        self.preview_handler = aisearch_preview.PreviewHandler(self, self)
+
+        self._setup_ui()
+        self._setup_shortcuts()
+        self.load_db()
+        QTimer.singleShot(0, self.table.setFocus)
+        # QApplication.instance().installEventFilter(self)  # disabled: causes settings button to fail
+
+    # ── Focus management ─────────────────────────────────────────────────────
+
+    # Widgets that legitimately hold keyboard focus (user is typing into them)
+    _INPUT_TYPES = (QLineEdit, QTextEdit, QComboBox, QSpinBox)
+
+    def eventFilter(self, obj, event):
+        """Return arrow-key focus to the table after clicking toolbar controls."""
+        if event.type() == QEvent.Type.FocusIn:
+            if (not isinstance(obj, AISearchApp._INPUT_TYPES)
+                    and isinstance(obj, (QPushButton, QCheckBox))
+                    and obj.window() is self):
+                QTimer.singleShot(0, self.table.setFocus)
+        return super().eventFilter(obj, event)
+
+    # ── UI construction ──────────────────────────────────────────────────────
+
+    def _setup_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Header
+        self.header = QFrame()
+        self.header.setMinimumHeight(380)
+        h_layout = QHBoxLayout(self.header)
+        h_layout.setContentsMargins(15, 15, 15, 15)
+
+        # Thumbnail
+        thumb_outer = QFrame()
+        thumb_outer.setFixedSize(350, 350)
+        thumb_layout = QVBoxLayout(thumb_outer)
+        thumb_layout.setContentsMargins(0, 0, 0, 0)
+        self.drop_zone = DropZoneLabel()
+        self.drop_zone._drop_callback = self.on_drop
+        thumb_layout.addWidget(self.drop_zone)
+        self.thumb_outer = thumb_outer
+        h_layout.addWidget(thumb_outer)
+
+        # Info panel
+        self.info_widget = QWidget()
+        info_layout = QVBoxLayout(self.info_widget)
+        info_layout.setContentsMargins(20, 0, 0, 0)
+
+        self.btn_settings = QPushButton("⚙ SETTINGS")
+        self.btn_settings.setStyleSheet(
+            "background-color: #6c757d; color: white; font-weight: bold; padding: 6px 12px;")
+        self.btn_settings.clicked.connect(self._open_settings)
+        info_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.lbl_proj_hdr = QLabel("PROJECT:")
+        self.lbl_proj_hdr.setStyleSheet("color: #00ff00; font-weight: bold;")
+        info_layout.addWidget(self.lbl_proj_hdr)
+
+        self.lbl_project = QLabel(self.current_project)
+        pfs = self.config.get("project_font_size", 30)
+        self.lbl_project.setStyleSheet(f"font-size: {pfs}pt; font-weight: bold;")
+        info_layout.addWidget(self.lbl_project)
+
+        self.lbl_base_dir = QLabel("Base: ")
+        info_layout.addWidget(self.lbl_base_dir)
+
+        # Mode buttons (vertical) + dup controls (right)
+        from PyQt6.QtWidgets import QSizePolicy
+        mode_and_dup = QHBoxLayout()
+        mode_and_dup.setSpacing(8)
+
+        self._mode_styles = {
+            "search": ("background-color: #2a8ad4; color: white; font-weight: bold; padding: 6px 10px; border: 2px solid white;",
+                       "background-color: #1a5a8a; color: #aaaaaa; font-weight: bold; padding: 6px 10px; border: 2px solid transparent;"),
+            "dup":    ("background-color: #9b6dff; color: white; font-weight: bold; padding: 6px 10px; border: 2px solid white;",
+                       "background-color: #6f42c1; color: #aaaaaa; font-weight: bold; padding: 6px 10px; border: 2px solid transparent;"),
+            "browse": ("background-color: #3a8a3a; color: white; font-weight: bold; padding: 6px 10px; border: 2px solid white;",
+                       "background-color: #2a4a2a; color: #aaaaaa; font-weight: bold; padding: 6px 10px; border: 2px solid transparent;"),
+        }
+
+        mode_col = QVBoxLayout()
+        mode_col.setSpacing(4)
+        self.btn_mode_search = QPushButton("🔍 Search")
+        self.btn_mode_search.setToolTip("Switch to Search mode")
+        self.btn_mode_search.clicked.connect(self._enter_search_mode)
+        mode_col.addWidget(self.btn_mode_search)
+
+        self.btn_find_dups = QPushButton("♊ Duplicates")
+        self.btn_find_dups.setToolTip("Find duplicates (Shift+click to force rescan)")
+        self.btn_find_dups.clicked.connect(self._find_duplicates)
+        mode_col.addWidget(self.btn_find_dups)
+
+        self.btn_browse = QPushButton("📂 Browse")
+        self.btn_browse.setToolTip("Browse folder contents (ls mode)")
+        self.btn_browse.clicked.connect(lambda: self._enter_browse_mode())
+        mode_col.addWidget(self.btn_browse)
+
+        mode_and_dup.addLayout(mode_col)
+
+        # Dup-specific controls (hidden unless in dup mode)
+        self._dup_controls_widget = QWidget()
+        dup_controls = QVBoxLayout(self._dup_controls_widget)
+        dup_controls.setContentsMargins(0, 0, 0, 0)
+        dup_controls.setSpacing(3)
+
+        # Row 1: czkawka buttons (hidden by default, shown via Settings)
+        dup_row1 = QHBoxLayout()
+        self._btn_dup_import = QPushButton("Import czkawka")
+        self._btn_dup_import.setToolTip("Import duplicate results from czkawka (JSON format)")
+        self._btn_dup_import.clicked.connect(self._import_dup_json)
+        self._btn_dup_import.setVisible(self.config.get("show_czkawka_buttons", False))
+        dup_row1.addWidget(self._btn_dup_import)
+        self._btn_dup_export = QPushButton("Export czkawka")
+        self._btn_dup_export.setToolTip("Export current duplicate results as czkawka-compatible JSON")
+        self._btn_dup_export.clicked.connect(self._export_dup_json)
+        self._btn_dup_export.setVisible(self.config.get("show_czkawka_buttons", False))
+        dup_row1.addWidget(self._btn_dup_export)
+        dup_row1.addStretch()
+        dup_controls.addLayout(dup_row1)
+
+        # Row 2: Threshold | status
+        dup_row2 = QHBoxLayout()
+        dup_row2.addWidget(QLabel("Threshold:"))
+        self.spin_threshold = QSpinBox()
+        self.spin_threshold.setRange(70, 100)
+        self.spin_threshold.setValue(self.config.get("dup_threshold", 95))
+        self.spin_threshold.setSuffix("%")
+        self.spin_threshold.setFixedWidth(70)
+        self.spin_threshold.setToolTip("Higher = only near-exact duplicates\nLower = similar images too")
+        self.spin_threshold.valueChanged.connect(self._on_threshold_changed)
+        self._dup_result_threshold = None
+        self._dup_result_summary   = ""
+        dup_row2.addWidget(self.spin_threshold)
+        self.lbl_dup_status = QLabel("")
+        self.lbl_dup_status.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        dup_row2.addWidget(self.lbl_dup_status)
+        dup_row2.addStretch()
+        dup_controls.addLayout(dup_row2)
+
+        # Row 3: Scan | Hide confirmed
+        dup_row3 = QHBoxLayout()
+        btn_scan = QPushButton("⟳ Scan")
+        btn_scan.setToolTip("Force rescan (clear cache)")
+        btn_scan.clicked.connect(self._force_rescan)
+        btn_scan.setStyleSheet(
+            "QPushButton { background-color: #6f42c1; color: white; font-weight: bold; "
+            "padding: 4px 14px; border: 2px solid #9b6dff; border-radius: 3px; }"
+            "QPushButton:hover { background-color: #9b6dff; border-color: white; }"
+            "QPushButton:pressed { background-color: #4a2a8a; }")
+        dup_row3.addWidget(btn_scan)
+        self.btn_hide_confirmed = QPushButton("👁 Hide confirmed")
+        self.btn_hide_confirmed.setCheckable(True)
+        self.btn_hide_confirmed.setToolTip("Hide files already confirmed as variants/different")
+        self.btn_hide_confirmed.toggled.connect(self._apply_confirmed_filter)
+        self.btn_hide_confirmed.toggled.connect(
+            lambda checked: self.btn_hide_confirmed.setText(
+                "👁 Unhide confirmed" if checked else "👁 Hide confirmed"))
+        dup_row3.addWidget(self.btn_hide_confirmed)
+        dup_row3.addStretch()
+        dup_controls.addLayout(dup_row3)
+
+        self._dup_controls_widget.hide()
+        mode_and_dup.addWidget(self._dup_controls_widget)
+        mode_and_dup.addStretch()
+
+        # Allow window to shrink below natural button widths
+        for _i in range(mode_and_dup.count()):
+            _item = mode_and_dup.itemAt(_i)
+            if _item and _item.widget():
+                _item.widget().setMinimumWidth(0)
+        info_layout.addLayout(mode_and_dup)
+
+        # Search progress bar (hidden by default)
+        self.search_progress = QProgressBar()
+        self.search_progress.setRange(0, 0)   # indeterminate animation while searching
+        self.search_progress.setFixedHeight(4)
+        self.search_progress.setTextVisible(False)
+        self.search_progress.setStyleSheet(
+            "QProgressBar { border: none; background: transparent; }"
+            "QProgressBar::chunk { background: #4a90d9; }")
+        self.search_progress.hide()
+        info_layout.addWidget(self.search_progress)
+
+        undo_row = QHBoxLayout()
+        self.btn_undo = QPushButton("↩ Undo")
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.setToolTip("Nothing to undo")
+        self.btn_undo.clicked.connect(self._undo_last)
+        self.btn_undo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.btn_undo.customContextMenuRequested.connect(lambda _: self._show_undo_history())
+        undo_row.addWidget(self.btn_undo)
+        btn_undo_hist = QPushButton("🕘")
+        btn_undo_hist.setFixedWidth(30)
+        btn_undo_hist.setToolTip("View undo history (Ctrl+Shift+Z)")
+        btn_undo_hist.clicked.connect(self._show_undo_history)
+        undo_row.addWidget(btn_undo_hist)
+        undo_row.addStretch()
+        info_layout.addLayout(undo_row)
+
+        self.attr_panel = self._build_attr_panel()
+        # self.attr_panel.hide()  # disabled
+        # info_layout.addWidget(self.attr_panel)  # disabled — attrs live in preview window only
+
+        info_layout.addStretch()
+        self.info_widget.setMinimumWidth(0)
+        h_layout.addWidget(self.info_widget, stretch=1)
+        main_layout.addWidget(self.header)
+
+        # Browse mode path bar (hidden in search/dup mode)
+        self._browse_bar = QLabel("")
+        self._browse_bar.setStyleSheet(
+            "background-color: #1a2a1a; color: #88cc88; font-size: 10pt; padding: 3px 10px;")
+        self._browse_bar.hide()
+        main_layout.addWidget(self._browse_bar)
+
+        # Results table
+        self.table = FileTable()
+        self.table.move_callback      = self._handle_drag_move
+        self.table.delete_callback    = self.delete_file
+        self.table.rename_callback    = self.rename_file
+        self.table.left_key_callback  = self.on_left_key_press
+        self.table.right_key_callback = self.on_right_key_press
+        self.table.drop_callback      = self.on_drop
+        self.table.customContextMenuRequested.connect(self._on_right_click)
+        self.table.itemSelectionChanged.connect(self.handle_preview)
+        self.table.cellDoubleClicked.connect(lambda r, c: self.on_double_click())
+        self.table.cellClicked.connect(self._on_group_cell_click)
+        self.popup_menu = front_page.create_context_menu(self.table, self)
+        main_layout.addWidget(self.table)
+        self._apply_colors()
+        self.reload_fonts()
+        self._apply_header_theme()
+        col_widths = self.config.get("col_widths", {})
+        for col, default in [(0, 90), (1, 100), (2, 400), (3, 300), (4, 130)]:
+            self.table.setColumnWidth(col, col_widths.get(str(col), default))
+
+    def _apply_colors(self):
+        c = self.config.get("colors", cfg.DEFAULT_COLORS)
+        sel = c.get("selection", cfg.DEFAULT_COLORS["selection"])
+        r, g, b = int(sel[1:3], 16), int(sel[3:5], 16), int(sel[5:7], 16)
+        text_color = "black" if (r * 299 + g * 587 + b * 114) / 1000 > 128 else "white"
+        self.table.setStyleSheet(
+            f"QTableWidget::item:selected {{ background-color: {sel}; color: {text_color}; }}")
+        da = c.get("dup_a", cfg.DEFAULT_COLORS["dup_a"])
+        db = c.get("dup_b", cfg.DEFAULT_COLORS["dup_b"])
+        self._dup_shades = [
+            (0.98, QColor(da[0]), QColor(db[0])),
+            (0.90, QColor(da[1]), QColor(db[1])),
+            (0.80, QColor(da[2]), QColor(db[2])),
+            (0.00, QColor(da[3]), QColor(db[3])),
+        ]
+        self._score_colors  = c.get("score",      cfg.DEFAULT_COLORS["score"])
+        self._unmarked_color = c.get("unmarked",   cfg.DEFAULT_COLORS["unmarked"])
+        self._attr_color     = c.get("attr_label", cfg.DEFAULT_COLORS["attr_label"])
+
+    def reload_colors(self):
+        self._apply_colors()
+        header = self.table.horizontalHeaderItem(0)
+        if header and header.text() == "Group":
+            self._recolor_dup_groups()
+
+    def reload_fonts(self):
+        # Table
+        fs_table = self.config.get("table_font_size", 10)
+        f_table = QFont("", fs_table)
+        self.table.setFont(f_table)
+        self.table.horizontalHeader().setStyleSheet(f"font-size: {fs_table}pt;")
+        # Attr panels — rebuild so font applies cleanly (setFont unreliable with stylesheets)
+        fs_attr = self.config.get("attr_font_size", 10)
+        pw = self.preview_handler.window
+        if pw:
+            old_scroll = getattr(pw, '_attr_scroll', None)
+            if old_scroll:
+                visible = old_scroll.isVisible()
+                layout = pw.layout()
+                idx = layout.indexOf(old_scroll)
+                layout.removeWidget(old_scroll)
+                old_scroll.deleteLater()
+                pw.attr_widget = pw._build_attr_panel()
+                from PyQt6.QtWidgets import QScrollArea
+                pw._attr_scroll = QScrollArea()
+                pw._attr_scroll.setWidgetResizable(True)
+                pw._attr_scroll.setWidget(pw.attr_widget)
+                pw._attr_scroll.setVisible(visible)
+                layout.insertWidget(idx, pw._attr_scroll)
+                if hasattr(pw, 'current_path') and pw.current_path:
+                    pw.load_file(pw.current_path)
+            if hasattr(pw, '_info_box'):
+                pw._info_box.setStyleSheet(
+                    f"background-color: #1e1e1e; color: #ccc; border: none;"
+                    f" font-family: monospace; font-size: {fs_attr}pt;")
+        # Project name label — font size only; color is set by _apply_header_theme
+        pfs = self.config.get("project_font_size", 30)
+        self._apply_header_theme(font_size_only=True, pfs=pfs)
+        # General — explicitly walk all widgets, skip those with dedicated font controls
+        fs_ui = self.config.get("ui_font_size", 10)
+        f_ui = QFont("", fs_ui)
+        excluded = {self.table, self.lbl_project}
+        excluded.update(self.table.findChildren(QWidget))
+        if hasattr(self, 'attr_panel'):
+            excluded.add(self.attr_panel)
+            excluded.update(self.attr_panel.findChildren(QWidget))
+        if pw and hasattr(pw, 'attr_widget'):
+            excluded.add(pw.attr_widget)
+            excluded.update(pw.attr_widget.findChildren(QWidget))
+        for win in QApplication.instance().topLevelWidgets():
+            for w in [win] + list(win.findChildren(QWidget)):
+                if w not in excluded:
+                    w.setFont(f_ui)
+
+    def _apply_header_theme(self, font_size_only=False, pfs=None):
+        theme = self.config.get("theme", "Dark")
+        is_dark = theme != "Light"
+        pfs = pfs if pfs is not None else self.config.get("project_font_size", 30)
+        if is_dark:
+            header_bg   = "#343a40"
+            thumb_bg    = "#495057"
+            thumb_brd   = "#666"
+            drop_color  = "#ced4da"
+            proj_color  = "white"
+            base_color  = "#aaaaaa"
+            status_color = "#adb5bd"
+            hide_ss = (
+                "QPushButton { background-color: #444; color: #ccc; border: 1px solid #666; padding: 3px 8px; }"
+                "QPushButton:checked { background-color: #c0392b; color: white; border: 1px solid #e74c3c; }")
+        else:
+            header_bg   = "#dcdcdc"
+            thumb_bg    = "#c0c0c0"
+            thumb_brd   = "#888"
+            drop_color  = "#333333"
+            proj_color  = "#1a1a1a"
+            base_color  = "#555555"
+            status_color = "#666666"
+            hide_ss = (
+                "QPushButton { background-color: #c8c8c8; color: #333; border: 1px solid #999; padding: 3px 8px; }"
+                "QPushButton:checked { background-color: #c0392b; color: white; border: 1px solid #e74c3c; }")
+
+        self.lbl_project.setStyleSheet(
+            f"color: {proj_color}; font-size: {pfs}pt; font-weight: bold;")
+        if font_size_only:
+            return
+        self.header.setStyleSheet(f"background-color: {header_bg};")
+        self.thumb_outer.setStyleSheet(
+            f"background-color: {thumb_bg}; border: 3px ridge {thumb_brd};")
+        self.drop_zone.setStyleSheet(
+            f"color: {drop_color}; font-weight: bold; background-color: {thumb_bg};")
+        self.info_widget.setStyleSheet(f"background-color: {header_bg};")
+        self.lbl_base_dir.setStyleSheet(f"color: {base_color};")
+        self.lbl_dup_status.setStyleSheet(f"color: {status_color};")
+        self.btn_hide_confirmed.setStyleSheet(hide_ss)
+        # Ensure table text is readable in both themes
+        table_text = "#000000" if not is_dark else "#ffffff"
+        self.table.setStyleSheet(
+            self.table.styleSheet() +
+            f" QTableWidget {{ color: {table_text}; }}")
+
+    def reload_tag_groups(self, project=None):
+        """Reload TAG_GROUPS from JSON for a project (or global default) and rebuild attr panels."""
+        tf = attrs_mod.tags_file_for_project(project or getattr(self, 'current_project', None))
+        attrs_mod.TAG_GROUPS = attrs_mod._load_tag_groups(tf)
+        attrs_mod.TAGS = [item for group in attrs_mod.TAG_GROUPS.values() for item in group]
+        attrs_mod.QUALITY_TAGS      = {k for k, _ in attrs_mod.TAG_GROUPS.get("Quality", [])}
+        attrs_mod.SOURCE_TAGS       = {k for k, _ in attrs_mod.TAG_GROUPS.get("Source", [])} or {"comfyui", "a1111", "aix", "other_src"}
+        attrs_mod.AUDIO_TAGS        = {k for k, _ in attrs_mod.TAG_GROUPS.get("Audio", [])}
+        # Per-digit sub-tables
+        attrs_mod.E_COLOR_TAGS      = {k for k, _ in attrs_mod.TAG_GROUPS.get("E_Color", [])}
+        attrs_mod.HC_COLOR_TAGS     = {k for k, _ in attrs_mod.TAG_GROUPS.get("HC_Color", [])}
+        attrs_mod.HC_STYLE_TAGS     = {k for k, _ in attrs_mod.TAG_GROUPS.get("HC_Style", [])}
+        attrs_mod.HC_LENGTH_TAGS    = {k for k, _ in attrs_mod.TAG_GROUPS.get("HC_Length", [])}
+        attrs_mod.FA_DIR_TAGS       = {k for k, _ in attrs_mod.TAG_GROUPS.get("FA_Dir", [])}
+        attrs_mod.SK_TYPE_TAGS      = {k for k, _ in attrs_mod.TAG_GROUPS.get("SK_Type", [])}
+        attrs_mod.B_SIZE_TAGS       = {k for k, _ in attrs_mod.TAG_GROUPS.get("B_Size", [])}
+        attrs_mod.WH_HIP_TAGS       = {k for k, _ in attrs_mod.TAG_GROUPS.get("WH_Hip", [])}
+        attrs_mod.PM_MOTION_TAGS    = {k for k, _ in attrs_mod.TAG_GROUPS.get("PM_Motion", [])}
+        attrs_mod.CS_SHOT_TAGS      = {k for k, _ in attrs_mod.TAG_GROUPS.get("CS_Shot", [])}
+        # Rebuild main attr panel
+        if hasattr(self, 'attr_panel') and self.attr_panel:
+            layout = self.attr_panel.parent().layout() if self.attr_panel.parent() else None
+            if layout:
+                idx = layout.indexOf(self.attr_panel)
+                layout.removeWidget(self.attr_panel)
+                self.attr_panel.deleteLater()
+                self.attr_panel = self._build_attr_panel()
+                self.attr_panel.hide()
+                layout.insertWidget(idx, self.attr_panel)
+        # Rebuild preview attr panel
+        pw = self.preview_handler.window
+        if pw:
+            old_scroll = pw._attr_scroll
+            visible = old_scroll.isVisible()
+            layout = pw.layout()
+            idx = layout.indexOf(old_scroll)
+            layout.removeWidget(old_scroll)
+            old_scroll.deleteLater()
+            pw.attr_widget = pw._build_attr_panel()
+            from PyQt6.QtWidgets import QScrollArea
+            pw._attr_scroll = QScrollArea()
+            pw._attr_scroll.setWidgetResizable(True)
+            pw._attr_scroll.setWidget(pw.attr_widget)
+            pw._attr_scroll.setMaximumHeight(500)
+            pw._attr_scroll.setStyleSheet("QScrollArea { border: none; background: #2e2e2e; }")
+            if not visible:
+                pw._attr_scroll.hide()
+            layout.insertWidget(idx, pw._attr_scroll)
+            if self.preview_handler.current_path:
+                pw._refresh_attrs(self.preview_handler.current_path)
+
+    # ── Inline attribute panel ───────────────────────────────────────────────
+
+    def _build_attr_panel(self):
+        panel = QWidget()
+        panel.setStyleSheet("background-color: #2e2e2e;")
+        vbox = QVBoxLayout(panel)
+        vbox.setContentsMargins(6, 4, 6, 4)
+        vbox.setSpacing(3)
+
+        panel.setFont(QFont("", self.config.get("attr_font_size", 10)))
+
+        # File info bar (resolution · ratio · fps · duration)
+        self._inline_file_info = QLabel("")
+        self._inline_file_info.setStyleSheet("color: #88aacc; font-size: 9pt;")
+        self._inline_file_info.setWordWrap(False)
+        vbox.addWidget(self._inline_file_info)
+
+        # Note field (top)
+        self._inline_note = QLineEdit()
+        self._inline_note.setPlaceholderText("Note…")
+        self._inline_note.setStyleSheet(
+            "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
+        self._inline_note.editingFinished.connect(self._save_inline_attrs)
+        vbox.addWidget(self._inline_note)
+
+        # Quality + Resolution + Confirmed
+        r1 = QHBoxLayout()
+        lq = QLabel("Q:")
+        lq.setStyleSheet("color: #aaa;")
+        r1.addWidget(lq)
+        self._quality_combo = QComboBox()
+        self._quality_combo.addItem("—", "")
+        for key, lbl in attrs_mod.TAG_GROUPS["Quality"]:
+            self._quality_combo.addItem(lbl, key)
+        self._quality_combo.setFixedWidth(70)
+        self._quality_combo.currentIndexChanged.connect(self._save_inline_attrs)
+        r1.addWidget(self._quality_combo)
+        lr = QLabel("Res:")
+        lr.setStyleSheet("color: #aaa;")
+        r1.addWidget(lr)
+        self._res_combo = QComboBox()
+        self._res_combo.addItem("—", "")
+        for key, lbl in attrs_mod.TAG_GROUPS.get("Resolution", []):
+            self._res_combo.addItem(lbl, key)
+        self._res_combo.setFixedWidth(80)
+        self._res_combo.currentIndexChanged.connect(self._save_inline_attrs)
+        r1.addWidget(self._res_combo)
+        r1.addStretch()
+        self._confirmed_cb = QCheckBox("≠")
+        self._confirmed_cb.setToolTip("Confirmed different")
+        self._confirmed_cb.setStyleSheet("color: #e0e0e0;")
+        self._confirmed_cb.toggled.connect(self._save_inline_attrs)
+        r1.addWidget(self._confirmed_cb)
+        vbox.addLayout(r1)
+
+        # Variant checkboxes — 3 columns
+        self._inline_cbs = {}
+        grid = QGridLayout()
+        grid.setSpacing(2)
+        grid.setContentsMargins(0, 0, 0, 0)
+        for i, (key, label) in enumerate(attrs_mod.TAG_GROUPS["Variant"]):
+            cb = QCheckBox(label)
+            cb.setStyleSheet("color: #e0e0e0;")
+            cb.toggled.connect(self._save_inline_attrs)
+            self._inline_cbs[key] = cb
+            grid.addWidget(cb, i // 3, i % 3)
+        vbox.addLayout(grid)
+
+        # Audio row
+        r3 = QHBoxLayout()
+        la = QLabel("Audio:")
+        la.setStyleSheet("color: #aaa;")
+        r3.addWidget(la)
+        for key, label in attrs_mod.TAG_GROUPS["Audio"]:
+            cb = QCheckBox(label)
+            cb.setStyleSheet("color: #e0e0e0;")
+            cb.toggled.connect(self._save_inline_attrs)
+            self._inline_cbs[key] = cb
+            r3.addWidget(cb)
+        r3.addStretch()
+        vbox.addLayout(r3)
+
+        # Project / Scene button
+        btn_more = QPushButton("📝 Title / Scene…")
+        btn_more.setStyleSheet(
+            "padding: 2px 6px; color: #e0e0e0; background-color: #555;")
+        btn_more.clicked.connect(self.edit_attrs)
+        vbox.addWidget(btn_more)
+
+        self._inline_attr_path = None
+        panel.setEnabled(False)
+        return panel
+
+    def _refresh_inline_attrs(self, path):
+        self._inline_attr_path = path
+        if not path:
+            self.attr_panel.setEnabled(False)
+            self._inline_file_info.setText("")
+            return
+        self.attr_panel.setEnabled(True)
+        entry = attrs_mod.get(self.attrs_data, path)
+        tags  = set(entry.get("tags", []))
+
+        # File info — use cache if available, else extract in background
+        meta = entry.get("meta", {})
+        if meta:
+            self._set_inline_file_info(meta)
+        else:
+            self._inline_file_info.setText("…")
+            import threading
+            _result = [None]
+            _done   = threading.Event()
+            def _extract(p=path):
+                _result[0] = attrs_mod.extract_metadata(p)
+                _done.set()
+            def _poll(p=path):
+                if _done.is_set():
+                    if self._inline_attr_path == p and _result[0]:
+                        self._set_inline_file_info(_result[0])
+                else:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(100, _poll)
+            threading.Thread(target=_extract, daemon=True).start()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, _poll)
+
+        for w in (self._quality_combo, self._res_combo, self._confirmed_cb, self._inline_note):
+            w.blockSignals(True)
+        for cb in self._inline_cbs.values():
+            cb.blockSignals(True)
+
+        self._inline_note.setText(entry.get("note", ""))
+        qual = next((k for k in attrs_mod.QUALITY_TAGS if k in tags), "")
+        self._quality_combo.setCurrentIndex(max(0, self._quality_combo.findData(qual)))
+        res  = next((k for k in attrs_mod.RESOLUTION_TAGS if k in tags), "")
+        self._res_combo.setCurrentIndex(max(0, self._res_combo.findData(res)))
+        for key, cb in self._inline_cbs.items():
+            cb.setChecked(key in tags)
+        self._confirmed_cb.setChecked(entry.get("confirmed", False))
+
+        for w in (self._quality_combo, self._res_combo, self._confirmed_cb, self._inline_note):
+            w.blockSignals(False)
+        for cb in self._inline_cbs.values():
+            cb.blockSignals(False)
+
+    def _set_inline_file_info(self, meta):
+        parts = [v for k, v in meta.items()
+                 if k in ("Dimensions", "Ratio", "FPS", "Duration")]
+        if meta.get("Seed"):
+            parts.append(f"seed:{meta['Seed']}")
+        self._inline_file_info.setText("  ·  ".join(parts))
+
+    def _save_inline_attrs(self):
+        path = self._inline_attr_path
+        if not path:
+            return
+        tags = [k for k, cb in self._inline_cbs.items() if cb.isChecked()]
+        qual = self._quality_combo.currentData()
+        if qual:
+            tags.append(qual)
+        res = self._res_combo.currentData()
+        if res:
+            tags.append(res)
+        confirmed = self._confirmed_cb.isChecked()
+        note  = self._inline_note.text().strip()
+        entry = attrs_mod.get(self.attrs_data, path)
+        attrs_mod.set_file(self.attrs_data, path,
+                           tags=tags,
+                           note=note,
+                           confirmed=confirmed,
+                           project=entry.get("project", ""),
+                           scene=entry.get("scene", ""))
+        attrs_mod.save(self.current_project, self.attrs_data)
+        row = self._current_row()
+        if row >= 0:
+            self._refresh_attrs_indicator(row, path)
+        self._highlight_unmarked_rows()
+        if self.btn_hide_confirmed.isChecked():
+            self._apply_confirmed_filter(True)
+
+    def _setup_shortcuts(self):
+        QShortcut(QKeySequence("Left"),       self, self.on_left_key_press)
+        QShortcut(QKeySequence("Right"),      self, self.on_right_key_press)
+        QShortcut(QKeySequence("Ctrl+Down"),  self, lambda: self._move_to_neighbor(1))
+        QShortcut(QKeySequence("Ctrl+Up"),    self, lambda: self._move_to_neighbor(-1))
+        QShortcut(QKeySequence("F2"),         self, self.rename_file)
+        QShortcut(QKeySequence("Delete"),     self, self.delete_file)
+        QShortcut(QKeySequence("m"),          self, self.move_to_folder_manually)
+        QShortcut(QKeySequence("M"),          self, self.move_to_folder_manually)
+        QShortcut(QKeySequence("Home"),       self, self._go_to_first_row)
+        QShortcut(QKeySequence("End"),        self, self._go_to_last_row)
+        QShortcut(QKeySequence("Ctrl+Z"),       self, self._undo_last)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._show_undo_history)
+        QShortcut(QKeySequence("a"),            self, self.edit_attrs)
+        QShortcut(QKeySequence("A"),            self, self.edit_attrs)
+        self._attr_win = None
+        self.table.selectionModel().selectionChanged.connect(self._on_selection_changed_attrs)
+
+    def _on_selection_changed_attrs(self):
+        if not (hasattr(self, '_attr_win') and self._attr_win and self._attr_win.isVisible()):
+            return
+        row = self._current_row()
+        if row < 0: return
+        path = self.table.get_row_path(row)
+        if path:
+            self._attr_win_load(path)
+
+    def _go_to_first_row(self):
+        for r in range(self.table.rowCount()):
+            if not self.table.isRowHidden(r):
+                self._select_row(r)
+                return
+
+    def _go_to_last_row(self):
+        for r in range(self.table.rowCount() - 1, -1, -1):
+            if not self.table.isRowHidden(r):
+                self._select_row(r)
+                return
+
+    # ── Undo ─────────────────────────────────────────────────────────────────
+
+    def _push_undo(self, action):
+        name = os.path.basename(action.get("orig_path") or action.get("old_path") or "")
+        if action["type"] == "move":
+            dest = os.path.basename(os.path.dirname(action["new_path"]))
+            action["desc"] = f"Move  {name}  →  …/{dest}/"
+        else:
+            action["desc"] = f"Delete  {name}"
+        self._undo_stack.append(action)
+        if len(self._undo_stack) > 20:
+            self._undo_stack.pop(0)
+        self._update_undo_btn()
+
+    def _update_undo_btn(self):
+        has = bool(self._undo_stack)
+        self.btn_undo.setEnabled(has)
+        self.btn_undo.setToolTip(self._undo_stack[-1]["desc"] if has else "Nothing to undo")
+
+    def _undo_last(self):
+        if not self._undo_stack:
+            return
+        action = self._undo_stack.pop()
+        self._update_undo_btn()
+        if action["type"] == "move":
+            self._undo_move(action)
+        elif action["type"] == "delete":
+            self._undo_delete(action)
+
+    def _show_undo_history(self):
+        if not self._undo_stack:
+            QMessageBox.information(self, "Undo History", "Nothing to undo.")
+            return
+        from PyQt6.QtWidgets import QDialog, QListWidget, QVBoxLayout, QHBoxLayout, QPushButton
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Undo History")
+        dlg.resize(480, 300)
+        layout = QVBoxLayout(dlg)
+        lw = QListWidget()
+        # Show most recent at top
+        for action in reversed(self._undo_stack):
+            lw.addItem(action["desc"])
+        layout.addWidget(lw)
+        row_btns = QHBoxLayout()
+        btn_undo_to = QPushButton("Undo to selected")
+        btn_cancel  = QPushButton("Cancel")
+        row_btns.addWidget(btn_undo_to); row_btns.addWidget(btn_cancel)
+        layout.addLayout(row_btns)
+        btn_cancel.clicked.connect(dlg.reject)
+        def _undo_to():
+            idx = lw.currentRow()
+            if idx < 0: return
+            # idx=0 means most recent (top of stack), undo (idx+1) times
+            for _ in range(idx + 1):
+                if self._undo_stack:
+                    action = self._undo_stack.pop()
+                    self._update_undo_btn()
+                    if action["type"] == "move":   self._undo_move(action)
+                    elif action["type"] == "delete": self._undo_delete(action)
+            dlg.accept()
+        btn_undo_to.clicked.connect(_undo_to)
+        lw.itemDoubleClicked.connect(lambda: _undo_to())
+        lw.setCurrentRow(0)
+        dlg.exec()
+
+    def _undo_move(self, action):
+        old_path, new_path = action["old_path"], action["new_path"]
+        if not os.path.exists(new_path):
+            QMessageBox.warning(self, "Undo", f"Cannot undo move: file not found at\n{new_path}")
+            return
+        try:
+            shutil.move(new_path, old_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Undo Error", str(e)); return
+        if self.data and "paths" in self.data:
+            for i, p in enumerate(self.data["paths"]):
+                if os.path.normpath(p) == os.path.normpath(new_path):
+                    self.data["paths"][i] = old_path
+                    torch.save(self.data, f"features_{self.current_project}.pt")
+                    break
+        for r in range(self.table.rowCount()):
+            if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(new_path):
+                self.table.set_row_path(r, old_path)
+                self.table.item(r, 2).setText(os.path.basename(old_path))
+                self.table.item(r, 3).setText(self._mask_path(old_path))
+                self._select_row(r)
+                break
+
+    def _undo_delete(self, action):
+        orig_path, trash_path = action["orig_path"], action["trash_path"]
+        success, err = front_page.restore_from_trash(trash_path, orig_path)
+        if not success:
+            QMessageBox.critical(self, "Undo Error", f"Could not restore:\n{err}"); return
+        if self.data is not None and "paths" in self.data:
+            emb = action.get("emb")
+            if emb is not None:
+                self.data["paths"].append(orig_path)
+                self.data["embeddings"] = torch.cat([self.data["embeddings"], emb.unsqueeze(0)])
+                torch.save(self.data, f"features_{self.current_project}.pt")
+        row = min(action["row"], self.table.rowCount())
+        self.table.insertRow(row)
+        score_item = QTableWidgetItem(action["score"])
+        score_item.setFlags(score_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        score_item.setData(Qt.ItemDataRole.UserRole, orig_path)
+        score_item.setData(Qt.ItemDataRole.UserRole + 1, action.get("sim_data"))
+        self.table.setItem(row, 0, score_item)
+        _date_item = DateItem(os.path.getmtime(orig_path)) if os.path.exists(orig_path) else DateItem(0)
+        for col, (ItemCls, text) in enumerate(
+                [(SizeItem, action["size"]), (QTableWidgetItem, action["name"]),
+                 (QTableWidgetItem, action["masked_path"])], 1):
+            item = ItemCls(text)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, col, item)
+        self.table.setItem(row, 4, _date_item)
+        bg = action.get("bg_color")
+        if bg and bg.color().isValid():
+            for col in range(self.table.columnCount()):
+                if self.table.item(row, col):
+                    self.table.item(row, col).setBackground(bg)
+        self._select_row(row)
+        self._rebuild_dup_display_data()
+        self._save_dup_results()
+
+    # ── Attributes ───────────────────────────────────────────────────────────
+
+    def edit_attrs(self):
+        row = self._current_row()
+        if row < 0: return
+        path = self.table.get_row_path(row)
+        if not path: return
+
+        if not hasattr(self, '_attr_win') or self._attr_win is None:
+            self._attr_win = self._build_attr_window()
+
+        self._attr_win_load(path)
+        self._attr_win.show()
+        self._attr_win.raise_()
+        self._attr_win.activateWindow()
+
+    def _build_attr_window(self):
+        from PyQt6.QtWidgets import QGroupBox, QRadioButton, QScrollArea, QButtonGroup
+        win = QWidget(None)
+        win.setWindowFlag(Qt.WindowType.Window)
+        win.setWindowTitle("Attributes")
+        win.resize(340, 580)
+        win._aw_path = None
+
+        outer = QVBoxLayout(win)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner  = QWidget();     layout = QVBoxLayout(inner)
+        layout.setSpacing(6)
+        scroll.setWidget(inner); outer.addWidget(scroll)
+
+        # Variant
+        g_var = QGroupBox("Variant"); lv = QVBoxLayout(g_var)
+        win._aw_checks = {}
+        for key, label in attrs_mod.TAG_GROUPS["Variant"]:
+            cb = QCheckBox(label); lv.addWidget(cb)
+            win._aw_checks[key] = cb
+        layout.addWidget(g_var)
+
+        # Quality (mutually exclusive)
+        g_qual = QGroupBox("Quality"); lq = QHBoxLayout(g_qual)
+        qual_group = QButtonGroup(win); qual_group.setExclusive(True)
+        win._aw_none_rb = QRadioButton("—"); qual_group.addButton(win._aw_none_rb); lq.addWidget(win._aw_none_rb)
+        win._aw_qual_rbs = {}
+        for key, label in attrs_mod.TAG_GROUPS["Quality"]:
+            rb = QRadioButton(label); qual_group.addButton(rb); lq.addWidget(rb)
+            win._aw_qual_rbs[key] = rb
+        layout.addWidget(g_qual)
+
+        # Resolution (mutually exclusive)
+        g_res = QGroupBox("Resolution"); lr = QHBoxLayout(g_res)
+        res_group = QButtonGroup(win); res_group.setExclusive(True)
+        win._aw_none_res = QRadioButton("—"); res_group.addButton(win._aw_none_res); lr.addWidget(win._aw_none_res)
+        win._aw_res_rbs = {}
+        for key, label in attrs_mod.TAG_GROUPS["Resolution"]:
+            rb = QRadioButton(label); res_group.addButton(rb); lr.addWidget(rb)
+            win._aw_res_rbs[key] = rb
+        layout.addWidget(g_res)
+
+        # Audio (shown for video files only)
+        win._aw_g_aud = QGroupBox("Audio"); la = QHBoxLayout(win._aw_g_aud)
+        win._aw_audio_checks = {}
+        for key, label in attrs_mod.TAG_GROUPS["Audio"]:
+            cb = QCheckBox(label); la.addWidget(cb)
+            win._aw_audio_checks[key] = cb
+        layout.addWidget(win._aw_g_aud)
+
+        # Usage
+        g_meta = QGroupBox("Usage"); lm = QVBoxLayout(g_meta)
+        lm.addWidget(QLabel("Title:"))
+        win._aw_proj_edit = QLineEdit(); lm.addWidget(win._aw_proj_edit)
+        win._aw_scene_lbl = QLabel("Scene:"); lm.addWidget(win._aw_scene_lbl)
+        win._aw_scene_edit = QLineEdit(); lm.addWidget(win._aw_scene_edit)
+        layout.addWidget(g_meta)
+
+        # Note
+        g_note = QGroupBox("Note"); ln = QVBoxLayout(g_note)
+        win._aw_note_edit = QTextEdit(); win._aw_note_edit.setFixedHeight(55); ln.addWidget(win._aw_note_edit)
+        layout.addWidget(g_note)
+
+        # Confirmed
+        win._aw_confirmed_cb = QCheckBox("Confirmed different (hide from dup results)")
+        layout.addWidget(win._aw_confirmed_cb)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_save  = QPushButton("Save")
+        btn_clear = QPushButton("Clear")
+        btn_close = QPushButton("Close"); btn_close.clicked.connect(win.close)
+
+        def _save():
+            path = win._aw_path
+            if not path: return
+            tags = [k for k, cb in win._aw_checks.items() if cb.isChecked()]
+            tags += [k for k, rb in win._aw_qual_rbs.items() if rb.isChecked()]
+            tags += [k for k, rb in win._aw_res_rbs.items() if rb.isChecked()]
+            tags += [k for k, cb in win._aw_audio_checks.items() if cb.isChecked()]
+            is_video = path.lower().endswith(logic.EXT_VID)
+            attrs_mod.set_file(self.attrs_data, path,
+                               tags=tags,
+                               note=win._aw_note_edit.toPlainText().strip(),
+                               confirmed=win._aw_confirmed_cb.isChecked(),
+                               project=win._aw_proj_edit.text().strip(),
+                               scene=win._aw_scene_edit.text().strip() if is_video else "")
+            attrs_mod.save(self.current_project, self.attrs_data)
+            row = self._current_row()
+            self._refresh_inline_attrs(path)
+            if (self.preview_handler.window and self.preview_handler.window.isVisible()
+                    and self.preview_handler.current_path == path):
+                self.preview_handler.window._refresh_attrs(path)
+            if row >= 0:
+                self._refresh_attrs_indicator(row, path)
+            self._highlight_unmarked_rows()
+            if self.btn_hide_confirmed.isChecked():
+                self._apply_confirmed_filter(True)
+
+        def _clear():
+            for cb in win._aw_checks.values(): cb.setChecked(False)
+            for cb in win._aw_audio_checks.values(): cb.setChecked(False)
+            win._aw_none_rb.setChecked(True)
+            win._aw_none_res.setChecked(True)
+            win._aw_proj_edit.clear(); win._aw_scene_edit.clear()
+            win._aw_note_edit.clear(); win._aw_confirmed_cb.setChecked(False)
+
+        btn_save.clicked.connect(_save)
+        btn_clear.clicked.connect(_clear)
+        btn_row.addWidget(btn_save); btn_row.addWidget(btn_clear); btn_row.addWidget(btn_close)
+        outer.addLayout(btn_row)
+
+        return win
+
+    def _attr_win_load(self, path):
+        """Load a file's attributes into the open attr window."""
+        win = self._attr_win
+        if win is None: return
+        win._aw_path = path
+        win.setWindowTitle(f"Attributes — {os.path.basename(path)}")
+
+        entry    = attrs_mod.get(self.attrs_data, path)
+        cur_tags = set(entry.get("tags", []))
+        is_video = path.lower().endswith(logic.EXT_VID)
+
+        for key, cb in win._aw_checks.items():
+            cb.setChecked(key in cur_tags)
+
+        has_qual = bool(cur_tags & attrs_mod.QUALITY_TAGS)
+        win._aw_none_rb.setChecked(not has_qual)
+        for key, rb in win._aw_qual_rbs.items():
+            rb.setChecked(key in cur_tags)
+
+        has_res = bool(cur_tags & attrs_mod.RESOLUTION_TAGS)
+        win._aw_none_res.setChecked(not has_res)
+        for key, rb in win._aw_res_rbs.items():
+            rb.setChecked(key in cur_tags)
+
+        win._aw_g_aud.setVisible(is_video)
+        win._aw_scene_lbl.setVisible(is_video)
+        win._aw_scene_edit.setVisible(is_video)
+        for key, cb in win._aw_audio_checks.items():
+            cb.setChecked(key in cur_tags)
+
+        win._aw_proj_edit.setText(entry.get("project", ""))
+        win._aw_scene_edit.setText(entry.get("scene", "") if is_video else "")
+        win._aw_note_edit.setPlainText(entry.get("note", ""))
+        win._aw_confirmed_cb.setChecked(entry.get("confirmed", False))
+
+    def _refresh_attrs_indicator(self, row, path):
+        entry = attrs_mod.get(self.attrs_data, path)
+        item  = self.table.item(row, 2)
+        if not item: return
+
+        lines = []
+
+        # File path (full, unmasked)
+        lines.append(path)
+
+        # Metadata: dimensions, ratio, duration, fps, audio, size
+        meta = entry.get("meta", {}) if entry else {}
+        meta_parts = []
+        if "Dimensions" in meta:
+            dim = meta["Dimensions"]
+            ratio = meta.get("Ratio", "")
+            meta_parts.append(f"{dim}  {ratio}".strip())
+        if "Duration" in meta:
+            meta_parts.append(meta["Duration"])
+        if "FPS" in meta:
+            meta_parts.append(meta["FPS"])
+        if "Audio" in meta:
+            meta_parts.append(f"🔊 {meta['Audio']}")
+        elif meta.get("Dimensions"):  # video with no audio found
+            is_vid = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
+            if is_vid:
+                meta_parts.append("🔇 no audio")
+        if "File size" in meta:
+            meta_parts.append(meta["File size"])
+        if meta_parts:
+            lines.append("  ·  ".join(meta_parts))
+
+        # Tags
+        if entry:
+            tags    = entry.get("tags", [])
+            project = entry.get("project", "")
+            scene   = entry.get("scene", "")
+            note    = entry.get("note", "")
+            attr_parts = []
+            if tags:    attr_parts.append(" · ".join(attrs_mod.tag_label(t) for t in tags))
+            if project: attr_parts.append(f"🎬 {project}")
+            if scene:   attr_parts.append(f"🎬 {scene}")
+            if note:    attr_parts.append(note)
+            if attr_parts:
+                lines.append("  |  ".join(attr_parts))
+
+        item.setToolTip("\n".join(lines))
+
+    def _apply_confirmed_filter(self, hide):
+        self._apply_row_visibility()
+
+    def _apply_row_visibility(self):
+        """Unified row visibility: respects collapse state + confirmed-hide filter."""
+        header = self.table.horizontalHeaderItem(0)
+        if not header or header.text() != "Group":
+            return
+        hide_confirmed = self.btn_hide_confirmed.isChecked()
+
+        # Collect rows per group (in order)
+        groups = {}
+        order  = []
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if not item: continue
+            label = item.data(Qt.ItemDataRole.UserRole + 2) or item.text().strip()
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append(r)
+
+        # Determine which groups are fully confirmed-hidden
+        hidden_confirmed = set()
+        if hide_confirmed:
+            for label, rows in groups.items():
+                if all(bool(attrs_mod.get(self.attrs_data, self.table.get_row_path(r)))
+                       for r in rows):
+                    hidden_confirmed.add(label)
+
+        for label in order:
+            rows = groups[label]
+            if label in hidden_confirmed:
+                for r in rows:
+                    self.table.setRowHidden(r, True)
+            elif label in self._collapsed_groups:
+                # Show only first (representative) row
+                for i, r in enumerate(rows):
+                    self.table.setRowHidden(r, i > 0)
+            else:
+                for r in rows:
+                    self.table.setRowHidden(r, False)
+        self._recolor_dup_groups()
+        self._highlight_unmarked_rows()
+
+    def _on_group_cell_click(self, row, col):
+        if col != 0: return
+        header = self.table.horizontalHeaderItem(0)
+        if not header or header.text() != "Group": return
+        item = self.table.item(row, 0)
+        if not item: return
+        # Only toggle on the representative (▼/▶) row
+        if not item.text().startswith(("▼", "▶")):
+            return
+        label = item.data(Qt.ItemDataRole.UserRole + 2)
+        if not label: return
+        if label in self._collapsed_groups:
+            self._collapsed_groups.discard(label)
+            item.setText(f"▼ {label}")
+        else:
+            self._collapsed_groups.add(label)
+            item.setText(f"▶ {label}")
+        self._apply_row_visibility()
+
+    def _highlight_unmarked_rows(self):
+        """In dup mode, orange text = no attributes set; auto contrast text = has attributes."""
+        header = self.table.horizontalHeaderItem(0)
+        if not header or header.text() != "Group":
+            return
+        for r in range(self.table.rowCount()):
+            path   = self.table.get_row_path(r)
+            marked = bool(attrs_mod.get(self.attrs_data, path))
+            if not marked:
+                color = QColor(self._unmarked_color)
+            else:
+                item0 = self.table.item(r, 0)
+                bg = item0.background().color() if item0 else QColor()
+                color = self._contrast_fg(bg)
+            for col in range(self.table.columnCount()):
+                item = self.table.item(r, col)
+                if item:
+                    item.setForeground(color)
+            if marked:
+                self._refresh_attrs_indicator(r, path)  # restore yellow on name col if needed
+
+    def closeEvent(self, event):
+        if self.preview_handler.window:
+            self.preview_handler.window.close()
+        g = self.geometry()
+        self.config["main_geometry"] = [g.x(), g.y(), g.width(), g.height()]
+        self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(5)}
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._save_dup_results()
+        event.accept()
+
+    def _open_settings(self, tab=0):
+        if not hasattr(self, '_settings_win') or self._settings_win is None:
+            self._settings_win = SettingsView(self, self, tab)
+        else:
+            self._settings_win.show()
+            self._settings_win.raise_()
+            if tab:
+                self._settings_win.tabs.setCurrentIndex(tab)
+
+    # ── Project management ───────────────────────────────────────────────────
+
+    def set_project(self, name):
+        # Save current project's config before switching
+        cfg.save_config(self.config, self.current_project)
+        self.current_project = name
+        # Load project-specific config (falls back to global default)
+        self.config = cfg.load_config(name)
+        self.config["last_project"] = name
+        cfg.save_config(self.config, name)
+        # Also update last_project in global config so startup knows which project
+        _g = cfg.load_config()
+        _g["last_project"] = name
+        cfg.save_config(_g)
+        self.lbl_project.setText(name)
+        self.reload_tag_groups(name)
+        self.load_db()
+        # Keep DB settings scan label in sync
+        _sw = getattr(self, '_settings_win', None)
+        if _sw and hasattr(_sw, '_update_scan_project_label'):
+            _sw._update_scan_project_label()
+        if _sw and hasattr(_sw, '_refresh_person_tab'):
+            _sw._refresh_person_tab(name)
+
+    def load_db(self):
+        name = self.current_project.strip()
+        self.data, _ = logic.load_db_logic(name)
+        self.base_dirs = []
+        self.feedback_data = feedback.load(name)
+        self.attrs_data    = attrs_mod.load(name)
+        # Build O(1) path→index lookup with realpath so symlinks don't cause misses
+        if self.data and "paths" in self.data:
+            self._path_idx = {os.path.realpath(p): i for i, p in enumerate(self.data["paths"])}
+        else:
+            self._path_idx = {}
+        self._warmup_search_executor()
+
+        if self.data:
+            saved_dirs = self.data.get("base_dirs", [])
+            if saved_dirs:
+                self.base_dirs = [d.rstrip(os.sep) for d in saved_dirs if d]
+            elif self.data.get("paths"):
+                abs_paths = [os.path.abspath(p) for p in self.data["paths"] if p]
+                try:
+                    common = os.path.commonpath(abs_paths)
+                    if os.path.isdir(common) and len(common) > 5:
+                        self.base_dirs = [common]
+                except (ValueError, IndexError):
+                    pass
+
+        label = ", ".join(self.base_dirs) if self.base_dirs else ""
+        self.lbl_base_dir.setText(f"Base: {label}" if label else "Base: ")
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        self.table.setSortingEnabled(True)
+        self._dup_display_data = None
+        self.config["last_mode"] = "search"
+        self._update_mode_buttons("search")
+        self.table.setFocus()
+        # Restore previous search so the current file stays visible at the top
+        if self.query_path and os.path.exists(self.query_path):
+            QTimer.singleShot(0, lambda: self.run_search(self.query_path))
+        self._apply_watch_dirs()
+
+    def _warmup_search_executor(self):
+        """Create the persistent search thread and warm up CLIP/CUDA in it immediately."""
+        from concurrent.futures import ThreadPoolExecutor
+        # Recreate executor on each project load so the thread is always fresh
+        if hasattr(self, '_search_executor') and self._search_executor is not None:
+            self._search_executor.shutdown(wait=False)
+        self._search_executor = ThreadPoolExecutor(max_workers=1)
+        def _warmup():
+            try:
+                import numpy as np
+                from PIL import Image as _PIL
+                img = _PIL.fromarray(np.zeros((32, 32, 3), dtype=np.uint8))
+                logic.model.encode(img, convert_to_tensor=True)
+            except Exception:
+                pass
+        self._search_executor.submit(_warmup)
+
+    def _apply_watch_dirs(self):
+        """Connect watcher to all configured watch_dirs. _scan_new_files handles
+        project-scope filtering so only project files get indexed."""
+        watch_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
+        if self._watcher:
+            self._watcher.directoryChanged.disconnect()
+            self._watcher.deleteLater()
+            self._watcher = None
+        if not watch_dirs:
+            return
+        self._watcher = QFileSystemWatcher(watch_dirs, self)
+        self._watcher.directoryChanged.connect(self._on_dir_changed)
+
+    def _on_dir_changed(self, _path):
+        QTimer.singleShot(2000, self._scan_new_files)
+
+    def _scan_new_files(self):
+        """Add new files from watch_dirs; remove entries that no longer exist on disk.
+        Only processes files whose directory is also a base_dir of the current project —
+        watch-only dirs (e.g. Downloads not in the project) are skipped entirely."""
+        if not self.data: return
+        # Skip if a settings scan/rename is in progress — paths are being changed on disk
+        # and data["paths"] hasn't been updated yet, so missing/new detection would be wrong.
+        if getattr(self, '_watcher_paused', False): return
+        scan_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
+        if not scan_dirs: return
+
+        # Only process watch dirs that are also part of this project's base_dirs.
+        # A watch dir outside the project (e.g. Downloads) should trigger no embedding/search.
+        project_dirs = {os.path.normpath(d) for d in (self.base_dirs or [])}
+        project_scan_dirs = [d for d in scan_dirs
+                             if any(os.path.normpath(d).startswith(pd) or pd.startswith(os.path.normpath(d))
+                                    for pd in project_dirs)]
+        if not project_scan_dirs: return
+
+        paths = self.data.get("paths", [])
+        exts  = logic.EXT_IMG + logic.EXT_VID
+
+        # ── Remove missing files ──────────────────────────────────────────────
+        missing_idx = [i for i, p in enumerate(paths) if not os.path.exists(p)]
+        if missing_idx:
+            keep = [i for i in range(len(paths)) if i not in set(missing_idx)]
+            self.data["paths"]      = [paths[i] for i in keep]
+            self.data["embeddings"] = self.data["embeddings"][keep]
+            paths = self.data["paths"]
+
+        # ── Add new files (project-scoped watch dirs only) ────────────────────
+        known = set(os.path.normpath(p) for p in paths)
+        new_files = []
+        for d in project_scan_dirs:
+            if not os.path.isdir(d): continue
+            for f in os.listdir(d):
+                if f.lower().endswith(exts):
+                    fp = os.path.normpath(os.path.join(d, f))
+                    if fp not in known:
+                        new_files.append(fp)
+
+        import aisearch_attrs as attrs_mod
+        added = 0
+        attrs_dirty = False
+        retry_files = []
+        for path in new_files:
+            # Check file size is stable (not still being written)
+            try:
+                sz1 = os.path.getsize(path)
+            except OSError:
+                retry_files.append(path)
+                continue
+            emb = logic.extract_feature(path)
+            if emb is None:
+                # Could still be mid-write — schedule a retry
+                retry_files.append(path)
+                continue
+            self.data["paths"].append(path)
+            self.data["embeddings"] = torch.cat(
+                [self.data["embeddings"], emb.unsqueeze(0)])
+            added += 1
+            # Auto-detect info and mark editable for all watch-dir files
+            entry = dict(attrs_mod.get(self.attrs_data, path))
+            tags  = list(entry.get("tags", []))
+            changed = False
+            if not any(t in attrs_mod.RESOLUTION_TAGS for t in tags):
+                tag = attrs_mod.detect_resolution_tag(path)
+                if tag:
+                    tags = [t for t in tags if t not in attrs_mod.RESOLUTION_TAGS] + [tag]
+                    changed = True
+            if not any(t in attrs_mod.SOURCE_TAGS for t in tags):
+                src, prompt, seed = attrs_mod.detect_ai_source(path)
+                if src:
+                    tags = [t for t in tags if t not in attrs_mod.SOURCE_TAGS] + [src]
+                    changed = True
+                if prompt and not entry.get("prompt"):
+                    entry["prompt"] = prompt; changed = True
+                if seed and not entry.get("seed"):
+                    entry["seed"] = seed; changed = True
+            if not entry.get("meta"):
+                meta = attrs_mod.extract_metadata(path)
+                if meta:
+                    entry["meta"] = meta; changed = True
+            if not entry.get("editable", False):
+                entry["editable"] = True; changed = True
+            if changed:
+                entry["tags"] = tags
+                self.attrs_data[path] = entry
+                attrs_dirty = True
+        if attrs_dirty:
+            attrs_mod.save(self.current_project, self.attrs_data)
+
+        if missing_idx or added:
+            torch.save(self.data, f"features_{self.current_project}.pt")
+            parts = []
+            if added:          parts.append(f"{added} added")
+            if missing_idx:    parts.append(f"{len(missing_idx)} removed")
+            self.statusBar().showMessage(
+                f"Auto-updated: {', '.join(parts)}.", 4000)
+            if added and new_files and not getattr(self, '_search_running', False) and self.table.rowCount() == 0:
+                # Only auto-search when idle — never disrupt a user-initiated search
+                newest = new_files[-1]
+                QTimer.singleShot(0, lambda p=newest: self.run_search(p))
+
+        # Retry files that failed (still being written) — check again in 5s
+        if retry_files:
+            QTimer.singleShot(5000, self._scan_new_files)
+
+    # ── Duplicate finder ─────────────────────────────────────────────────────
+
+    def _on_threshold_changed(self, v):
+        self.config.update({"dup_threshold": v})
+        cfg.save_config(self.config)
+        # In dup mode: auto-load cached results for the new threshold if available
+        if self.config.get("last_mode") == "dup" and os.path.exists(self._dup_file_path()):
+            self._load_dup_results(update_spinner=False)
+        else:
+            self._update_dup_status_label()
+
+    def _set_dup_result(self, summary: str, threshold: int):
+        """Record the threshold + summary of the currently displayed dup results."""
+        self._dup_result_summary   = summary
+        self._dup_result_threshold = threshold
+        self._update_dup_status_label()
+
+    def _update_dup_status_label(self):
+        if not self._dup_result_summary:
+            return
+        scan_pct = self._dup_result_threshold
+        cur_pct  = self.spin_threshold.value()
+        if scan_pct is not None and cur_pct != scan_pct:
+            self.lbl_dup_status.setText(
+                f"⚠ Showing {scan_pct}% results — Rescan for {cur_pct}%")
+        else:
+            pct_str = f" @ {scan_pct}%" if scan_pct is not None else ""
+            self.lbl_dup_status.setText(self._dup_result_summary + pct_str)
+
+    def _force_rescan(self):
+        f = self._dup_file_path()
+        if os.path.exists(f):
+            os.remove(f)
+        self._find_duplicates()
+
+
+
+    # ── czkawka-compatible import/export (hidden — no UI buttons, kept for power users) ──
+
+    def _import_dup_json(self):
+        """Import czkawka-format duplicates JSON. Not exposed in UI but callable from console."""
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import czkawka Duplicates JSON", os.path.expanduser("~"),
+            "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception as e:
+            QMessageBox.warning(self, "Import Error", str(e))
+            return
+
+        groups_data = []
+        for size_groups in raw.values():
+            for group in size_groups:
+                members = [{"path": m["path"], "sim": 1.0}
+                           for m in group if os.path.exists(m["path"])]
+                ext_buckets = {}
+                for m in members:
+                    ext = os.path.splitext(m["path"])[1].lower()
+                    ext_buckets.setdefault(ext, []).append(m)
+                for bucket in ext_buckets.values():
+                    if len(bucket) > 1:
+                        groups_data.append(bucket)
+
+        if not groups_data:
+            QMessageBox.information(self, "Import", "No valid duplicate groups found.")
+            return
+
+        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        self.drop_zone.setPixmap(QPixmap())
+        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self._collapsed_groups.clear()
+        self._display_dup_from_data(groups_data)
+        self._dup_display_data = groups_data
+        total_files = sum(len(g) for g in groups_data)
+        self._set_dup_result(f"{len(groups_data)} groups, {total_files} files (imported)", 0)
+        self.config["last_mode"] = "dup"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._update_mode_buttons("dup")
+
+    def _export_dup_json(self):
+        """Export current dup results as czkawka-format JSON. Not exposed in UI but callable."""
+        if not self._dup_display_data:
+            QMessageBox.information(self, "Export", "No duplicate results to export.")
+            return
+        from PyQt6.QtWidgets import QFileDialog
+        import hashlib
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export czkawka Duplicates JSON", os.path.expanduser("~/aisearch_duplicates.json"),
+            "JSON Files (*.json)")
+        if not path:
+            return
+
+        def _md5(p):
+            h = hashlib.md5()
+            try:
+                with open(p, "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+            except OSError:
+                return ""
+
+        out = {}
+        for group in self._dup_display_data:
+            entries = []
+            for m in group:
+                p = m["path"]
+                try:
+                    sz  = os.path.getsize(p)
+                    mdt = int(os.path.getmtime(p))
+                except OSError:
+                    sz, mdt = 0, 0
+                entries.append({"path": p, "modified_date": mdt,
+                                "size": sz, "hash": _md5(p)})
+            if entries:
+                out.setdefault(str(entries[0]["size"]), []).append(entries)
+
+        out = dict(sorted(out.items(), key=lambda x: int(x[0])))
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+            total = sum(len(g) for groups in out.values() for g in groups)
+            QMessageBox.information(self, "Export",
+                f"Exported {len(out)} size buckets, {total} files\n→ {path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Export Error", str(e))
+
+    def _find_duplicates_by_hash(self):
+        """100% mode: full disk hash scan of all files in base_dirs — like Czkawka."""
+        if not self.base_dirs:
+            QMessageBox.information(self, "Find Duplicates", "No base directory set.")
+            return
+        import hashlib
+        from collections import defaultdict
+
+        self.btn_find_dups.setEnabled(False)
+        self.btn_find_dups.setText("Hashing...")
+        self._dup_result_summary = ""
+        self.lbl_dup_status.setText("")
+        self._dup_queue = queue.Queue()
+        base_dirs = list(self.base_dirs)
+
+        def _worker():
+            try:
+                # 1. Collect all files grouped by size (skip zero-byte files)
+                size_map = defaultdict(list)
+                for base in base_dirs:
+                    for root, _, files in os.walk(base):
+                        for fname in files:
+                            fpath = os.path.join(root, fname)
+                            try:
+                                sz = os.path.getsize(fpath)
+                                if sz > 0:
+                                    size_map[sz].append(fpath)
+                            except OSError:
+                                pass
+
+                # 2. For same-size candidates, compute MD5 hash
+                def _md5(path):
+                    h = hashlib.md5()
+                    with open(path, 'rb') as f:
+                        for chunk in iter(lambda: f.read(65536), b''):
+                            h.update(chunk)
+                    return h.hexdigest()
+
+                hash_map = defaultdict(list)
+                for size, fpaths in size_map.items():
+                    if len(fpaths) < 2:
+                        continue
+                    for fpath in fpaths:
+                        try:
+                            hash_map[(size, _md5(fpath))].append(fpath)
+                        except OSError:
+                            pass
+
+                # 3. Build groups — same hash = same bytes = duplicate regardless of extension
+                groups_data = []
+                for fpaths in hash_map.values():
+                    if len(fpaths) < 2:
+                        continue
+                    members = [{"path": p, "sim": 1.0} for p in fpaths]
+                    members.sort(key=lambda m: os.path.getsize(m["path"]), reverse=True)
+                    groups_data.append(members)
+
+                # Sort: most files in group first
+                groups_data.sort(key=len, reverse=True)
+                self._dup_queue.put(("hash_done", groups_data))
+            except Exception as e:
+                self._dup_queue.put(("error", str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self._dup_poll_timer = QTimer(self)
+        self._dup_poll_timer.timeout.connect(self._poll_dup_queue)
+        self._dup_poll_timer.start(200)
+
+    def _find_duplicates(self):
+        force_rescan = QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        if not force_rescan and os.path.exists(self._dup_file_path()):
+            self._load_dup_results(update_spinner=False)
+            return
+        if force_rescan and os.path.exists(self._dup_file_path()):
+            os.remove(self._dup_file_path())
+
+        threshold = self.spin_threshold.value() / 100.0
+        if threshold >= 1.0:
+            self._find_duplicates_by_hash()
+            return
+
+        if not self.data or not self.data.get("paths"):
+            QMessageBox.information(self, "Find Duplicates", "No database loaded.")
+            return
+
+        n = len(self.data["paths"])
+        if n > 15000:
+            if QMessageBox.question(self, "Find Duplicates",
+                f"{n} files in DB — this may use a lot of memory. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            ) != QMessageBox.StandardButton.Yes:
+                return
+
+        self.btn_find_dups.setEnabled(False)
+        self.btn_find_dups.setText("Searching...")
+        self.lbl_dup_status.setText("")
+        self._dup_queue = queue.Queue()
+
+        threshold = self.spin_threshold.value() / 100.0
+        all_paths = list(self.data["paths"])
+        all_embs  = self.data["embeddings"]
+
+        # Filter to project base_dirs only — exclude watch-only dirs (e.g. Downloads)
+        if self.base_dirs:
+            def _in_project(p):
+                pn = os.path.normpath(p)
+                for bd in self.base_dirs:
+                    bdn = os.path.normpath(bd)
+                    if pn == bdn or pn.startswith(bdn + os.sep):
+                        return True
+                return False
+            keep = [i for i, p in enumerate(all_paths) if _in_project(p)]
+            paths = [all_paths[i] for i in keep]
+            embs  = all_embs[keep] if keep else all_embs[:0]
+        else:
+            paths = all_paths
+            embs  = all_embs
+
+        def _worker():
+            try:
+                import hashlib
+                from collections import defaultdict
+
+                exact_mode = (threshold >= 1.0)
+
+                _hash_cache = {}
+                def _file_hash(path):
+                    if path in _hash_cache:
+                        return _hash_cache[path]
+                    h = hashlib.md5()
+                    try:
+                        with open(path, 'rb') as f:
+                            for chunk in iter(lambda: f.read(65536), b''):
+                                h.update(chunk)
+                        result = h.hexdigest()
+                    except OSError:
+                        result = None
+                    _hash_cache[path] = result
+                    return result
+
+                def _same_ext(i, j):
+                    return (os.path.splitext(paths[i])[1].lower() ==
+                            os.path.splitext(paths[j])[1].lower())
+
+                sim = st_util.cos_sim(embs, embs).cpu()   # (N, N)
+                n   = len(paths)
+                # Connected components: BFS
+                adj     = [[] for _ in range(n)]
+                # Pre-pass: group by filename prefix with fingerprint stripped.
+                # 001-whitebg-front-590020482048.jpg and
+                # 001-whitebg-front-200010001000.jpg share the same prefix
+                # → guaranteed duplicates regardless of visual similarity score.
+                # Skipped in exact mode (100%) — content hash is authoritative there.
+                if not exact_mode:
+                    prefix_map = defaultdict(list)
+                    for i, p in enumerate(paths):
+                        stem   = os.path.splitext(os.path.basename(p))[0]
+                        prefix = attrs_mod.filename_group_key(stem)
+                        prefix_map[prefix].append(i)
+                    for prefix_indices in prefix_map.values():
+                        if len(prefix_indices) < 2:
+                            continue
+                        for a in range(len(prefix_indices)):
+                            for b in range(a + 1, len(prefix_indices)):
+                                i, j = prefix_indices[a], prefix_indices[b]
+                                if not _same_ext(i, j):
+                                    continue
+                                if j not in adj[i]: adj[i].append(j)
+                                if i not in adj[j]: adj[j].append(i)
+                # Cosine similarity pass
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        if sim[i][j].item() >= threshold:
+                            if not _same_ext(i, j):
+                                continue
+                            if exact_mode and _file_hash(paths[i]) != _file_hash(paths[j]):
+                                continue
+                            adj[i].append(j)
+                            adj[j].append(i)
+                visited = [False] * n
+                groups  = []
+                for i in range(n):
+                    if visited[i] or not adj[i]: continue
+                    group = []
+                    stack = [i]
+                    while stack:
+                        node = stack.pop()
+                        if visited[node]: continue
+                        visited[node] = True
+                        group.append(node)
+                        stack.extend(adj[node])
+                    if len(group) > 1:
+                        # Sort group: largest file first — user keeps biggest, deletes smaller
+                        def _fsize(idx):
+                            try: return os.path.getsize(paths[idx])
+                            except OSError: return 0
+                        group.sort(key=_fsize, reverse=True)
+                        # Split by extension — different file types are never true duplicates
+                        ext_buckets = {}
+                        for idx in group:
+                            ext = os.path.splitext(paths[idx])[1].lower()
+                            ext_buckets.setdefault(ext, []).append(idx)
+                        for bucket in ext_buckets.values():
+                            if len(bucket) > 1:
+                                groups.append(bucket)
+                # Sort groups by max pairwise similarity descending
+                # (exact duplicates first, just-similar groups last)
+                def _group_max_sim(group):
+                    rep = group[0]
+                    return max(sim[idx][rep].item() for idx in group[1:]) if len(group) > 1 else 1.0
+                groups.sort(key=_group_max_sim, reverse=True)
+                self._dup_queue.put(("done", (groups, sim, paths)))
+            except Exception as e:
+                self._dup_queue.put(("error", str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self._dup_poll_timer = QTimer(self)
+        self._dup_poll_timer.timeout.connect(self._poll_dup_queue)
+        self._dup_poll_timer.start(200)
+
+    def _poll_dup_queue(self):
+        try:
+            msg, payload = self._dup_queue.get_nowait()
+        except queue.Empty:
+            return
+        self._dup_poll_timer.stop()
+        self.btn_find_dups.setText("♊ Duplicates")
+        if msg == "error":
+            QMessageBox.critical(self, "Duplicate Finder", payload)
+            return
+        if msg == "hash_done":
+            groups_data = payload
+            total_files = sum(len(g) for g in groups_data)
+            self._set_dup_result(f"{len(groups_data)} groups, {total_files} files", 100)
+            self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+            self.drop_zone.setPixmap(QPixmap())
+            self.drop_zone.setText("DUPLICATES\nFINDER")
+            self._collapsed_groups.clear()
+            self._display_dup_from_data(groups_data)
+            self._dup_display_data = groups_data
+            self._save_dup_results()
+            self.config["last_mode"] = "dup"
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+            self._update_mode_buttons("dup")
+            if self.table.rowCount():
+                self._select_row(0)
+            self.table.setFocus()
+            return
+        groups, sim, paths = payload
+        total_files = sum(len(g) for g in groups)
+        self._set_dup_result(f"{len(groups)} groups, {total_files} files",
+                             self.spin_threshold.value())
+        self._dup_display_data = self._build_dup_display_data(groups, sim, paths)
+        # Switch column header to "Group"
+        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        # Switch to dup mode
+        self.drop_zone.setPixmap(QPixmap())
+        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self._collapsed_groups.clear()
+        # self.attr_panel.show()  # disabled
+        self._display_dup_groups(groups, sim, paths)
+        self.config["last_mode"] = "dup"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._update_mode_buttons("dup")
+        if self.table.rowCount():
+            self._select_row(0)
+        self.table.setFocus()
+
+    def _dup_color(self, sim_score, group_idx):
+        family = group_idx % 2
+        for threshold, col_a, col_b in self._dup_shades:
+            if sim_score >= threshold:
+                return col_a if family == 0 else col_b
+        return self._dup_shades[-1][1] if family == 0 else self._dup_shades[-1][2]
+
+    def _display_dup_groups(self, groups, sim, paths):
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        for g_idx, group in enumerate(groups):
+            rep = group[0]
+            grp_label = f"G{g_idx + 1}"
+            for rank, idx in enumerate(group):
+                score = f"{'▼ ' if rank == 0 else '  '}{grp_label}"
+                row   = self._append_row(score,
+                                         logic.get_sz_readable(paths[idx]),
+                                         os.path.basename(paths[idx]),
+                                         self._mask_path(paths[idx]),
+                                         paths[idx])
+                item0 = self.table.item(row, 0)
+                item0.setData(Qt.ItemDataRole.UserRole + 2, grp_label)
+                if rank == 0:
+                    item0.setToolTip("Click to collapse/expand group")
+                sim_score = 1.0 if rank == 0 else sim[idx][rep].item()
+                item0.setData(Qt.ItemDataRole.UserRole + 1, sim_score)
+                color = self._dup_color(sim_score, g_idx)
+                for col in range(self.table.columnCount()):
+                    self.table.item(row, col).setBackground(color)
+        # Keep sorting OFF for dup results — enabling it scatters the groups
+        if self.table.rowCount():
+            self._select_row(0)
+
+    # ── Save / Load duplicate results ────────────────────────────────────────
+
+    def _build_dup_display_data(self, groups, sim, paths):
+        """Convert live groups+sim tensor into a serialisable list for save/load."""
+        result = []
+        for group in groups:
+            rep = group[0]
+            members = []
+            for rank, idx in enumerate(group):
+                members.append({
+                    "path": paths[idx],
+                    "sim":  1.0 if rank == 0 else round(sim[idx][rep].item(), 6)
+                })
+            result.append(members)
+        return result
+
+    def _dup_file_path(self):
+        pct = self.spin_threshold.value()
+        suffix = "hash" if pct >= 100 else f"{pct}pct"
+        return f"dups_{self.current_project}_{suffix}.json"
+
+    def _save_dup_results(self):
+        if not self._dup_display_data:
+            return
+        data = {
+            "project":   self.current_project,
+            "threshold": self.spin_threshold.value(),
+            "groups":    self._dup_display_data,
+        }
+        with open(self._dup_file_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def _load_dup_results(self, update_spinner=True):
+        name = self._dup_file_path()
+        if not os.path.exists(name):
+            return
+        try:
+            with open(name, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        pct = data.get("threshold") or self.spin_threshold.value()
+        if update_spinner:
+            self.spin_threshold.setValue(pct)
+        groups_data = [g for g in data["groups"] if len(g) > 1]
+        total_files = sum(len(g) for g in groups_data)
+        self._set_dup_result(f"{len(groups_data)} groups, {total_files} files", pct)
+        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        self.drop_zone.setPixmap(QPixmap())
+        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self._collapsed_groups.clear()
+        # self.attr_panel.show()  # disabled
+        self._display_dup_from_data(groups_data)
+        self._dup_display_data = groups_data
+        self.config["last_mode"] = "dup"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._update_mode_buttons("dup")
+
+    def _rebuild_dup_display_data(self):
+        """Rebuild _dup_display_data from current table rows (after deletions)."""
+        groups = {}
+        order  = []
+        for r in range(self.table.rowCount()):
+            label = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole + 2) or self.table.item(r, 0).text().strip()
+            path  = self.table.get_row_path(r)
+            sim   = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole + 1) or 1.0
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append({"path": path, "sim": sim})
+        self._dup_display_data = [groups[k] for k in order if len(groups[k]) > 1] or None
+
+    def _display_dup_from_data(self, groups_data):
+        """Display duplicate groups from saved/loaded data (no sim tensor needed)."""
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        for g_idx, members in enumerate(groups_data):
+            grp_label = f"G{g_idx + 1}"
+            for rank, member in enumerate(members):
+                path = member["path"]
+                if not os.path.exists(path):
+                    continue
+                score = f"{'▼ ' if rank == 0 else '  '}{grp_label}"
+                row   = self._append_row(score,
+                                         logic.get_sz_readable(path),
+                                         os.path.basename(path),
+                                         self._mask_path(path),
+                                         path)
+                item0 = self.table.item(row, 0)
+                item0.setData(Qt.ItemDataRole.UserRole + 2, grp_label)
+                if rank == 0:
+                    item0.setToolTip("Click to collapse/expand group")
+                item0.setData(Qt.ItemDataRole.UserRole + 1, member["sim"])
+                color = self._dup_color(member["sim"], g_idx)
+                for col in range(self.table.columnCount()):
+                    self.table.item(row, col).setBackground(color)
+        self._cleanup_singleton_groups()
+        self._highlight_unmarked_rows()
+        if self.table.rowCount():
+            self._select_row(0)
+
+    # ── Path display ─────────────────────────────────────────────────────────
+
+    def _mask_path(self, path):
+        d = os.path.dirname(os.path.abspath(path))
+        for base in sorted(self.base_dirs, key=len, reverse=True):
+            if d == base or d.startswith(base + os.sep):
+                rel = d[len(base):]
+                return rel.lstrip(os.sep) or "."
+        return d
+
+    # ── Table helpers ────────────────────────────────────────────────────────
+
+    def _current_row(self):
+        rows = self.table.selectionModel().selectedRows()
+        return rows[0].row() if rows else -1
+
+    def _selected_rows(self):
+        return sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
+
+    def _select_row(self, row):
+        self.table.selectRow(row)
+        self.table.scrollTo(self.table.model().index(row, 0))
+
+    def _contrast_fg(self, bg_color):
+        """Return black or white foreground for readable text on bg_color."""
+        if not bg_color or not bg_color.isValid():
+            return QColor("#000000") if self.config.get("theme") == "Light" else QColor("#ffffff")
+        lum = (bg_color.red() * 299 + bg_color.green() * 587 + bg_color.blue() * 114) / 1000
+        # In dark mode use a higher threshold — prefer white on medium-tone backgrounds
+        threshold = 128 if self.config.get("theme") == "Light" else 160
+        return QColor("#000000") if lum > threshold else QColor("#ffffff")
+
+    def _score_color(self, score_str):
+        try:
+            s = float(score_str)
+        except ValueError:
+            return None
+        sc = self._score_colors
+        if   s >= 0.98: return QColor(sc[0])
+        elif s >= 0.92: return QColor(sc[1])
+        elif s >= 0.85: return QColor(sc[2])
+        elif s >= 0.75: return QColor(sc[3])
+        else:           return None
+
+    def _append_row(self, score, size, name, masked_path, full_path):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        score_item = NumericItem(str(score))
+        score_item.setData(Qt.ItemDataRole.UserRole, full_path)
+        score_item.setFlags(score_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(row, 0, score_item)
+        for col, (ItemCls, text) in enumerate([(SizeItem, size), (QTableWidgetItem, name), (QTableWidgetItem, masked_path)], 1):
+            item = ItemCls(text)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, col, item)
+        try:
+            self.table.setItem(row, 4, DateItem(os.path.getmtime(full_path)))
+        except Exception:
+            self.table.setItem(row, 4, DateItem(0))
+        color = self._score_color(str(score))
+        if color:
+            fg = self._contrast_fg(color)
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item:
+                    item.setBackground(color)
+                    item.setForeground(fg)
+        self._refresh_attrs_indicator(row, full_path)
+        return row
+
+    def _cleanup_singleton_groups(self):
+        """In dup mode: remove any group down to one file, then recolor remaining groups."""
+        header = self.table.horizontalHeaderItem(0)
+        if not header or header.text() != "Group":
+            return
+        # Map base group label → list of row indices
+        group_rows = {}
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if item:
+                label = item.data(Qt.ItemDataRole.UserRole + 2) or item.text().strip()
+                group_rows.setdefault(label, []).append(r)
+        # Remove singleton groups
+        to_remove = [rows[0] for rows in group_rows.values() if len(rows) == 1]
+        for r in sorted(to_remove, reverse=True):
+            self.table.removeRow(r)
+        # Recolor remaining groups so red/blue alternation stays correct
+        self._recolor_dup_groups()
+
+    def _recolor_dup_groups(self):
+        """Re-apply alternating red/blue colors based on visible groups only."""
+        header = self.table.horizontalHeaderItem(0)
+        if not header or header.text() != "Group":
+            return
+
+        # Pass 1: assign color index only to groups that have ≥1 visible row
+        group_color = {}   # label → display_idx
+        display_idx = -1
+        prev_label  = None
+        for r in range(self.table.rowCount()):
+            if self.table.isRowHidden(r):
+                continue
+            item0 = self.table.item(r, 0)
+            if not item0:
+                continue
+            label = item0.data(Qt.ItemDataRole.UserRole + 2) or item0.text().strip()
+            if label != prev_label:
+                display_idx += 1
+                prev_label   = label
+            group_color.setdefault(label, display_idx)
+
+        # Pass 2: apply colors to ALL rows (hidden rows keep consistent color)
+        for r in range(self.table.rowCount()):
+            item0 = self.table.item(r, 0)
+            if not item0:
+                continue
+            label     = item0.data(Qt.ItemDataRole.UserRole + 2) or item0.text().strip()
+            g_idx     = group_color.get(label, 0)
+            sim_score = item0.data(Qt.ItemDataRole.UserRole + 1) or 1.0
+            color = self._dup_color(sim_score, g_idx)
+            fg    = self._contrast_fg(color)
+            for col in range(self.table.columnCount()):
+                item = self.table.item(r, col)
+                if item:
+                    item.setBackground(color)
+                    item.setForeground(fg)
+
+    def _post_move_dup_cleanup(self):
+        header = self.table.horizontalHeaderItem(0)
+        if header and header.text() == "Group":
+            self._cleanup_singleton_groups()
+            self._rebuild_dup_display_data()
+            self._save_dup_results()
+
+    def _update_row(self, row, old_path, final_path, overwrite, dest_path, protect_rows=None):
+        """Update a row after a move. Remove the overwritten row if needed.
+        protect_rows: set of row indices that must never be removed (e.g. {0} for query row)."""
+        if overwrite:
+            for r in range(self.table.rowCount()):
+                if r == row: continue
+                if protect_rows and r in protect_rows: continue
+                if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(dest_path):
+                    self.table.removeRow(r)
+                    if r < row: row -= 1
+                    break
+        self.table.item(row, 2).setText(os.path.basename(final_path))
+        self.table.item(row, 3).setText(self._mask_path(final_path))
+        self.table.set_row_path(row, final_path)
+        if os.path.normpath(old_path) == os.path.normpath(self.query_path or ""):
+            self.query_path = final_path
+        if old_path != final_path:
+            # Transfer attrs_data entry to new path
+            if old_path in self.attrs_data:
+                self.attrs_data[final_path] = self.attrs_data.pop(old_path)
+                attrs_mod.save(self.current_project, self.attrs_data)
+            # Update preview if it's showing the moved file
+            if self.preview_handler.current_path == old_path:
+                self.preview_handler.current_path = final_path
+            self._push_undo({"type": "move", "old_path": old_path, "new_path": final_path})
+
+    # ── Drag-drop (top-level window must accept to enable child widget drops on Linux) ──
+    # dragEnterEvent/dragMoveEvent advertise the window as a drop target to the OS/WM.
+    # On Linux/xcb without this, external drags never enter and child widgets never see them.
+    # dropEvent is intentionally omitted — each drop zone (DropZoneLabel, FileTable viewport)
+    # handles its own drop; a window-level handler caused double on_drop() calls on Linux.
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+
+    # ── Search ───────────────────────────────────────────────────────────────
+
+    def on_drop(self, path):
+        # Exit browse mode immediately so headers/bar update before search starts
+        if getattr(self, '_browse_dir', None):
+            self._exit_browse_mode()
+        # Defer raise/activate to next event loop tick — on X11/Cinnamon, calling
+        # activateWindow() during the drop event has no effect because the file
+        # manager still owns focus; the timer fires after the drop completes.
+        QTimer.singleShot(0, self.raise_)
+        QTimer.singleShot(0, self.activateWindow)
+        self.run_search(path)
+
+    def run_search(self, p):
+        if not self.data:
+            if getattr(self, '_browse_dir', None):
+                self._exit_browse_mode()
+            self._update_mode_buttons("search")
+            return
+        # Cancel any previous search by invalidating its token
+        if hasattr(self, '_search_cancel'):
+            self._search_cancel[0] = True
+        _cancel = [False]
+        self._search_cancel = _cancel
+
+        self._search_running = True
+        self.query_path = os.path.abspath(p)
+
+        # Show image immediately — load at preview resolution (700px) only.
+        # QImageReader.setScaledSize tells the JPEG decoder to use DCT scaling
+        # (1/2, 1/4, or 1/8), which is ~10× faster than a full decode.
+        from PyQt6.QtGui import QImageReader
+        from PyQt6.QtCore import QSize as _QSize
+        _reader = QImageReader(self.query_path)
+        _reader.setAutoTransform(True)
+        _orig = _reader.size()
+        _PREVIEW_MAX = 700
+        if _orig.isValid() and max(_orig.width(), _orig.height(), 1) > _PREVIEW_MAX:
+            _sc = _PREVIEW_MAX / max(_orig.width(), _orig.height())
+            _reader.setScaledSize(_QSize(max(1, int(_orig.width() * _sc)),
+                                         max(1, int(_orig.height() * _sc))))
+        _qimg = _reader.read()
+        px = QPixmap.fromImage(_qimg) if not _qimg.isNull() else QPixmap()
+        if not px.isNull():
+            scaled = px.scaled(330, 330,
+                               Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+            self.drop_zone.setPixmap(scaled)
+            self.drop_zone.setText("")
+            # Pre-populate preview cache so _render skips its own PIL open
+            self.preview_handler._cached_pixmap      = px
+            self.preview_handler._cached_pixmap_path = self.query_path
+        else:
+            # Video — extract first frame with cv2 for the thumbnail
+            ext = os.path.splitext(self.query_path)[1].lower()
+            frame_px = None
+            if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm'):
+                try:
+                    import cv2, numpy as np
+                    from PyQt6.QtGui import QImage
+                    cap = cv2.VideoCapture(self.query_path)
+                    ret1, frame1 = cap.read()
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if total > 1:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, total - 1)
+                        ret2, frame2 = cap.read()
+                    else:
+                        ret2, frame2 = False, None
+                    cap.release()
+                    if ret1:
+                        if ret2 and frame2 is not None:
+                            div_w = max(20, frame1.shape[1] // 48)
+                            div = np.zeros((frame1.shape[0], div_w, 3), dtype=np.uint8)
+                            div[:, :] = [0, 200, 0]  # BGR green
+                            combined = np.concatenate([frame1, div, frame2], axis=1)
+                        else:
+                            combined = frame1
+                        combined_rgb = cv2.cvtColor(combined, cv2.COLOR_BGR2RGB)
+                        h, w, ch = combined_rgb.shape
+                        qimg = QImage(combined_rgb.data, w, h, w * ch,
+                                      QImage.Format.Format_RGB888)
+                        frame_px = QPixmap.fromImage(qimg)
+                except Exception:
+                    pass
+            if frame_px and not frame_px.isNull():
+                scaled = frame_px.scaled(330, 330,
+                                         Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                self.drop_zone.setPixmap(scaled)
+                self.drop_zone.setText("")
+            else:
+                self.drop_zone.setPixmap(QPixmap())
+                self.drop_zone.setText("▶ VIDEO" if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+
+        # Show preview immediately before the background search starts
+        self.preview_handler.show(self.query_path)
+        self._refresh_inline_attrs(self.query_path)
+
+        # Lock preview so it doesn't update again until search finishes
+        self._lock_preview = True
+
+        # Restore "Score" column header; exit browse mode if active; clear table immediately
+        if self._browse_dir:
+            self._exit_browse_mode()
+        self.table.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)   # clear browse/old listing immediately, don't wait for worker
+        self.config["last_mode"] = "search"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._update_mode_buttons("search")
+        self.btn_find_dups.setEnabled(False)
+        self.search_progress.show()
+        self.statusBar().showMessage("Analyzing image…")
+
+        import threading, queue as _queue
+        _q = _queue.Queue()
+        _query_path  = self.query_path
+        _data        = self.data          # snapshot — avoids race if project switches
+        _feedback    = self.feedback_data
+
+        _path_idx    = getattr(self, '_path_idx', {})
+
+        def _worker():
+            try:
+                # Fast path: file is already indexed — reuse stored embedding (O(1), symlink-safe)
+                emb = None
+                idx = _path_idx.get(os.path.realpath(_query_path))
+                if idx is not None:
+                    emb = _data["embeddings"][idx].unsqueeze(0)
+                    _q.put(("status", "DB hit — searching…"))
+                else:
+                    _q.put(("status", "Not in DB — running CLIP…"))
+                    emb = logic.extract_feature(_query_path)
+                if emb is None:
+                    _q.put(("error", "Could not extract features from image.")); return
+                raw_sims = st_util.cos_sim(emb, _data["embeddings"])[0]
+                k = min(self.config.get("max_search_results", 300), len(_data["paths"]))
+                if k == 0:
+                    _q.put(("done", (emb, (raw_sims[:0], raw_sims[:0].long())))); return
+                top_raw  = torch.topk(raw_sims, k=k)
+                cand_idx = top_raw[1]
+                cand_sims = raw_sims[cand_idx].clone()
+                if _feedback and _feedback["query_embs"].shape[0] > 0:
+                    cand_embs = _data["embeddings"][cand_idx]
+                    boost     = feedback.boost_scores(emb, cand_embs, _feedback)
+                    cand_sims = cand_sims + boost.to(cand_sims.device)
+                # Directory proximity boost — surfaces nearby files above visually
+                # similar but unrelated files. Boosts are small so visual similarity
+                # still dominates; they just tip the balance when scores are close.
+                #   same dir      → +0.04
+                #   subdir        → +0.02
+                #   parent dir    → +0.01
+                _query_dir    = os.path.dirname(os.path.abspath(_query_path))
+                _query_parent = os.path.dirname(_query_dir)
+                _prox_boost = torch.zeros(len(cand_idx))
+                for _ci, _raw_idx in enumerate(cand_idx.tolist()):
+                    _d = os.path.dirname(os.path.abspath(_data["paths"][_raw_idx]))
+                    if _d == _query_dir:
+                        _prox_boost[_ci] = 0.04
+                    elif _d.startswith(_query_dir + os.sep):
+                        _prox_boost[_ci] = 0.02
+                    elif _d == _query_parent:
+                        _prox_boost[_ci] = 0.01
+                cand_sims = cand_sims + _prox_boost.to(cand_sims.device)
+                paths_arr     = [_data["paths"][i] for i in cand_idx.tolist()]
+                def _dir_rank(p):
+                    d = os.path.dirname(os.path.abspath(p))
+                    if d == _query_dir:                    return 0  # C/B/ exactly
+                    if d.startswith(_query_dir + os.sep):  return 1  # C/B/D/, C/B/E/, …
+                    if d == _query_parent:                 return 2  # C/
+                    return 3                                          # everything else
+                alpha_order = sorted(range(len(paths_arr)),
+                                     key=lambda i: (
+                                         _dir_rank(paths_arr[i]),
+                                         os.path.dirname(paths_arr[i]),
+                                         os.path.basename(paths_arr[i])))
+                pre = torch.tensor(alpha_order, dtype=torch.long)
+                cand_sims = cand_sims[pre]
+                cand_idx  = cand_idx[pre]
+                order = torch.argsort(cand_sims, descending=True, stable=True)
+                top   = (cand_sims[order], cand_idx[order])
+                _q.put(("done", (emb, top)))
+            except Exception as e:
+                import traceback
+                _q.put(("error", f"{e}\n\n{traceback.format_exc()}"))
+
+        def _poll():
+            # This search was superseded — stop polling silently
+            if _cancel[0]:
+                return
+            try:
+                msg, payload = _q.get_nowait()
+            except Exception:
+                # Still running — check again soon
+                QTimer.singleShot(50, _poll)
+                return
+            # Re-check after dequeue in case a new search started while we waited
+            if _cancel[0]:
+                return
+            if msg == "status":
+                self.statusBar().showMessage(payload)
+                QTimer.singleShot(50, _poll)
+                return
+            if msg == "error":
+                # Show error in status bar; still display the query image as row 0
+                first_line = payload.split("\n")[0]
+                self.statusBar().showMessage(f"Search error: {first_line}", 6000)
+                self._populate_search_results(
+                    (torch.zeros(0, device='cpu'), torch.zeros(0, dtype=torch.long, device='cpu')),
+                    _query_path, _data)
+                self._finish_search(None, None, _query_path)
+            else:
+                emb, top = payload
+                self.statusBar().showMessage("Populating results…")
+                self._populate_search_results(top, _query_path, _data)
+                self._finish_search(emb, top, _query_path)
+
+        if not hasattr(self, '_search_executor') or self._search_executor is None:
+            self._warmup_search_executor()
+        self._search_executor.submit(_worker)
+        self.statusBar().showMessage("Analyzing image…")
+        QTimer.singleShot(50, _poll)
+
+    def _populate_search_results(self, top, query_path, data):
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        self._append_row("1.0000",
+                          logic.get_sz_readable(query_path),
+                          os.path.basename(query_path),
+                          self._mask_path(query_path),
+                          query_path)
+        for s, i in zip(top[0], top[1]):
+            fp = data["paths"][i]
+            if os.path.abspath(fp) == query_path: continue
+            if not os.path.exists(fp): continue
+            # Cap at 0.9999 so the query image (1.0000) is always row 0 even after
+            # feedback boost pushes some scores above 1.0
+            score_str = f"{min(s.item(), 0.9999):.4f}"
+            self._append_row(score_str,
+                             logic.get_sz_readable(fp),
+                             os.path.basename(fp),
+                             self._mask_path(fp),
+                             fp)
+        # Sort by score descending — query image (1.0000) is always on top
+        self.table.horizontalHeader().setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+        self.table.setSortingEnabled(True)
+        if self.table.rowCount():
+            self._select_row(0)
+            QTimer.singleShot(50, lambda: self.table.setFocus())
+
+    def _finish_search(self, emb, top, query_path):
+        if emb is not None:
+            self.query_emb = emb
+        self._search_running  = False
+        self.search_progress.hide()
+        self.statusBar().clearMessage()
+        self.btn_find_dups.setEnabled(True)
+        self._lock_preview = False
+        # Trigger preview for the currently selected row (row 0 = query image)
+        self.handle_preview()
+
+    # ── Browse mode ──────────────────────────────────────────────────────────
+
+    def _update_mode_buttons(self, mode):
+        """Highlight the active mode button; show dup controls only in dup mode."""
+        for btn, m in [(self.btn_mode_search, "search"),
+                       (self.btn_find_dups,   "dup"),
+                       (self.btn_browse,       "browse")]:
+            active_ss, inactive_ss = self._mode_styles[m]
+            btn.setStyleSheet(active_ss if m == mode else inactive_ss)
+        self._dup_controls_widget.setVisible(mode == "dup")
+
+    def _enter_search_mode(self):
+        """Return to search mode — search selected row, last query, or just reset."""
+        if getattr(self, '_browse_dir', None):
+            self._exit_browse_mode()
+        # Prefer the currently selected file (useful when coming from dup/browse)
+        path = None
+        row = self._current_row()
+        if row >= 0:
+            p = self.table.get_row_path(row)
+            if p and os.path.exists(p):
+                path = p
+        if path is None and self.query_path and os.path.exists(self.query_path):
+            path = self.query_path
+        if path:
+            self.run_search(path)
+        else:
+            self.table.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+            self.table.setRowCount(0)
+            self.config["last_mode"] = "search"
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+            self._update_mode_buttons("search")
+
+    def _enter_browse_mode(self, directory=None):
+        """Show all files in a directory (ls mode). directory=None uses selected row's folder."""
+        if directory is None:
+            row = self._current_row()
+            if row >= 0:
+                path = self.table.get_row_path(row)
+                directory = os.path.dirname(os.path.abspath(path)) if path else None
+            if not directory and self.base_dirs:
+                directory = self.base_dirs[0]
+        if not directory or not os.path.isdir(directory):
+            return
+
+        self._browse_dir = directory
+        self.config["last_mode"] = "browse"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._update_mode_buttons("browse")
+
+        valid_exts = tuple(
+            ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
+        try:
+            entries = os.listdir(directory)
+        except PermissionError:
+            return
+        files = sorted(
+            os.path.join(directory, f)
+            for f in entries
+            if f.lower().endswith(valid_exts)
+            and os.path.isfile(os.path.join(directory, f))
+        )
+
+        self.table.setHorizontalHeaderLabels(["#", "Size", "Name", "Path", "Date"])
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        for i, fp in enumerate(files):
+            self._append_row(str(i + 1),
+                             logic.get_sz_readable(fp),
+                             os.path.basename(fp),
+                             self._mask_path(fp),
+                             fp)
+        self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+        self.table.setSortingEnabled(True)
+
+        self._browse_bar.setText(f"📂  {directory}  —  {len(files)} files   [← left arrow to search]")
+        self._browse_bar.show()
+
+        if self.table.rowCount():
+            self._select_row(0)
+        self.table.setFocus()
+
+    def _exit_browse_mode(self):
+        self._browse_dir = None
+        self._browse_bar.hide()
+        self._update_mode_buttons("search")
+
+    # ── Event handlers ───────────────────────────────────────────────────────
+
+    def on_double_click(self):
+        row = self._current_row()
+        if row < 0: return
+        path = self.table.get_row_path(row)
+        if not path: return
+        if self.config.get("dbl_click_spread", False):
+            is_video = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
+            self.preview_handler._toggle_physical_geometry(path, is_video)
+        else:
+            front_page.open_external_viewer(path, keep_open=self.keep_viewer_open)
+
+    def _on_right_click(self, pos):
+        item = self.table.itemAt(pos)
+        if item:
+            self.table.selectRow(self.table.row(item))
+        front_page.show_context_menu(self.table.mapToGlobal(pos), self.popup_menu)
+
+    def open_folder(self):
+        row = self._current_row()
+        if row >= 0:
+            front_page.open_in_nemo(self.table.get_row_path(row))
+
+    def handle_preview(self):
+        if self._lock_preview: return
+        row = self._current_row()
+        if row < 0:
+            self._refresh_inline_attrs(None)
+            return
+        path = self.table.get_row_path(row)
+        if path and not os.path.exists(path):
+            if row == 0:
+                # Query image — never auto-remove; it may be on a slow/remote filesystem
+                return
+            self._remove_missing_file(row, path)
+            return
+        self.preview_handler.show(path)
+        self._refresh_inline_attrs(path)
+
+    def _remove_missing_file(self, row, path):
+        """Remove a file that no longer exists from the table, DB, and embeddings."""
+        # Remove from attrs DB
+        self.attrs_data.pop(path, None)
+        attrs_mod.save(self.current_project, self.attrs_data)
+        # Remove from embeddings
+        if self.data and "paths" in self.data and path in self.data["paths"]:
+            idx  = self.data["paths"].index(path)
+            keep = [i for i in range(len(self.data["paths"])) if i != idx]
+            self.data["paths"]      = [self.data["paths"][i] for i in keep]
+            self.data["embeddings"] = self.data["embeddings"][keep]
+            torch.save(self.data, f"features_{self.current_project}.pt")
+        # Remove the row and select the next one
+        was_query = (row == 0)
+        self.table.removeRow(row)
+        self._cleanup_singleton_groups()
+        self._rebuild_dup_display_data()
+        self._save_dup_results()
+        new_row = min(row, self.table.rowCount() - 1)
+        if new_row >= 0:
+            self._select_row(new_row)
+            self.table.setFocus()
+            if was_query:
+                self._rebase_to_row(new_row)
+
+    # ── Move / rename / delete ───────────────────────────────────────────────
+
+    def on_right_key_press(self):
+        row = self._current_row()
+        if row < 0: return
+        # In browse mode: right arrow re-enters browse on selected file's directory
+        if self._browse_dir:
+            self._enter_browse_mode()
+            self._raise_preview()
+            return
+        # In search mode, row 0 is the query file — enter browse instead of moving it
+        if row == 0 and self.query_path:
+            self._enter_browse_mode()
+            self._raise_preview()
+            return
+        if not self.query_path: return
+        old_path = self.table.get_row_path(row)
+
+        new_path, self.data, err = front_page.move_file_physically(
+            old_path, self.query_path, self.data, self.current_project,
+            mode=self.config.get("move_conflict", "size_check"), parent_win=self)
+
+        if new_path:
+            if self.query_emb is not None and self.data and "paths" in self.data:
+                if old_path in self.data["paths"]:
+                    idx = self.data["paths"].index(old_path)
+                    feedback.record(self.current_project, self.query_emb, self.data["embeddings"][idx])
+                    self.feedback_data = feedback.load(self.current_project)
+            dest_path = os.path.join(os.path.dirname(os.path.abspath(self.query_path)),
+                                     os.path.basename(old_path))
+            self._update_row(row, old_path, new_path,
+                             new_path == dest_path,
+                             dest_path,
+                             protect_rows={0})   # never remove the query row
+            self._post_move_dup_cleanup()
+            next_row = row + 1 if row + 1 < self.table.rowCount() else row - 1
+            if next_row >= 0: self._select_row(next_row)
+            self._raise_preview()
+        elif err and err != "cancelled":
+            QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
+
+    def _raise_preview(self):
+        """Bring the preview window to the front without stealing keyboard focus."""
+        w = getattr(self.preview_handler, 'window', None)
+        if w and w.isVisible():
+            w.raise_()
+            QTimer.singleShot(0, self.table.setFocus)
+
+    def _rebase_to_row(self, row):
+        """Make the file at row the new search base (same as pressing left arrow)."""
+        path = self.table.get_row_path(row)
+        if not path:
+            return
+        self._lock_preview = True
+        try:
+            self.run_search(path)
+        finally:
+            self._lock_preview = False
+        if self.preview_handler.window and self.preview_handler.window.isVisible():
+            QTimer.singleShot(100, lambda: self.preview_handler.show(self.query_path))
+
+    def on_left_key_press(self):
+        if getattr(self, '_left_key_busy', False):
+            return
+        self._left_key_busy = True
+        try:
+            # In browse mode: left arrow exits browse and restores the previous search
+            if getattr(self, '_browse_dir', None):
+                self._exit_browse_mode()
+                if self.query_path and os.path.exists(self.query_path):
+                    self.run_search(self.query_path)
+                    self.table.scrollToTop()
+                    self._select_row(0)
+                return
+            # In dup mode: left arrow switches to search on the selected file
+            if self.config.get("last_mode") == "dup":
+                row = self._current_row()
+                path = self.table.get_row_path(row) if row >= 0 else None
+                if not path and self.query_path and os.path.exists(self.query_path):
+                    path = self.query_path
+                if path:
+                    self.run_search(path)
+                return
+            row = self._current_row()
+            if row >= 0:
+                self.run_search(self.table.get_row_path(row))
+        finally:
+            self._left_key_busy = False
+
+    def _move_to_neighbor(self, direction):
+        row      = self._current_row()
+        if row < 0: return
+        neighbor = row + direction
+        if neighbor < 0 or neighbor >= self.table.rowCount(): return
+
+        src_path      = os.path.abspath(self.table.get_row_path(row))
+        neighbor_path = os.path.abspath(self.table.get_row_path(neighbor))
+        target_dir    = os.path.dirname(neighbor_path)
+        if os.path.dirname(src_path) == target_dir: return
+
+        mode      = self.config.get("move_conflict", "size_check")
+        dest_path = os.path.join(target_dir, os.path.basename(src_path))
+        final_path, overwrite = front_page._resolve_with_size(dest_path, src_path, mode, self)
+        if final_path is None: return
+
+        try:
+            shutil.move(src_path, final_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Move Error", str(e)); return
+
+        import aisearch_attrs as _am
+        _am.update_path_in_all_stores(src_path, final_path, self.current_project)
+        if self.data and "paths" in self.data:
+            if overwrite: front_page._remove_from_data(self.data, dest_path)
+            for i, p in enumerate(self.data["paths"]):
+                if os.path.normpath(p) == os.path.normpath(src_path):
+                    self.data["paths"][i] = final_path
+                    torch.save(self.data, f"features_{self.current_project}.pt")
+                    break
+
+        self._update_row(row, src_path, final_path, overwrite, dest_path)
+        self._post_move_dup_cleanup()
+        self._select_row(min(row, self.table.rowCount() - 1))
+
+    def _handle_drag_move(self, src_rows, target_row):
+        target_path = self.table.get_row_path(target_row)
+        if not target_path: return
+        target_dir = os.path.dirname(os.path.abspath(target_path))
+        mode       = self.config.get("move_conflict", "size_check")
+        db_changed = False
+
+        for src_row in src_rows:
+            src_path  = os.path.abspath(self.table.get_row_path(src_row))
+            if os.path.dirname(src_path) == target_dir: continue
+            dest_path = os.path.join(target_dir, os.path.basename(src_path))
+            final_path, overwrite = front_page._resolve_with_size(dest_path, src_path, mode, self)
+            if final_path is None: continue
+            try:
+                shutil.move(src_path, final_path)
+            except Exception as e:
+                QMessageBox.critical(self, "Move Error", str(e)); continue
+
+            import aisearch_attrs as _am
+            _am.update_path_in_all_stores(src_path, final_path, self.current_project)
+            if self.data and "paths" in self.data:
+                if overwrite: front_page._remove_from_data(self.data, dest_path)
+                for i, p in enumerate(self.data["paths"]):
+                    if os.path.normpath(p) == os.path.normpath(src_path):
+                        self.data["paths"][i] = final_path; db_changed = True; break
+
+            self._update_row(src_row, src_path, final_path, overwrite, dest_path)
+
+        self._post_move_dup_cleanup()
+        if db_changed and self.data:
+            torch.save(self.data, f"features_{self.current_project}.pt")
+
+    def move_to_folder_manually(self):
+        row = self._current_row()
+        if row < 0: return
+        old_path = self.table.get_row_path(row)
+
+        if old_path and not attrs_mod.is_editable(self.attrs_data, old_path):
+            QMessageBox.warning(self, "Locked", "This file is locked and cannot be moved.")
+            return
+
+        new_path, self.data, err, chosen_dir = front_page.select_and_move_file(
+            self, old_path, self.data, self.current_project, self.last_move_dir,
+            mode=self.config.get("move_conflict", "size_check"))
+
+        if new_path:
+            self.last_move_dir = chosen_dir
+            self.config["last_move_dir"] = chosen_dir
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+            self._update_row(row, old_path, new_path,
+                             new_path == os.path.join(chosen_dir, os.path.basename(old_path)),
+                             os.path.join(chosen_dir, os.path.basename(old_path)))
+            self._post_move_dup_cleanup()
+            next_row = row + 1 if row + 1 < self.table.rowCount() else row - 1
+            if next_row >= 0:
+                self._select_row(next_row)
+                if row == 0:
+                    self._rebase_to_row(next_row)
+        elif err and err != "cancelled":
+            QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
+
+    def rename_file(self, from_menu=False):
+        row = self._current_row()
+        if row < 0: return
+        # Defer when called from context menu so it fully closes first
+        delay = 50 if from_menu else 0
+        QTimer.singleShot(delay, lambda: self._start_rename(row))
+
+    def _start_rename(self, row):
+        old_path   = self.table.get_row_path(row)
+        if not old_path: return
+        old_name   = os.path.basename(old_path)
+        base       = os.path.splitext(old_name)[0]
+        name_item  = self.table.item(row, 2)
+        if not name_item: return
+        orig_flags = name_item.flags()
+        delegate   = self.table.itemDelegate()
+
+        # Clean up any stale connection from a previous rename
+        try:
+            delegate.closeEditor.disconnect(self._rename_close_handler)
+        except Exception:
+            pass
+
+        def _on_close(editor, hint):
+            from PyQt6.QtWidgets import QAbstractItemDelegate
+            try:
+                delegate.closeEditor.disconnect(_on_close)
+            except Exception:
+                pass
+            name_item.setFlags(orig_flags)
+
+            if hint == QAbstractItemDelegate.EndEditHint.RevertModelData:
+                name_item.setText(old_name)
+                return
+
+            new_name = editor.text().strip()
+            if not new_name or new_name == old_name:
+                name_item.setText(old_name)
+                return
+
+            new_path = os.path.join(os.path.dirname(old_path), new_name)
+            try:
+                os.rename(old_path, new_path)
+                name_item.setText(new_name)
+                self.table.set_row_path(row, new_path)
+                if self.data and "paths" in self.data and old_path in self.data["paths"]:
+                    idx = self.data["paths"].index(old_path)
+                    self.data["paths"][idx] = new_path
+                    torch.save(self.data, f"features_{self.current_project}.pt")
+                if old_path in self.attrs_data:
+                    self.attrs_data[new_path] = self.attrs_data.pop(old_path)
+                    attrs_mod.save(self.current_project, self.attrs_data)
+                attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
+                if self.preview_handler.current_path == old_path:
+                    self.preview_handler.current_path = new_path
+            except Exception as e:
+                QMessageBox.critical(self, "Rename Error", str(e))
+                name_item.setText(old_name)
+
+        self._rename_close_handler = _on_close
+        name_item.setFlags(orig_flags | Qt.ItemFlag.ItemIsEditable)
+        delegate.closeEditor.connect(_on_close)
+        self.table.setFocus()
+        self.table.setCurrentItem(name_item)
+        self.table.editItem(name_item)
+        QTimer.singleShot(0, lambda: self._open_rename_editor(base, old_name))
+
+    def _open_rename_editor(self, base, old_name):
+        from PyQt6.QtGui import QFontMetrics
+        for editor in self.table.viewport().findChildren(QLineEdit):
+            # Widen the editor widget itself (doesn't affect column)
+            needed = QFontMetrics(editor.font()).horizontalAdvance(old_name) + 40
+            if needed > editor.width():
+                editor.resize(min(needed, 900), editor.height())
+            editor.setSelection(0, len(base))
+            break
+
+    def _confirm_trash(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Trash")
+        dlg.setFixedSize(280, 120)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(QLabel("Move to Trash?"))
+        dont_ask = QCheckBox("Do not ask again")
+        layout.addWidget(dont_ask)
+        result = [False]
+        bf = QHBoxLayout()
+        def _yes():
+            result[0] = True
+            if dont_ask.isChecked():
+                self.config["delete_confirm"] = False
+                cfg.save_config(self.config, getattr(self, "current_project", None))
+            dlg.accept()
+        yes_btn = QPushButton("Move to Trash"); yes_btn.clicked.connect(_yes)
+        no_btn  = QPushButton("Cancel");        no_btn.clicked.connect(dlg.reject)
+        bf.addWidget(yes_btn); bf.addWidget(no_btn)
+        layout.addLayout(bf)
+        dlg.exec()
+        return result[0]
+
+    def delete_file(self):
+        # Don't fire if focus is in an input widget
+        focused = QApplication.focusWidget()
+        if focused and focused.__class__.__name__ in ("QLineEdit", "QTextEdit", "QPlainTextEdit"):
+            return
+
+        rows = self._selected_rows()
+        if not rows:
+            return
+
+        # Filter locked files and warn once if any
+        locked = [r for r in rows
+                  if (p := self.table.get_row_path(r)) and not attrs_mod.is_editable(self.attrs_data, p)]
+        rows = [r for r in rows if r not in locked]
+        if locked:
+            names = ", ".join(os.path.basename(self.table.get_row_path(r)) for r in locked)
+            QMessageBox.warning(self, "Locked", f"Skipped locked file(s):\n{names}")
+        if not rows:
+            return
+
+        if self.config.get("delete_confirm", True):
+            if not self._confirm_trash():
+                return
+
+        first_row = rows[0]
+        was_query = (first_row == 0)
+        deleted_any = False
+        errors = []
+
+        # Delete bottom-to-top so row indices stay valid
+        for row in sorted(rows, reverse=True):
+            path = self.table.get_row_path(row)
+            if not path:
+                continue
+            emb = None
+            if self.data and "paths" in self.data and path in self.data["paths"]:
+                emb_idx = self.data["paths"].index(path)
+                emb = self.data["embeddings"][emb_idx].clone()
+            row_snap = {
+                "score":       self.table.item(row, 0).text(),
+                "size":        self.table.item(row, 1).text() if self.table.item(row, 1) else "",
+                "name":        self.table.item(row, 2).text() if self.table.item(row, 2) else "",
+                "masked_path": self.table.item(row, 3).text() if self.table.item(row, 3) else "",
+                "sim_data":    self.table.item(row, 0).data(Qt.ItemDataRole.UserRole + 1),
+                "bg_color":    self.table.item(row, 0).background(),
+            }
+            trash_path, err = front_page.trash_file(path)
+            if trash_path is not None:
+                self._push_undo({"type": "delete", "orig_path": path, "trash_path": trash_path,
+                                  "row": row, "emb": emb, **row_snap})
+                if self.data and "paths" in self.data and path in self.data["paths"]:
+                    idx  = self.data["paths"].index(path)
+                    keep = [i for i in range(len(self.data["paths"])) if i != idx]
+                    self.data["paths"]      = [self.data["paths"][i] for i in keep]
+                    self.data["embeddings"] = self.data["embeddings"][keep]
+                self.table.removeRow(row)
+                deleted_any = True
+            elif err:
+                errors.append(err)
+
+        if deleted_any:
+            if self.data:
+                torch.save(self.data, f"features_{self.current_project}.pt")
+            self._cleanup_singleton_groups()
+            self._rebuild_dup_display_data()
+            self._save_dup_results()
+            new_row = min(first_row, self.table.rowCount() - 1)
+            if new_row >= 0:
+                self._select_row(new_row)
+                self.table.setFocus()
+                if was_query:
+                    self._rebase_to_row(new_row)
+        if errors:
+            QMessageBox.critical(self, "Trash Error", "\n".join(errors))
