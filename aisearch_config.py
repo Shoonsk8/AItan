@@ -50,6 +50,39 @@ def load_config(project=None):
             return defaults
     return defaults
 
+
+# --- Project behavior settings (never inherited from global) ---
+# Stored in project_settings_PROJECT.json, separate from UI config.
+
+_PROJECT_SETTINGS_DEFAULTS = {
+    "auto_rename": False,
+}
+
+def project_settings_file(project):
+    if project and project != "default":
+        return os.path.join(_DIR, f"project_settings_{project}.json")
+    return os.path.join(_DIR, "project_settings.json")
+
+def load_project_settings(project=None):
+    """Load per-project behavior flags. Never falls back to global — always returns safe defaults."""
+    path = project_settings_file(project)
+    if os.path.exists(path):
+        try:
+            with open(path, 'r') as f:
+                return {**_PROJECT_SETTINGS_DEFAULTS, **json.load(f)}
+        except:
+            pass
+    return dict(_PROJECT_SETTINGS_DEFAULTS)
+
+def save_project_settings(project, data):
+    """Save per-project behavior flags."""
+    path = project_settings_file(project)
+    try:
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Failed to save project settings: {e}")
+
 def save_config(data, project=None):
     """Save config for a project (or global default)."""
     path = config_file_for_project(project)

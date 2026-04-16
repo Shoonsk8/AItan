@@ -117,6 +117,20 @@ def workspace_file_for_project(project=None):
         return os.path.join(_DIR, f"attribute_workspace_{project}.json")
     return os.path.join(_DIR, "attribute_workspace.json")
 FILENAME_RULES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filename_rules.json")
+
+def filename_rules_file_for_project(project=None):
+    """Return the filename_rules JSON path for a project (or global default)."""
+    if project and project != "default":
+        p = os.path.join(_DIR, f"filename_rules_{project}.json")
+        if os.path.exists(p):
+            return p
+    return FILENAME_RULES_FILE
+
+def filename_rules_save_path_for_project(project=None):
+    """Return the path to WRITE filename_rules for a project (always project-specific)."""
+    if project and project != "default":
+        return os.path.join(_DIR, f"filename_rules_{project}.json")
+    return FILENAME_RULES_FILE
 RENAME_RULES_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filename_rename_rules.json")
 PERSON_REGISTRY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_registry.json")
 PERSON_ALIASES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_aliases.json")
@@ -1256,26 +1270,51 @@ def _extract_a1111_meta(params, meta):
 
 # ── Filename rules ───────────────────────────────────────────────────────────
 
-_fn_rules_cache = (None, None)  # (mtime, rules)
+_fn_rules_cache = {}  # project_key -> (mtime, config_dict)
 
-def load_filename_rules():
-    global _fn_rules_cache
-    if os.path.exists(FILENAME_RULES_FILE):
+def _load_fn_raw(project):
+    """Load raw filename config dict from disk. Returns {} on missing/error."""
+    path = filename_rules_file_for_project(project)
+    key  = project or ""
+    if os.path.exists(path):
         try:
-            mtime = os.path.getmtime(FILENAME_RULES_FILE)
-            if _fn_rules_cache[0] == mtime:
-                return _fn_rules_cache[1]
-            with open(FILENAME_RULES_FILE, encoding="utf-8") as f:
-                rules = json.load(f)
-            _fn_rules_cache = (mtime, rules)
-            return rules
+            mtime = os.path.getmtime(path)
+            cached = _fn_rules_cache.get(key)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            # Support old format (bare array) and new format (object with "rules" key)
+            if isinstance(raw, list):
+                cfg = {"auto_rename": False, "rules": raw}
+            else:
+                cfg = raw
+            _fn_rules_cache[key] = (mtime, cfg)
+            return cfg
         except Exception:
             pass
-    return []
+    return {"auto_rename": False, "rules": []}
 
-def save_filename_rules(rules):
-    with open(FILENAME_RULES_FILE, "w", encoding="utf-8") as f:
-        json.dump(rules, f, indent=2, ensure_ascii=False)
+def load_filename_rules(project=None):
+    """Return the rules list for a project."""
+    return _load_fn_raw(project).get("rules", [])
+
+def load_filename_config(project=None):
+    """Return full filename config: {"auto_rename": bool, "rules": [...]}"""
+    return dict(_load_fn_raw(project))
+
+def save_filename_config(config, project=None):
+    """Save full filename config (auto_rename + rules) for a project."""
+    path = filename_rules_save_path_for_project(project)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    _fn_rules_cache.pop(project or "", None)
+
+def save_filename_rules(rules, project=None):
+    """Save only the rules list, preserving auto_rename."""
+    cfg = load_filename_config(project)
+    cfg["rules"] = rules
+    save_filename_config(cfg, project)
 
 _person_registry_cache = (None, None)  # (mtime, data)
 
@@ -1977,7 +2016,7 @@ def normalize_filename(path, current_tags, new_base=None, person_id=None, projec
     project: if provided, updates faces/dups stores on rename.
     Returns new path, original if unchanged, or None on error."""
     stem, ext = os.path.splitext(path)
-    rules = load_filename_rules()
+    rules = load_filename_rules(project)
     base  = new_base if new_base else _extract_filename_base(stem, rules)
 
     pid_prefix = f"{person_id}-" if person_id else ""
@@ -2002,11 +2041,11 @@ def normalize_filename(path, current_tags, new_base=None, person_id=None, projec
     return new_path
 
 
-def apply_pose_to_filename(path, pose_tag):
+def apply_pose_to_filename(path, pose_tag, project=None):
     """Rename file putting pose AFTER face suffix: {base}-{face}-{pose}-{watermark}.
     Returns new path, original path if unchanged, or None on error."""
     stem, ext = os.path.splitext(path)
-    rules = load_filename_rules()
+    rules = load_filename_rules(project)
     base  = _extract_filename_base(stem, rules)
 
     # Detect face suffix from current filename
@@ -2333,7 +2372,7 @@ def auto_set_all(attrs_data, path, project):
             changed = True
 
     # Filename-based tags + enforce rules
-    fn_rules = load_filename_rules()
+    fn_rules = load_filename_rules(project)
     if fn_rules:
         for t in detect_tags_from_filename(path, fn_rules):
             if t not in current_tags:

@@ -6,7 +6,7 @@ from PIL import Image
 from aisearch_config import FolderPickerDialog
 
 # Ver 1.65 - Enhanced Rename/Delete sync and UI masking
-VERSION = "1.94"
+VERSION = "1.95"
 
 
 def get_thumbnail_pixmap(path, size=(350, 350)):

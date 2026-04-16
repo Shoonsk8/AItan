@@ -28,8 +28,47 @@ class _FilenameMixin:
         fn_l.setContentsMargins(15, 10, 15, 10)
         fn_l.setSpacing(8)
 
+        # ── Project selector ──────────────────────────────────────────────────
+        import glob as _glob
+        proj_bar = QHBoxLayout(); proj_bar.setSpacing(6)
+        proj_bar.addWidget(QLabel("Rules Set:"))
+        self._fn_proj_cb = QComboBox()
+        self._fn_proj_cb.setEditable(True)
+        self._fn_proj_cb.setFixedWidth(140)
+        self._fn_proj_cb.setPlaceholderText("default")
+        _fn_sets = ["default"] + sorted(
+            os.path.basename(p).replace("filename_rules_", "").replace(".json", "")
+            for p in _glob.glob(os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
+                                              "filename_rules_*.json"))
+        )
+        for _s in _fn_sets:
+            self._fn_proj_cb.addItem(_s)
+        _cur_proj = getattr(self.app, 'current_project', 'default') or 'default'
+        _idx = self._fn_proj_cb.findText(_cur_proj)
+        if _idx >= 0:
+            self._fn_proj_cb.setCurrentIndex(_idx)
+        else:
+            self._fn_proj_cb.setCurrentText(_cur_proj)
+        proj_bar.addWidget(self._fn_proj_cb)
+
+        btn_fn_proj_load = QPushButton("Load")
+        btn_fn_proj_load.setStyleSheet("background:#333; color:white; padding:3px 8px;")
+        proj_bar.addWidget(btn_fn_proj_load)
+        proj_bar.addStretch()
+
+        btn_fn_copy = QPushButton("Copy from Default")
+        btn_fn_copy.setStyleSheet("background:#2a3a2a; color:white; padding:3px 8px;")
+        proj_bar.addWidget(btn_fn_copy)
+
+        btn_fn_set_default = QPushButton("Set as Default")
+        btn_fn_set_default.setStyleSheet("background:#2a2a3a; color:white; padding:3px 8px;")
+        proj_bar.addWidget(btn_fn_set_default)
+        fn_l.addLayout(proj_bar)
+        fn_l.addWidget(_hsep())
+
         # Auto-rename switch
-        auto_rename_on = self.app.config.get("auto_rename", False)
+        _cur_fn_proj = self._fn_proj_cb.currentText().strip() or None
+        auto_rename_on = _am.load_filename_config(_cur_fn_proj).get("auto_rename", False)
         self.check_auto_rename = QCheckBox("Auto-rename when attributes change")
         self.check_auto_rename.setChecked(auto_rename_on)
         fn_l.addWidget(self.check_auto_rename)
@@ -48,10 +87,16 @@ class _FilenameMixin:
         _rc_l.setSpacing(8)
         _fn_splitter.addWidget(_rules_container)
 
+        def _fn_selected_proj():
+            p = self._fn_proj_cb.currentText().strip()
+            return None if (not p or p == "default") else p
+
         def _on_auto_rename_toggled(v):
             _rules_container.setEnabled(v)
-            self.app.config.update({"auto_rename": v})
-            cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            proj = _fn_selected_proj()
+            fn_cfg = _am.load_filename_config(proj)
+            fn_cfg["auto_rename"] = v
+            _am.save_filename_config(fn_cfg, proj)
             pw = self.app.preview_handler.window
             if pw and hasattr(pw, '_btn_auto_rename'):
                 pw._btn_auto_rename.setVisible(v)
@@ -451,7 +496,7 @@ class _FilenameMixin:
             ph = "z" if field == "J" else "f"
             return f"{field}{ph * digits}"
 
-        for rule in _am.load_filename_rules():
+        for rule in _am.load_filename_rules(getattr(self.app, "current_project", None)):
             if rule.get("extract"):
                 digits = rule.get("digits", 2)
                 pat = _pattern_for(rule["field"], digits)
@@ -538,6 +583,72 @@ class _FilenameMixin:
         fn_btn_row.addWidget(btn_fn_save)
         _rc_l.addLayout(fn_btn_row)
 
+        def _reload_fn_rules():
+            """Clear and reload rule rows for the selected project."""
+            # Clear existing rows
+            for _, _, _, _, rw in list(self._fn_rows):
+                rw.setParent(None); rw.deleteLater()
+            self._fn_rows.clear()
+            proj = _fn_selected_proj()
+            # Reload auto_rename checkbox
+            fn_cfg = _am.load_filename_config(proj)
+            ar = fn_cfg.get("auto_rename", False)
+            self.check_auto_rename.blockSignals(True)
+            self.check_auto_rename.setChecked(ar)
+            self.check_auto_rename.blockSignals(False)
+            _rules_container.setEnabled(ar)
+            # Reload rules
+            for rule in fn_cfg.get("rules", []):
+                if rule.get("extract"):
+                    digits = rule.get("digits", 2)
+                    pat = _pattern_for(rule["field"], digits)
+                    ph  = "z" if rule["field"] == "J" else "f"
+                    _build_rule_row(pat, rule["field"], ph * digits, False, extract=True)
+                elif "field" in rule:
+                    _build_rule_row(
+                        rule.get("pattern", ""), rule.get("field", ""),
+                        rule.get("value", ""), rule.get("one_way", False))
+                elif "tag_group" in rule:
+                    _build_rule_row(
+                        rule.get("pattern", ""), f"TAG:{rule['tag_group']}",
+                        rule.get("value", ""), True)
+            # Add to combo if new
+            p_text = self._fn_proj_cb.currentText().strip()
+            if p_text and p_text != "default" and self._fn_proj_cb.findText(p_text) < 0:
+                self._fn_proj_cb.addItem(p_text)
+
+        self._reload_fn_rules = _reload_fn_rules  # expose so set_project() can call it
+        btn_fn_proj_load.clicked.connect(_reload_fn_rules)
+
+        def _fn_copy_from_default():
+            import shutil as _shutil
+            p = self._fn_proj_cb.currentText().strip()
+            if not p or p == "default": return
+            src = _am.FILENAME_RULES_FILE
+            dst = os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
+                               f"filename_rules_{p}.json")
+            if os.path.exists(src):
+                _shutil.copy2(src, dst)
+            if self._fn_proj_cb.findText(p) < 0:
+                self._fn_proj_cb.addItem(p)
+            _reload_fn_rules()
+        btn_fn_copy.clicked.connect(_fn_copy_from_default)
+
+        def _fn_set_as_default():
+            import shutil as _shutil
+            p = self._fn_proj_cb.currentText().strip()
+            if not p or p == "default": return
+            ans = QMessageBox.question(self, "Set as Default",
+                f"Overwrite default filename rules with '{p}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes: return
+            src = os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
+                               f"filename_rules_{p}.json")
+            if os.path.exists(src):
+                _shutil.copy2(src, _am.FILENAME_RULES_FILE)
+            QMessageBox.information(self, "Done", f"Default filename rules updated from '{p}'.")
+        btn_fn_set_default.clicked.connect(_fn_set_as_default)
+
         tabs.addTab(tab_fn, "📁 Filename Rules")
 
     # --- callbacks ---
@@ -566,7 +677,10 @@ class _FilenameMixin:
                 if one_way:
                     rule["one_way"] = True
                 rules.append(rule)
-        _am.save_filename_rules(rules)
+        p = getattr(self, '_fn_proj_cb', None)
+        proj = (None if (not p or not p.currentText().strip() or p.currentText().strip() == "default")
+                else p.currentText().strip())
+        _am.save_filename_rules(rules, proj)
         QMessageBox.information(self, "Saved", f"{len(rules)} rule(s) saved.")
 
     def _do_stop_rename(self):
@@ -597,7 +711,7 @@ class _FilenameMixin:
             return
 
         valid_exts = tuple(ext.lower() for ext in (_logic.EXT_IMG + _logic.EXT_VID))
-        rules = _am.load_filename_rules()
+        rules = _am.load_filename_rules(getattr(self.app, "current_project", None))
         self._stop_rename = False
         self.btn_stop_rename.setEnabled(True)
         self.lbl_rename.setText(f"Collecting files for project '{project}'…")

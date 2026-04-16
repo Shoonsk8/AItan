@@ -21,7 +21,7 @@ import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
 
-VERSION = "1.94"
+VERSION = "1.95"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -355,6 +355,12 @@ class AISearchApp(QMainWindow):
         self.btn_settings.clicked.connect(self._open_settings)
         info_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
 
+        # Logo — under the settings button, right-aligned, theme-aware
+        self._lbl_logo = QLabel()
+        self._lbl_logo.setFixedSize(120, 120)
+        self._lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_layout.addWidget(self._lbl_logo, alignment=Qt.AlignmentFlag.AlignRight)
+
         self.lbl_proj_hdr = QLabel("PROJECT:")
         self.lbl_proj_hdr.setStyleSheet("color: #00ff00; font-weight: bold;")
         info_layout.addWidget(self.lbl_proj_hdr)
@@ -508,6 +514,7 @@ class AISearchApp(QMainWindow):
         info_layout.addStretch()
         self.info_widget.setMinimumWidth(0)
         h_layout.addWidget(self.info_widget, stretch=1)
+
         main_layout.addWidget(self.header)
 
         # Browse mode path bar (hidden in search/dup mode)
@@ -652,6 +659,16 @@ class AISearchApp(QMainWindow):
         self.lbl_base_dir.setStyleSheet(f"color: {base_color};")
         self.lbl_dup_status.setStyleSheet(f"color: {status_color};")
         self.btn_hide_confirmed.setStyleSheet(hide_ss)
+        # Swap logo for dark/light theme
+        _base = os.path.dirname(os.path.abspath(__file__))
+        _logo_file = "aisearch_logo.jpg" if is_dark else "aisearch_logo_light.jpg"
+        _logo_path = os.path.join(_base, _logo_file)
+        if os.path.exists(_logo_path) and hasattr(self, '_lbl_logo'):
+            _px = QPixmap(_logo_path).scaled(
+                120, 120,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self._lbl_logo.setPixmap(_px)
         # Ensure table text is readable in both themes
         table_text = "#000000" if not is_dark else "#ffffff"
         self.table.setStyleSheet(
@@ -1373,6 +1390,18 @@ class AISearchApp(QMainWindow):
     def set_project(self, name):
         # Save current project's config before switching
         cfg.save_config(self.config, self.current_project)
+        # Reset preview window so it recreates fresh (same as app restart).
+        # This avoids stale splitter/attr state from the old project.
+        _ph = getattr(self, 'preview_handler', None)
+        if _ph and _ph.window:
+            _g = _ph.window.geometry()
+            self.config["preview_geometry"] = [_g.x(), _g.y(), _g.width(), _g.height()]
+            _ph.window.hide()
+            _ph.window.deleteLater()
+            _ph.window = None
+            _ph._cached_pixmap      = None
+            _ph._cached_pixmap_path = None
+            _ph.zoom_factor         = 1.0
         self.current_project = name
         # Load project-specific config (falls back to global default)
         self.config = cfg.load_config(name)
@@ -1391,8 +1420,8 @@ class AISearchApp(QMainWindow):
             _sw._update_scan_project_label()
         if _sw and hasattr(_sw, '_refresh_person_tab'):
             _sw._refresh_person_tab(name)
-        # Sync auto_rename UI to the newly loaded project config
-        _ar = self.config.get("auto_rename", False)
+        # Sync auto_rename UI from filename config (per-project, no global fallback)
+        _ar = attrs_mod.load_filename_config(name).get("auto_rename", False)
         if _sw:
             for _attr in ("chk_rename_on_scan", "check_auto_rename"):
                 _chk = getattr(_sw, _attr, None)
@@ -1400,6 +1429,18 @@ class AISearchApp(QMainWindow):
                     _chk.blockSignals(True)
                     _chk.setChecked(_ar)
                     _chk.blockSignals(False)
+            # Sync filename rules tab combo to current project + reload rules
+            _fn_cb = getattr(_sw, '_fn_proj_cb', None)
+            if _fn_cb:
+                _idx = _fn_cb.findText(name)
+                if _idx >= 0:
+                    _fn_cb.setCurrentIndex(_idx)
+                else:
+                    _fn_cb.setCurrentText(name)
+            # Reload rules + re-sync auto_rename + enable/disable container
+            _reload_fn = getattr(_sw, '_reload_fn_rules', None)
+            if _reload_fn:
+                _reload_fn()
         _pw = getattr(getattr(self, "preview_handler", None), "window", None)
         if _pw:
             _chk = getattr(_pw, "_chk_auto_rename", None)
@@ -1485,23 +1526,13 @@ class AISearchApp(QMainWindow):
         QTimer.singleShot(2000, self._scan_new_files)
 
     def _scan_new_files(self):
-        """Add new files from watch_dirs; remove entries that no longer exist on disk.
-        Only processes files whose directory is also a base_dir of the current project —
-        watch-only dirs (e.g. Downloads not in the project) are skipped entirely."""
+        """Add new files from watch_dirs to the current project DB."""
         if not self.data: return
         # Skip if a settings scan/rename is in progress — paths are being changed on disk
         # and data["paths"] hasn't been updated yet, so missing/new detection would be wrong.
         if getattr(self, '_watcher_paused', False): return
         scan_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
         if not scan_dirs: return
-
-        # Only process watch dirs that are also part of this project's base_dirs.
-        # A watch dir outside the project (e.g. Downloads) should trigger no embedding/search.
-        project_dirs = {os.path.normpath(d) for d in (self.base_dirs or [])}
-        project_scan_dirs = [d for d in scan_dirs
-                             if any(os.path.normpath(d).startswith(pd) or pd.startswith(os.path.normpath(d))
-                                    for pd in project_dirs)]
-        if not project_scan_dirs: return
 
         paths = self.data.get("paths", [])
         exts  = logic.EXT_IMG + logic.EXT_VID
@@ -1514,10 +1545,10 @@ class AISearchApp(QMainWindow):
             self.data["embeddings"] = self.data["embeddings"][keep]
             paths = self.data["paths"]
 
-        # ── Add new files (project-scoped watch dirs only) ────────────────────
+        # ── Add new files from watch dirs ─────────────────────────────────────
         known = set(os.path.normpath(p) for p in paths)
         new_files = []
-        for d in project_scan_dirs:
+        for d in scan_dirs:
             if not os.path.isdir(d): continue
             for f in os.listdir(d):
                 if f.lower().endswith(exts):
@@ -1583,8 +1614,7 @@ class AISearchApp(QMainWindow):
             if missing_idx:    parts.append(f"{len(missing_idx)} removed")
             self.statusBar().showMessage(
                 f"Auto-updated: {', '.join(parts)}.", 4000)
-            if added and new_files and not getattr(self, '_search_running', False) and self.table.rowCount() == 0:
-                # Only auto-search when idle — never disrupt a user-initiated search
+            if added and new_files and not getattr(self, '_search_running', False):
                 newest = new_files[-1]
                 QTimer.singleShot(0, lambda p=newest: self.run_search(p))
 
@@ -3025,7 +3055,7 @@ class AISearchApp(QMainWindow):
                 return
 
         first_row = rows[0]
-        was_query = (first_row == 0)
+        was_query = (first_row == 0 and self.config.get("last_mode") == "search")
         deleted_any = False
         errors = []
 

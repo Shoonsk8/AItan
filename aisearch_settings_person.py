@@ -634,6 +634,8 @@ class _PersonMixin:
         if proj is None:
             proj = getattr(self.app, "current_project", "")
         self._person_tab_project = proj
+        if not hasattr(self, '_person_tab_proj_lbl'):
+            return  # tab not built yet — will pick up correct project when built
         self._person_tab_proj_lbl.setText(f"Project: <b>{proj}</b>")
         self._rebuild_person_groups()
 

@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor,
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 
-VERSION = "1.94"
+VERSION = "1.95"
 
 
 def _read_embedded_meta(path):
@@ -688,7 +688,7 @@ class PreviewWindow(QWidget):
             "Detect person ID + pose, then rename to canonical form")
         self._btn_auto_rename.clicked.connect(self._on_auto_rename)
         self._btn_auto_rename.setVisible(
-            self.handler.app.config.get("auto_rename", False))
+            attrs_mod.load_filename_config(getattr(self.handler.app, "current_project", None)).get("auto_rename", False))
         r1.addWidget(self._btn_auto_rename)
 
         self._btn_arrange = QPushButton("≡ Arrange")
@@ -1316,12 +1316,13 @@ class PreviewWindow(QWidget):
         r_bake.addWidget(self._chk_auto_bake)
         self._chk_auto_rename = _QCB("Auto-rename")
         self._chk_auto_rename.setToolTip("Rename file to match person ID when baking")
-        self._chk_auto_rename.setChecked(self.handler.app.config.get("auto_rename", False))
+        self._chk_auto_rename.setChecked(
+            attrs_mod.load_filename_config(getattr(self.handler.app, "current_project", None)).get("auto_rename", False))
         def _on_ar_toggle(v):
-            self.handler.app.config["auto_rename"] = v
-            import aisearch_config as _cfg
-            _cfg.save_config(self.handler.app.config,
-                             getattr(self.handler.app, "current_project", None))
+            proj = getattr(self.handler.app, "current_project", None)
+            fn_cfg = attrs_mod.load_filename_config(proj)
+            fn_cfg["auto_rename"] = v
+            attrs_mod.save_filename_config(fn_cfg, proj)
             # Sync settings dialog checkbox if open
             sv = getattr(self.handler.app, "_settings_win", None)
             if sv and hasattr(sv, "chk_rename_on_scan") and sv.chk_rename_on_scan.isChecked() != v:
@@ -1397,7 +1398,8 @@ class PreviewWindow(QWidget):
     def _toggle_attrs(self):
         total = sum(self._splitter.sizes())
         if self._attr_scroll.isVisible():
-            # Expanded → collapse
+            # Expanded → collapse: remove the height cap so image pane fills window
+            self.scroll_area.setMaximumHeight(16777215)
             bottom = self._splitter.sizes()[1] if len(self._splitter.sizes()) > 1 else 0
             if bottom > 36:
                 self._store_size(bottom)
@@ -1410,6 +1412,8 @@ class PreviewWindow(QWidget):
             self._attr_scroll.show()
             self._splitter.setSizes([total - saved, saved])
             self.btn_toggle_attrs.setText(self._attr_arrow(True))
+            # Fit image pane after layout settles
+            QTimer.singleShot(120, self.handler._auto_fit_splitter)
         QTimer.singleShot(0, self.handler._rerender)
 
     def _maybe_rebuild_attr_panel(self):
@@ -1599,7 +1603,7 @@ class PreviewWindow(QWidget):
                     if decoded:
                         parts.append(f"{name}: {decoded}")
             self._decode_lbl.setText("  |  ".join(parts))
-        rules = attrs_mod.load_filename_rules()
+        rules = attrs_mod.load_filename_rules(getattr(self.handler.app, "current_project", None))
         base  = self._filename_base(stem, rules)
         self._name_edit.setText(base)
         self._name_edit.setCursorPosition(len(base))
@@ -1718,7 +1722,7 @@ class PreviewWindow(QWidget):
         # Sync person_id: try one-way detection rules first, then coded filename parse
         if not entry.get("person_id"):
             stem_sync = os.path.splitext(os.path.basename(path))[0]
-            fn_rules  = attrs_mod.load_filename_rules()
+            fn_rules  = attrs_mod.load_filename_rules(getattr(self.handler.app, "current_project", None))
             ow_rules  = [r for r in fn_rules if r.get("field") and r.get("one_way")]
             pid       = ""
             if ow_rules:
@@ -1926,7 +1930,7 @@ class PreviewWindow(QWidget):
                                person_id=pid_str,
                                editable=entry.get("editable", True))
             attrs_mod.save(app.current_project, app.attrs_data)
-            rules = attrs_mod.load_filename_rules()
+            rules = attrs_mod.load_filename_rules(getattr(self.handler.app, "current_project", None))
             stem  = os.path.splitext(os.path.basename(new_path))[0]
             self._name_edit.setText(attrs_mod._extract_filename_base(stem, rules))
 
@@ -2299,7 +2303,7 @@ class PreviewWindow(QWidget):
         if not self._attr_path:
             return
         app = self.handler.app
-        if app.config.get("auto_rename", False):
+        if attrs_mod.load_filename_config(getattr(app, "current_project", None)).get("auto_rename", False):
             self._on_normalize_filename()
 
     def _on_person_name_changed(self):
@@ -2724,6 +2728,9 @@ class PreviewHandler:
         # Build attr panel only once (on first window creation), AFTER render
         if _new_window:
             QTimer.singleShot(0, self.window._deferred_build_attr_panel)
+        # Deferred splitter fit: after layout settles, shrink image pane to
+        # the actual rendered label height (fixes triangle area on project switch / Load)
+        QTimer.singleShot(120, self._auto_fit_splitter)
 
     def _navigate(self, direction):
         row    = self.app._current_row()
@@ -2957,6 +2964,20 @@ class PreviewHandler:
             is_vid = self.current_path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
             self._render(self.current_path, is_vid, fast=False)
 
+    def _auto_fit_splitter(self):
+        """Belt-and-suspenders: re-apply the image pane height cap after layout settles.
+        The primary fix is setMaximumHeight in _render(); this catches any edge cases."""
+        if not self.window:
+            return
+        sp = self.window._splitter
+        if (sp.orientation() != Qt.Orientation.Vertical
+                or not self.window._attr_scroll.isVisible()):
+            return
+        nh = self.window.label.height()
+        if nh <= 0:
+            return
+        self.window.scroll_area.setMaximumHeight(nh + 8)
+
     def _update_splitter_orientation(self):
         pass  # orientation is set manually via the ⇔ button
 
@@ -2987,6 +3008,8 @@ class PreviewHandler:
                 sp.setSizes([max(1, total - saved), saved])
             else:
                 sp.setSizes([max(1, total - 26), 26])
+            # Remove height cap — rerender will re-apply appropriate cap
+            self.window.scroll_area.setMaximumHeight(16777215)
             QTimer.singleShot(0, self._rerender)
         QTimer.singleShot(0, lambda: _apply())
 
@@ -3063,6 +3086,15 @@ class PreviewHandler:
                 nw, nh, Qt.AspectRatioMode.KeepAspectRatio, mode)
             self.window.label.setPixmap(scaled)
             self.window.label.setFixedSize(scaled.size())
+            # Constrain the image pane so it can't be taller than the rendered image.
+            # setMaximumHeight is enforced immediately by Qt's layout engine, so the
+            # attr panel moves up without any 120ms flicker.
+            sp = self.window._splitter
+            if (sp.orientation() == Qt.Orientation.Vertical
+                    and self.window._attr_scroll.isVisible()):
+                self.window.scroll_area.setMaximumHeight(nh + 8)
+            else:
+                self.window.scroll_area.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
         except Exception as e:
             if self.window:
                 self.window.label.setText(f"Render Error: {e}")

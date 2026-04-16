@@ -1,4 +1,6 @@
 # --- Data files (never commit) ---
+project_settings*.json
+filename_rules*.json
 aisearch_config*.json
 attrs_*.json
 attribute_workspace*.json

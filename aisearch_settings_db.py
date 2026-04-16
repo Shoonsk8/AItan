@@ -184,12 +184,16 @@ class _DbMixin:
 
         self.chk_rename_on_scan = _QCB("✏️ Auto rename")
         self.chk_rename_on_scan.setToolTip("Auto-rename files during scan using Filename Rules.")
-        self.chk_rename_on_scan.setChecked(self.app.config.get("auto_rename", False))
+        self.chk_rename_on_scan.setChecked(
+            attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False))
         def _apply_rename_only_state(enabled):
             pass  # no longer needed — rename is a utility button, not a mode
         def _on_rename_toggled(v):
-            self.app.config["auto_rename"] = v
-            cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            proj = (self.proj_combo.currentText().strip()
+                    or getattr(self.app, "current_project", None))
+            fn_cfg = attrs_mod.load_filename_config(proj)
+            fn_cfg["auto_rename"] = v
+            attrs_mod.save_filename_config(fn_cfg, proj)
             pw = getattr(self.app, "preview_handler", None)
             pw = getattr(pw, "window", None)
             if pw:
@@ -293,7 +297,7 @@ class _DbMixin:
         self.btn_scan_new.setEnabled(False)
         self._scan_queue = queue.Queue()
 
-        _auto_rename = self.app.config.get("auto_rename", False)
+        _auto_rename = attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False)
         self.lbl_scan.setText("Starting scan — CLIP + face + metadata…")
 
         def _worker():
@@ -694,7 +698,7 @@ class _DbMixin:
         if not paths:
             self.lbl_scan.setText("No database loaded."); return
         import aisearch_attrs as attrs_mod
-        fn_rules = attrs_mod.load_filename_rules()
+        fn_rules = attrs_mod.load_filename_rules(getattr(self.app, "current_project", None))
         two_way  = [r for r in fn_rules if r.get("field") and not r.get("one_way")]
         rename_warning = (
             f"\n\n⚠️  {len(two_way)} two-way filename rule(s) active — files will be RENAMED."
@@ -715,7 +719,7 @@ class _DbMixin:
         self.progress_bar.setRange(0, len(paths))
         self.progress_bar.setValue(0)
         face_mode       = self._face_mode_group.checkedId()  # 0=no face, 1=include, 2=face only
-        auto_rename     = self.app.config.get("auto_rename", False)
+        auto_rename     = attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False)
         QApplication.processEvents()
         updated = 0
         scan_renames = {}   # old_path -> new_path, flushed once after the loop
@@ -1132,7 +1136,7 @@ class _DbMixin:
                             item.setForeground(QColor('#00ffcc'))
 
     def _sync_scan_section(self, name):
-        """Update new_proj_entry + dir_listbox to reflect `name`, without signal cascade."""
+        """Update new_proj_entry + dir_listbox + auto_rename to reflect `name`."""
         if not name:
             return
         self.new_proj_entry.blockSignals(True)
@@ -1145,6 +1149,13 @@ class _DbMixin:
             self.proj_combo.blockSignals(True)
             self.proj_combo.setCurrentText(name)
             self.proj_combo.blockSignals(False)
+        # Update auto_rename checkbox for the selected project
+        import aisearch_attrs as _ams
+        _ar = _ams.load_filename_config(name).get("auto_rename", False)
+        if hasattr(self, 'chk_rename_on_scan') and self.chk_rename_on_scan.isChecked() != _ar:
+            self.chk_rename_on_scan.blockSignals(True)
+            self.chk_rename_on_scan.setChecked(_ar)
+            self.chk_rename_on_scan.blockSignals(False)
 
     def _on_project_select(self, text=None):
         n = self.proj_combo.currentText()
