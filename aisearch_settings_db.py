@@ -1,4 +1,4 @@
-import os, queue, threading, torch
+import os, queue, threading, time, torch
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QGroupBox, QCheckBox,
                               QProgressBar, QComboBox, QMessageBox,
@@ -34,25 +34,28 @@ class _DbMixin:
         l1 = QHBoxLayout(g1)
         self.db_projects = sorted([
             f.replace('features_', '').replace('.pt', '')
-            for f in os.listdir('.') if f.startswith('features_') and f.endswith('.pt')
+            for f in os.listdir(attrs_mod.DATA_DIR) if f.startswith('features_') and f.endswith('.pt')
         ])
         self.proj_combo = QComboBox()
+        self.proj_combo.wheelEvent = lambda e: e.ignore()
         self.proj_combo.addItems(self.db_projects)
         self.proj_combo.setCurrentText(self.app.current_project)
         self.proj_combo.currentTextChanged.connect(self._on_project_select)
         l1.addWidget(self.proj_combo, stretch=1)
         self.btn_load   = QPushButton("Load")
-        self.btn_load.setToolTip("Load selected project and close settings")
+        self.btn_load.setToolTip("Load selected project")
         self.btn_load.clicked.connect(self.switch_project)
-        self.btn_reset  = QPushButton("Reset")
-        self.btn_reset.setToolTip("Clear embeddings, keep base dirs — re-run Scan ALL to rebuild")
-        self.btn_reset.clicked.connect(self.reset_project)
-        self.btn_reset.setStyleSheet("background-color: #5a3a00; color: white;")
+        self.btn_load.setStyleSheet("background-color: #2a7a2a; color: white; font-weight: bold;")
+        self.chk_close_on_load = QCheckBox("Close")
+        self.chk_close_on_load.setToolTip("Close settings window when Load is pressed")
+        self.chk_close_on_load.setChecked(self.app.config.get("close_on_load", True))
+        self.chk_close_on_load.toggled.connect(
+            lambda v: self.app.config.update({"close_on_load": v}))
         self.btn_delete = QPushButton("Delete")
         self.btn_delete.setToolTip("Delete project entirely")
         self.btn_delete.clicked.connect(self.delete_project)
-        self.btn_delete.setStyleSheet("background-color: #7a2020; color: white;")
-        for b in [self.btn_load, self.btn_reset, self.btn_delete]:
+        self.btn_delete.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
+        for b in [self.btn_load, self.chk_close_on_load, self.btn_delete]:
             l1.addWidget(b)
         tl.addWidget(g1)
 
@@ -64,11 +67,12 @@ class _DbMixin:
         self.new_proj_entry = QLineEdit()
         self.new_proj_entry.setText(self.app.current_project or "")
         self.new_proj_entry.setPlaceholderText("Enter name for new or existing project…")
+        self.new_proj_entry.setMinimumWidth(220)
         proj_name_row.addWidget(self.new_proj_entry, stretch=1)
         def _on_proj_name_changed(text):
             text = text.strip()
             existing = [f.replace('features_', '').replace('.pt', '')
-                        for f in os.listdir('.') if f.startswith('features_') and f.endswith('.pt')]
+                        for f in os.listdir(_am.DATA_DIR) if f.startswith('features_') and f.endswith('.pt')]
             if text in existing:
                 # Load that project's dirs
                 self.dir_listbox.setRowCount(0)
@@ -80,7 +84,8 @@ class _DbMixin:
         self.new_proj_entry.textChanged.connect(_on_proj_name_changed)
         btn_new_proj = QPushButton("Register")
         btn_new_proj.setToolTip("Register a new project with the current name and directories")
-        btn_new_proj.setFixedWidth(90)
+        btn_new_proj.setMinimumWidth(120)
+        btn_new_proj.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_new_proj.clicked.connect(self._create_new_project)
         proj_name_row.addWidget(btn_new_proj)
         l2.addLayout(proj_name_row)
@@ -95,14 +100,17 @@ class _DbMixin:
         l2.addWidget(self.dir_listbox)
 
         bf = QHBoxLayout()
-        self.btn_add_dir    = QPushButton("+ Add Dir"); self.btn_add_dir.clicked.connect(self.add_dir)
-        self.btn_remove_dir = QPushButton("- Remove");  self.btn_remove_dir.clicked.connect(self.remove_selected_dirs)
+        self.btn_add_dir    = QPushButton("+ Add"); self.btn_add_dir.clicked.connect(self.add_dir)
+        self.btn_add_dir.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
+        self.btn_remove_dir = QPushButton("Remove");  self.btn_remove_dir.clicked.connect(self.remove_selected_dirs)
+        self.btn_remove_dir.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
         bf.addWidget(self.btn_add_dir); bf.addWidget(self.btn_remove_dir); bf.addStretch()
         l2.addLayout(bf)
 
         self.progress_label = QLabel("Status: Ready")
         l2.addWidget(self.progress_label)
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
         l2.addWidget(self.progress_bar)
 
         # Status label (used by scan operations)
@@ -117,8 +125,7 @@ class _DbMixin:
         self.btn_generate = QPushButton("Scan ALL")
         self.btn_generate.setToolTip("Process every file: CLIP + face + metadata.\nWARNING: resets and rebuilds from scratch.")
         self.btn_generate.clicked.connect(lambda: self.execute_generate(reset=True))
-        self.btn_generate.setStyleSheet(
-            "background-color: #7a3a00; color: white; font-weight: bold; padding: 6px;")
+        self.btn_generate.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:6px;"))
         action_row.addWidget(self.btn_generate, stretch=1)
 
         self.btn_scan_new = QPushButton("Update")
@@ -130,7 +137,7 @@ class _DbMixin:
 
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet("background-color: #7a2020; color: white; font-weight: bold;")
+        self.btn_stop.setStyleSheet(cfg.btn_ss("btn_stop", self.app.config))
         self.btn_stop.clicked.connect(self._unified_stop)
         action_row.addWidget(self.btn_stop)
         l2.addLayout(action_row)
@@ -151,6 +158,16 @@ class _DbMixin:
         btn_rename_util.clicked.connect(self._rename_util_clicked)
         util_row.addWidget(btn_rename_util)
 
+        btn_redetect = QPushButton("🔄 Re-detect All")
+        btn_redetect.setToolTip(
+            "Re-run metadata + tag detection on all DB files.\n"
+            "Picks up new filename rules (e.g. -watermark) on existing files.\n"
+            "No CLIP re-encoding — fast.")
+        btn_redetect.setStyleSheet(
+            "background-color: #2a3a2a; color: #aaffaa; padding: 4px 8px;")
+        btn_redetect.clicked.connect(self._auto_detect_all)
+        util_row.addWidget(btn_redetect)
+
         btn_unlock_util = QPushButton("🔓 Unlock All")
         btn_unlock_util.setToolTip(
             "Run metadata scan on all files to set editable flag — no CLIP scan.")
@@ -159,35 +176,36 @@ class _DbMixin:
         btn_unlock_util.clicked.connect(self._unlock_all_metadata)
         util_row.addWidget(btn_unlock_util)
 
+        btn_fix_moved = QPushButton("🔍 Fix Moved Files")
+        btn_fix_moved.setToolTip(
+            "Scan configured directories for files matching missing DB entries.\n"
+            "Remaps moved/renamed paths without re-scanning.")
+        btn_fix_moved.setStyleSheet(
+            "background-color: #2a2a4a; color: #aaaaff; padding: 4px 8px;")
+        btn_fix_moved.clicked.connect(self._rescan_moved_files)
+        util_row.addWidget(btn_fix_moved)
+
+        btn_embed_aitan = QPushButton("📎 Embed AItan{}")
+        btn_embed_aitan.setToolTip(
+            "Write AItan{} metadata block into every file's embedded comment/description.\n"
+            "Backfills files added before auto-embedding was enabled.")
+        btn_embed_aitan.setStyleSheet(
+            "background-color: #2a3a4a; color: #aaccff; padding: 4px 8px;")
+        btn_embed_aitan.clicked.connect(self._embed_aitan_all)
+        util_row.addWidget(btn_embed_aitan)
+
         util_row.addStretch()
         l2.addLayout(util_row)
 
-        # Compat stubs — older call sites that check _face_mode_group.checkedId() or
-        # reference the radio buttons still work without errors.
-        class _FMG:
-            def checkedId(self): return 1   # always "Include face" = 1
-        class _R:
-            def setChecked(self, v): pass
-            def isChecked(self): return False
-            def setEnabled(self, v): pass
-            def toggled(self): pass
-        self._face_mode_group   = _FMG()
-        self._radio_no_face     = _R()
-        self._radio_incl_face   = _R()
-        self._radio_face_only   = _R()
-        self._radio_rename_only = _R()
-        self._radio_unlock_only = _R()
-        self._btn_rename_util   = btn_rename_util
+        self._btn_rename_util = btn_rename_util
 
-        # ── Options row: Auto rename + Unlock all ────────────────────────────
+        # ── Options row: Auto rename ──────────────────────────────────────────
         opt_row = QHBoxLayout()
 
         self.chk_rename_on_scan = _QCB("✏️ Auto rename")
         self.chk_rename_on_scan.setToolTip("Auto-rename files during scan using Filename Rules.")
         self.chk_rename_on_scan.setChecked(
             attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False))
-        def _apply_rename_only_state(enabled):
-            pass  # no longer needed — rename is a utility button, not a mode
         def _on_rename_toggled(v):
             proj = (self.proj_combo.currentText().strip()
                     or getattr(self.app, "current_project", None))
@@ -210,8 +228,6 @@ class _DbMixin:
                 fn_chk.setChecked(v)
                 fn_chk.blockSignals(False)
         self.chk_rename_on_scan.toggled.connect(_on_rename_toggled)
-        # Set initial state
-        _apply_rename_only_state(self.app.config.get("auto_rename", False))
         opt_row.addWidget(self.chk_rename_on_scan)
 
         opt_row.addStretch()
@@ -219,11 +235,7 @@ class _DbMixin:
 
         self._stop_rename_only = False
         self._stop_scan_all = False
-        # Aliases so older code paths keep working
         self.btn_stop_scan = self.btn_stop
-        self.btn_stop_rename_only = self.btn_stop
-        self.btn_rename_only = None   # kept as None so old refs don't crash
-        self.chk_rename_only = self._radio_rename_only  # compat: checkedId()==3 is the real check
 
         tl.addWidget(g2)
 
@@ -238,7 +250,9 @@ class _DbMixin:
         gw.addWidget(self._watch_dir_list)
         wr = QHBoxLayout()
         btn_add_w = QPushButton("+ Add"); btn_add_w.clicked.connect(self._add_watch_dir)
-        btn_rem_w = QPushButton("- Remove"); btn_rem_w.clicked.connect(self._remove_watch_dir)
+        btn_add_w.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
+        btn_rem_w = QPushButton("Remove"); btn_rem_w.clicked.connect(self._remove_watch_dir)
+        btn_rem_w.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
         wr.addWidget(btn_add_w); wr.addWidget(btn_rem_w); wr.addStretch()
         gw.addLayout(wr)
         tl.addWidget(g_watch)
@@ -269,7 +283,7 @@ class _DbMixin:
         if not name:
             self.lbl_scan.setText("Enter a project name first."); return
         if not dirs:
-            self.lbl_scan.setText("No directories configured — use '+ Add Dir' first."); return
+            self.lbl_scan.setText("No directories configured — use '+ Add' first."); return
 
         dir_list = "\n".join(f"  • {d}" for d in dirs)
         if reset:
@@ -282,12 +296,17 @@ class _DbMixin:
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            pt = f"features_{name}.pt"
+            pt = os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt")
             if os.path.exists(pt):
                 os.remove(pt)
             faces_pt = attrs_mod.faces_db_path(name)
             if os.path.exists(faces_pt):
                 os.remove(faces_pt)
+        # For Update (not full reset), run Fix Moved Files first so the CLIP
+        # scan operates on an up-to-date path list.
+        if not reset:
+            self._rescan_moved_files(silent=True)
+
         self._is_scanning = True
         self._stop_scan = False
         self._active_scan_btn = self.btn_generate if reset else self.btn_scan_new
@@ -407,7 +426,7 @@ class _DbMixin:
                 added = 0
 
                 def _save_checkpoint():
-                    torch.save(data, f"features_{name}.pt")
+                    torch.save(data, os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt"))
                     attrs_mod.save(name, attrs_data)
 
                 for i, p in enumerate(to_add):
@@ -427,10 +446,12 @@ class _DbMixin:
                     if emb is None:
                         failed.append((p, "unreadable/corrupt")); continue
 
-                    # ── Step 2: CLIP auto-detect attributes ───────────────────
+                    # ── Step 2: CLIP auto-detect attributes (always-on for FIELD_DEFS fields) ─────
                     self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "attrs")))
                     try:
-                        clip_updates = attrs_mod.auto_detect_clip_attrs(emb, attrs_data.get(p, {}))
+                        _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
+                        clip_updates = attrs_mod.auto_detect_clip_attrs(
+                            emb, attrs_data.get(p, {}), allowed_fields=_clip_fields)
                         if clip_updates:
                             attrs_data.setdefault(p, {}).update(clip_updates)
                     except Exception:
@@ -455,10 +476,22 @@ class _DbMixin:
                     # ── Step 5: Rename ────────────────────────────────────────
                     if _auto_rename:
                         self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "rename")))
+                        # Save original stem for boolean pattern matching BEFORE rename strips it
+                        orig_stem = os.path.splitext(os.path.basename(p))[0]
                         try:
                             new_path = attrs_mod.rename_with_person_id(
                                 attrs_data, p, pid or "000", flush_stores=False,
                                 skip_uncoded=False)
+                            if new_path != p:
+                                scan_renames[p] = new_path
+                                p = new_path
+                        except Exception:
+                            pass
+                        # Apply boolean sync rules (e.g. -watermark → WM in coded filename)
+                        # Pass orig_stem so pattern matching uses the pre-rename filename
+                        try:
+                            new_path = attrs_mod.apply_boolean_sync_rules(
+                                attrs_data, p, name, orig_stem=orig_stem)
                             if new_path != p:
                                 scan_renames[p] = new_path
                                 p = new_path
@@ -487,6 +520,18 @@ class _DbMixin:
         self._poll_timer.timeout.connect(lambda: self._poll_scan_queue(name))
         self._poll_timer.start(100)
 
+    @staticmethod
+    def _fmt_eta(seconds):
+        """Format seconds into a compact human-readable string."""
+        s = int(seconds)
+        if s < 60:
+            return f"{s}s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"{m}m {s:02d}s"
+        h, m = divmod(m, 60)
+        return f"{h}h {m:02d}m"
+
     def _poll_scan_queue(self, name):
         _step_labels = {"rename": "Rename", "CLIP": "CLIP", "meta": "Meta", "face": "Face", "attrs": "Attrs"}
         sb = self.app.statusBar()
@@ -495,15 +540,30 @@ class _DbMixin:
                 msg, payload = self._scan_queue.get_nowait()
                 if msg == "total":
                     self.progress_bar.setMaximum(payload)
+                    self._scan_start_time = time.monotonic()
+                    self._last_eta_str = ""
                 elif msg == "moved":
                     old_p, new_p = payload
                     self.lbl_scan.setText(f"Moved: {os.path.basename(old_p)} → {os.path.basename(new_p)}")
                 elif msg == "progress":
                     i, total, fname, step = payload
                     step_lbl = _step_labels.get(step, step)
+                    # Recompute ETA whenever a file finishes its CLIP step (most reliable sample)
+                    # and persist it so face/meta steps still show the estimate.
+                    t0 = getattr(self, '_scan_start_time', None)
+                    if step == "CLIP" and i > 1 and t0:
+                        elapsed = time.monotonic() - t0
+                        files_done = i - 1   # fully completed files (all steps)
+                        per_file = elapsed / files_done
+                        remaining = total - files_done
+                        self._last_eta_str = f"  ~{self._fmt_eta(per_file * remaining)} left"
+                    eta_str = getattr(self, '_last_eta_str', "")
                     self.progress_label.setText(f"[{step_lbl}] ({i}/{total}): {fname}")
                     self.progress_bar.setValue(i)
-                    sb.showMessage(f"[{step_lbl}] {name}: {i}/{total} — {fname}")
+                    # Show remaining time inside the progress bar
+                    _eta_short = eta_str.strip().lstrip("~").replace(" left", "") if eta_str else ""
+                    self.progress_bar.setFormat(f"%p%  {_eta_short}" if _eta_short else "%p%")
+                    sb.showMessage(f"[{step_lbl}] {name}: {i}/{total}{eta_str} — {fname}")
                 elif msg == "checkpoint":
                     self.progress_label.setText(self.progress_label.text() + "  [saved]")
                     sb.showMessage(sb.currentMessage() + "  [saved]")
@@ -566,8 +626,22 @@ class _DbMixin:
         self._stop_rename_only = True
         self.btn_stop.setEnabled(False)
         self.btn_stop.setText("Stopping…")
+        # Fallback: if the worker thread doesn't respond within 10 s, reset UI anyway
+        self._stop_fallback_timer = QTimer(self)
+        self._stop_fallback_timer.setSingleShot(True)
+        self._stop_fallback_timer.timeout.connect(self._stop_fallback)
+        self._stop_fallback_timer.start(10000)
+
+    def _stop_fallback(self):
+        """Called if the worker never sends a terminal message after Stop was pressed."""
+        if self.btn_stop.text() == "Stopping…":
+            self.lbl_scan.setText("Stopped (thread did not respond — UI reset).")
+            self._scan_done()
 
     def _scan_done(self):
+        _fb = getattr(self, '_stop_fallback_timer', None)
+        if _fb and _fb.isActive():
+            _fb.stop()
         if self._poll_timer:
             self._poll_timer.stop()
             self._poll_timer = None
@@ -579,12 +653,16 @@ class _DbMixin:
         self.btn_stop.setText("Stop")
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        self._last_eta_str = ""
         self.progress_label.setText("Status: Ready")
         self._is_metadata_scanning = False
         self._is_scanning = False
         self._toggle_ui(False)
         self.btn_scan_new.setEnabled(True)
         self._update_generate_btn()
+        # Pick up any files that arrived in watch dirs during the scan
+        QTimer.singleShot(500, lambda: getattr(self.app, '_scan_new_files', lambda: None)())
 
     def _update_generate_btn(self):
         has_dirs = self.dir_listbox.rowCount() > 0
@@ -602,7 +680,7 @@ class _DbMixin:
                 "background-color: #555; color: #999; font-weight: bold; padding: 6px;")
 
     def _toggle_ui(self, locked):
-        for w in [self.btn_load, self.btn_reset, self.btn_delete,
+        for w in [self.btn_load, self.btn_delete,
                   self.btn_add_dir, self.btn_remove_dir, self.btn_generate]:
             w.setEnabled(not locked)
         self.proj_combo.setEnabled(not locked)
@@ -679,10 +757,7 @@ class _DbMixin:
         self.btn_stop_scan.setEnabled(False)
 
     def _auto_detect_new(self):
-        """Update: scan new files, or (if Rename only) rename uncoded files."""
-        if self._face_mode_group.checkedId() == 3:
-            self._rename_new_files()
-            return
+        """Update: scan new files that haven't been processed yet."""
         all_paths = self.app.data.get("paths", []) if self.app.data else []
         if not all_paths:
             self.lbl_scan.setText("No database loaded."); return
@@ -718,11 +793,12 @@ class _DbMixin:
         self.lbl_scan.setText(f"Scanning {len(paths)} files…")
         self.progress_bar.setRange(0, len(paths))
         self.progress_bar.setValue(0)
-        face_mode       = self._face_mode_group.checkedId()  # 0=no face, 1=include, 2=face only
+        face_mode       = 1  # always include face
         auto_rename     = attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False)
         QApplication.processEvents()
         updated = 0
         scan_renames = {}   # old_path -> new_path, flushed once after the loop
+        _scan_start = time.monotonic()
         for i, path in enumerate(paths):
             if self._stop_scan_all:
                 self.lbl_scan.setText(f"Stopped — {updated} of {i} files updated."); break
@@ -753,8 +829,12 @@ class _DbMixin:
                 updated += 1
             if (i + 1) % 10 == 0 or i == 0:
                 self.progress_bar.setValue(i + 1)
-                self.progress_label.setText(f"Metadata ({i+1}/{len(paths)}): {os.path.basename(path)}")
-                self.lbl_scan.setText(f"Metadata scan: {i+1}/{len(paths)}, updated {updated}")
+                eta_str = ""
+                if i > 0:
+                    elapsed = time.monotonic() - _scan_start
+                    eta_str = f"  ~{self._fmt_eta(elapsed / (i + 1) * (len(paths) - i - 1))} left"
+                self.progress_label.setText(f"Metadata ({i+1}/{len(paths)}){eta_str}: {os.path.basename(path)}")
+                self.lbl_scan.setText(f"Update: {i+1}/{len(paths)}, updated {updated}{eta_str}")
                 QApplication.processEvents()
         else:
             self.progress_bar.setValue(len(paths))
@@ -764,7 +844,7 @@ class _DbMixin:
         if scan_renames:
             attrs_mod.flush_path_renames_to_stores(scan_renames, self.app.current_project)
             if self.app.data:
-                torch.save(self.app.data, f"features_{self.app.current_project}.pt")
+                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
         self.btn_stop_scan.setEnabled(False)
 
     def _update_scan_project_label(self):
@@ -823,6 +903,327 @@ class _DbMixin:
         self.app.attrs_data = live_attrs
         self.btn_stop.setText("Stop")
         self.btn_stop_scan.setEnabled(False)
+
+    def _embed_aitan_all(self):
+        """Embed AItan{} metadata block into every file in the current project."""
+        import aisearch_attrs as attrs_mod
+        project = self.app.current_project
+        if not project or not self.app.attrs_data:
+            self.lbl_scan.setText("No project/data loaded."); return
+
+        _SUPPORTED = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv",
+                      ".jpg", ".jpeg", ".png", ".webp"}
+        all_entries = [(p, e) for p, e in self.app.attrs_data.items()
+                       if os.path.exists(p)
+                       and os.path.splitext(p)[1].lower() in _SUPPORTED]
+        if not all_entries:
+            self.lbl_scan.setText("No eligible files found."); return
+
+        self._is_scanning = True
+        self._stop_rename_only = False
+        self._active_scan_btn = self.btn_scan_new
+        self._toggle_ui(True)
+        self.btn_stop.setEnabled(True)
+        self.btn_stop.setText("Stop")
+        self._active_scan_btn.setText("Embedding…")
+        self.btn_scan_new.setEnabled(False)
+        self.lbl_scan.setText(f"Embedding AItan{{}} in {len(all_entries)} files…")
+        self.progress_bar.setRange(0, len(all_entries))
+        self.progress_bar.setValue(0)
+
+        _q = queue.Queue()
+
+        def _worker():
+            ok_n = 0; fail_n = 0
+            for i, (path, entry) in enumerate(all_entries):
+                if self._stop_rename_only:
+                    _q.put(("stopped", (ok_n, fail_n, i))); return
+                if attrs_mod.embed_aitan_meta(path, entry):
+                    ok_n += 1
+                else:
+                    fail_n += 1
+                if (i + 1) % 20 == 0:
+                    _q.put(("progress", (i + 1, len(all_entries), ok_n, fail_n)))
+            _q.put(("done", (ok_n, fail_n, len(all_entries))))
+
+        def _poll_embed():
+            try:
+                while True:
+                    msg, payload = _q.get_nowait()
+                    if msg == "progress":
+                        done_i, total, ok_n, fail_n = payload
+                        self.progress_bar.setValue(done_i)
+                        self.progress_label.setText(
+                            f"Embed AItan ({done_i}/{total}) — OK:{ok_n} FAIL:{fail_n}")
+                    elif msg in ("done", "stopped"):
+                        ok_n, fail_n, total = payload
+                        word = "Done" if msg == "done" else "Stopped"
+                        self.lbl_scan.setText(f"{word} — {ok_n} embedded, {fail_n} failed.")
+                        QTimer.singleShot(5000, lambda: self.lbl_scan.setText(""))
+                        if self._poll_timer:
+                            self._poll_timer.stop(); self._poll_timer = None
+                        self._scan_done()
+                        return
+            except queue.Empty:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(_poll_embed)
+        self._poll_timer.start(200)
+
+    def _rescan_moved_files(self, silent=False):
+        """Scan all configured + watch dirs for files matching missing DB entries by filename.
+        silent=True suppresses error pop-ups (used when called from Update)."""
+        import aisearch_attrs as _am
+        project = getattr(self.app, "current_project", None)
+        if not project or not self.app.data:
+            if not silent:
+                QMessageBox.warning(self, "No Project", "No project loaded.")
+            return
+
+        # Collect all paths from the DB + attrs_data
+        db_paths   = list(self.app.data.get("paths", []))
+        attr_paths = list((self.app.attrs_data or {}).keys())
+        all_known  = list(dict.fromkeys(db_paths + attr_paths))  # preserve order, dedupe
+
+        missing = [p for p in all_known if not os.path.exists(p)]
+        if not missing:
+            return
+
+        # Build set of scan directories: project dirs + watch dirs
+        dirs_flags = self._get_dirs_with_flags()
+        scan_dirs  = [d for d, _ in dirs_flags if os.path.isdir(d)]
+        watch_dirs = [d for d in self.app.config.get("watch_dirs", []) if os.path.isdir(d)]
+        all_dirs   = list(dict.fromkeys(scan_dirs + watch_dirs))
+        if not all_dirs:
+            if not silent:
+                QMessageBox.warning(self, "No Directories",
+                    "No directories configured to scan.")
+            return
+
+        self.lbl_scan.setText(f"Scanning for {len(missing)} missing file(s)…")
+        QApplication.processEvents()
+
+        valid_exts = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
+
+        # Walk all dirs recursively and index files by basename
+        disk_by_name: dict[str, list[str]] = {}
+        for d in all_dirs:
+            for root, subdirs, files in os.walk(d):
+                subdirs[:] = [s for s in subdirs if s != '_unreadable']
+                if os.path.basename(root) == '_unreadable':
+                    continue
+                for f in files:
+                    if f.lower().endswith(valid_exts):
+                        fp = os.path.normpath(os.path.join(root, f))
+                        disk_by_name.setdefault(f, []).append(fp)
+
+        # Match missing → unique candidate on disk
+        matches: list[tuple[str, str]] = []   # (old_path, new_path)
+        ambiguous: list[tuple[str, list[str]]] = []
+        unmatched: list[str] = []
+
+        for old_p in missing:
+            basename = os.path.basename(old_p)
+            candidates = disk_by_name.get(basename, [])
+            if len(candidates) == 1:
+                matches.append((old_p, candidates[0]))
+            elif len(candidates) > 1:
+                ambiguous.append((old_p, candidates))
+            else:
+                unmatched.append(old_p)
+
+        # ── Shared thumbnail helper (used by both dialogs below) ─────────────────
+        from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                     QScrollArea, QWidget, QComboBox, QPushButton,
+                                     QSizePolicy, QFrame)
+        from PyQt6.QtGui import QPixmap, QImageReader
+        from PyQt6.QtCore import QSize
+
+        THUMB_W, THUMB_H = 180, 135
+
+        def _load_thumb(path):
+            """Return a scaled QPixmap for path, or a grey placeholder."""
+            if not path or not os.path.exists(path):
+                px = QPixmap(THUMB_W, THUMB_H)
+                px.fill(Qt.GlobalColor.darkGray)
+                return px
+            ext = os.path.splitext(path)[1].lower()
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            orig = reader.size()
+            if orig.isValid():
+                sc = min(THUMB_W / max(orig.width(), 1), THUMB_H / max(orig.height(), 1))
+                if sc < 1.0:
+                    reader.setScaledSize(QSize(max(1, int(orig.width() * sc)),
+                                               max(1, int(orig.height() * sc))))
+            img = reader.read()
+            if not img.isNull():
+                return QPixmap.fromImage(img).scaled(
+                    THUMB_W, THUMB_H,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+            if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm'):
+                try:
+                    import cv2
+                    from PyQt6.QtGui import QImage
+                    cap = cv2.VideoCapture(path)
+                    ret, frame = cap.read(); cap.release()
+                    if ret:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb.shape
+                        qimg = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
+                        return QPixmap.fromImage(qimg).scaled(
+                            THUMB_W, THUMB_H,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+                except Exception:
+                    pass
+            px = QPixmap(THUMB_W, THUMB_H); px.fill(Qt.GlobalColor.darkGray)
+            return px
+
+        # Auto-pick the first candidate for ambiguous files (files are renamed by the program)
+        for old_p, cands in ambiguous:
+            if cands:
+                matches.append((old_p, cands[0]))
+        ambiguous = []
+
+        if not matches and not unmatched:
+            self.lbl_scan.setText(""); return
+
+        # Build visual confirmation dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Fix Moved Files — Confirm")
+        dlg.resize(900, 600)
+        vl = QVBoxLayout(dlg)
+        vl.addWidget(QLabel(
+            f"Found <b>{len(matches)}</b> remappable file(s) out of "
+            f"<b>{len(missing)}</b> missing. Review and confirm:"))
+
+        scroll_c = QScrollArea(); scroll_c.setWidgetResizable(True)
+        inner_c  = QWidget(); inner_vl_c = QVBoxLayout(inner_c); inner_vl_c.setSpacing(6)
+
+        # ── Matches — show thumbnail of new location ──────────────────────────
+        if matches:
+            hdr = QLabel(f"<b>Will remap ({len(matches)}):</b>")
+            hdr.setStyleSheet("color:#8f8; padding:2px 4px;")
+            inner_vl_c.addWidget(hdr)
+            for old_p, new_p in matches:
+                frame = QFrame(); frame.setFrameShape(QFrame.Shape.StyledPanel)
+                row_hl = QHBoxLayout(frame)
+                row_hl.setContentsMargins(6, 4, 6, 4); row_hl.setSpacing(10)
+
+                thumb = QLabel()
+                thumb.setFixedSize(THUMB_W, THUMB_H)
+                thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                thumb.setStyleSheet("background:#1a1a1a; border:1px solid #444;")
+                thumb.setPixmap(_load_thumb(new_p))
+                row_hl.addWidget(thumb)
+
+                info = QWidget()
+                info_vl = QVBoxLayout(info); info_vl.setContentsMargins(0,0,0,0); info_vl.setSpacing(2)
+                info_vl.addWidget(QLabel(f"<b>{os.path.basename(old_p)}</b>"))
+                old_lbl = QLabel(f"<span style='color:#888'>{old_p}</span>")
+                old_lbl.setWordWrap(True)
+                new_lbl = QLabel(f"<span style='color:#6af'>→ {new_p}</span>")
+                new_lbl.setWordWrap(True)
+                info_vl.addWidget(old_lbl); info_vl.addWidget(new_lbl); info_vl.addStretch()
+                row_hl.addWidget(info, 1)
+                inner_vl_c.addWidget(frame)
+
+        # ── Ambiguous still-skipped ───────────────────────────────────────────
+        if ambiguous:
+            hdr2 = QLabel(f"<b>Ambiguous — skipped ({len(ambiguous)}):</b>")
+            hdr2.setStyleSheet("color:#fa8; padding:2px 4px; margin-top:6px;")
+            inner_vl_c.addWidget(hdr2)
+            for old_p, cands in ambiguous:
+                lbl = QLabel(f"  {os.path.basename(old_p)}: {len(cands)} candidates")
+                lbl.setStyleSheet("color:#888;")
+                inner_vl_c.addWidget(lbl)
+
+        # ── Unmatched — will be removed ───────────────────────────────────────
+        if unmatched:
+            hdr3 = QLabel(f"<b>Not found — will be removed ({len(unmatched)}):</b>")
+            hdr3.setStyleSheet("color:#f88; padding:2px 4px; margin-top:6px;")
+            inner_vl_c.addWidget(hdr3)
+            for p in unmatched:
+                lbl = QLabel(f"  {p}")
+                lbl.setStyleSheet("color:#888;"); lbl.setWordWrap(True)
+                inner_vl_c.addWidget(lbl)
+
+        inner_vl_c.addStretch()
+        scroll_c.setWidget(inner_c)
+        vl.addWidget(scroll_c)
+
+        hl = QHBoxLayout()
+        _btn_label = (f"✔ Apply {len(matches)} Remap(s) + Remove {len(unmatched)}"
+                      if matches and unmatched else
+                      f"✔ Apply {len(matches)} Remap(s)" if matches else
+                      f"✔ Remove {len(unmatched)} Missing")
+        btn_apply  = QPushButton(_btn_label)
+        btn_apply.setStyleSheet(
+            "background-color: #1a5a1a; color: white; font-weight: bold;")
+        btn_cancel = QPushButton("Cancel")
+        hl.addWidget(btn_apply); hl.addStretch(); hl.addWidget(btn_cancel)
+        vl.addLayout(hl)
+
+        btn_cancel.clicked.connect(dlg.reject)
+        applied = [False]
+
+        def _apply():
+            applied[0] = True
+            dlg.accept()
+
+        btn_apply.clicked.connect(_apply)
+        dlg.exec()
+
+        if not applied[0]:
+            self.lbl_scan.setText(""); return
+
+        # Apply remaps
+        renames = dict(matches)   # old → new
+        db_paths_list = self.app.data["paths"]
+        for i, p in enumerate(db_paths_list):
+            np_ = renames.get(p)
+            if np_:
+                db_paths_list[i] = np_
+
+        attrs_data = self.app.attrs_data or {}
+        for old_p, new_p in matches:
+            if old_p in attrs_data:
+                attrs_data[new_p] = attrs_data.pop(old_p)
+
+        # Remove truly unmatched entries from both DB and attrs
+        if unmatched:
+            remove_set = set(unmatched)
+            keep_idx = [i for i, p in enumerate(self.app.data["paths"])
+                        if p not in remove_set]
+            self.app.data["paths"]      = [self.app.data["paths"][i] for i in keep_idx]
+            self.app.data["embeddings"] = self.app.data["embeddings"][keep_idx]
+            for p in unmatched:
+                attrs_data.pop(p, None)
+
+        # Flush to disk
+        _am.save(project, attrs_data)
+        self.app.attrs_data = attrs_data
+        torch.save(self.app.data,
+                   os.path.join(_am.DATA_DIR, f"features_{project}.pt"))
+        _am.flush_path_renames_to_stores(renames, project)
+
+        # Rebuild path index
+        self.app._path_idx = {
+            os.path.realpath(p): i
+            for i, p in enumerate(self.app.data["paths"])
+        }
+
+        proj = getattr(self.app, "current_project", None)
+        if proj and not silent:
+            QTimer.singleShot(0, lambda: self.app.set_project(proj))
+        msg = (f"Remapped {len(matches)} file(s)."
+               + (f"  Removed {len(unmatched)} unmatched." if unmatched else ""))
+        self.lbl_scan.setText(msg)
+        QTimer.singleShot(6000, lambda: self.lbl_scan.setText(""))
 
     def _rename_util_clicked(self):
         """Rename utility button — renames all files (or new-only) without a CLIP scan."""
@@ -918,7 +1319,7 @@ class _DbMixin:
                                     np_ = path_map.get(os.path.normpath(p))
                                     if np_:
                                         self.app.data["paths"][idx2] = np_
-                                torch.save(self.app.data, f"features_{project}.pt")
+                                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{project}.pt"))
                                 # Rebuild path index
                                 self.app._path_idx = {
                                     os.path.realpath(p): i
@@ -1021,30 +1422,12 @@ class _DbMixin:
     def _refresh_list(self):
         self.db_projects = sorted([
             f.replace('features_', '').replace('.pt', '')
-            for f in os.listdir('.') if f.startswith('features_') and f.endswith('.pt')
+            for f in os.listdir(attrs_mod.DATA_DIR) if f.startswith('features_') and f.endswith('.pt')
         ])
         self.proj_combo.blockSignals(True)
         self.proj_combo.clear()
         self.proj_combo.addItems(self.db_projects)
         self.proj_combo.blockSignals(False)
-
-    def reset_project(self):
-        t = self.proj_combo.currentText()
-        if not t: return
-        if QMessageBox.question(self, "Reset", f"Reset '{t}'?\nThis clears all paths and embeddings but keeps base directories.\nYou will need to re-run Generate.",
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
-            return
-        pt_file = f"features_{t}.pt"
-        data, _ = logic.load_db_logic(t)
-        base_dirs   = data.get("base_dirs",       []) if data else []
-        base_nosub  = data.get("base_dirs_nosub", []) if data else []
-        import torch
-        torch.save({"paths": [], "embeddings": None,
-                    "base_dirs": base_dirs, "base_dirs_nosub": base_nosub}, pt_file)
-        if self.app.current_project == t:
-            self.app.load_db()
-        self._on_project_select()
-        QMessageBox.information(self, "Reset", f"'{t}' has been reset.\nBase dirs preserved: {base_dirs}")
 
     def delete_project(self):
         t = self.proj_combo.currentText()
@@ -1052,7 +1435,7 @@ class _DbMixin:
         if QMessageBox.question(self, "Delete", f"Delete {t}?",
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             import aisearch_attrs as _am
-            for path in (f"features_{t}.pt", _am.attrs_path(t)):
+            for path in (os.path.join(_am.DATA_DIR, f"features_{t}.pt"), _am.attrs_path(t)):
                 if os.path.exists(path):
                     os.remove(path)
             self._refresh_list()
@@ -1070,7 +1453,7 @@ class _DbMixin:
             QMessageBox.warning(self, "No Dirs", "Add at least one directory before registering."); return
         base_dirs  = [d       for d, no_sub in dirs_flags]
         base_nosub = [no_sub  for _, no_sub in dirs_flags]
-        pt_path = f"features_{name}.pt"
+        pt_path = os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt")
         if os.path.exists(pt_path):
             # Update dirs on existing project without touching embeddings
             existing, _ = logic.load_db_logic(name)
@@ -1083,6 +1466,38 @@ class _DbMixin:
             data = {"paths": [], "embeddings": torch.empty((0, logic.EMBEDDING_DIM)).to(logic.device),
                     "base_dirs": base_dirs, "base_dirs_nosub": base_nosub}
             torch.save(data, pt_path)
+            # Create blank person registry and faces file for new project
+            reg_path = attrs_mod.person_registry_file_for_project(name)
+            if not os.path.exists(reg_path):
+                import json
+                with open(reg_path, "w") as _f:
+                    json.dump({}, _f)
+            faces_path = os.path.join(attrs_mod.DATA_DIR, f"faces_{name}.json")
+            if not os.path.exists(faces_path):
+                with open(faces_path, "w") as _f:
+                    json.dump({}, _f)
+            # Bootstrap project-specific config files from global defaults
+            import shutil as _shutil
+            _copies = [
+                (attrs_mod.tags_file_for_project(None),
+                 attrs_mod.tags_save_path_for_project(name)),
+                (attrs_mod.workspace_file_for_project(None),
+                 attrs_mod.workspace_save_path_for_project(name)),
+                (attrs_mod.metadata_rules_file_for_project(None),
+                 attrs_mod.metadata_rules_save_path_for_project(name)),
+            ]
+            for _src, _dst in _copies:
+                if _src and os.path.exists(_src) and not os.path.exists(_dst):
+                    _shutil.copy2(_src, _dst)
+            # Bootstrap canvas DB (attr_viewer_*.db) from global
+            try:
+                from attr_viewer import _db_file_for_config
+                _src_db = _db_file_for_config(attrs_mod.tags_file_for_project(None))
+                _dst_db = _db_file_for_config(attrs_mod.tags_save_path_for_project(name))
+                if os.path.exists(_src_db) and not os.path.exists(_dst_db):
+                    _shutil.copy2(_src_db, _dst_db)
+            except Exception:
+                pass
         self._refresh_list()
         self.proj_combo.blockSignals(True)
         self.proj_combo.setCurrentText(name)
@@ -1173,4 +1588,15 @@ class _DbMixin:
             self.app.set_project(t)
             self._sync_scan_section(t)
             self._update_scan_project_label()
-            self.hide()   # always close immediately
+            # Sync Canvas tab project selector and reload its config
+            cb = getattr(self, "_canvas_proj_cb", None)
+            if cb:
+                cb.blockSignals(True)
+                cb.setCurrentText(t)
+                cb.blockSignals(False)
+            cw = getattr(self, "_canvas_widget", None)
+            if cw:
+                import aisearch_attrs as _am
+                cw.reload(_am.tags_file_for_project(t))
+            if self.chk_close_on_load.isChecked():
+                self.hide()

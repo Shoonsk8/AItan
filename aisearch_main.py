@@ -230,7 +230,19 @@ def apply_theme(name):
     QApplication.instance().setStyleSheet(THEMES.get(name, DARK_STYLE))
 
 
+def _restore_terminal():
+    try:
+        os.system("stty sane")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    import atexit, signal
+    atexit.register(_restore_terminal)
+    signal.signal(signal.SIGINT, lambda *_: (_restore_terminal(), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: (_restore_terminal(), sys.exit(0)))
+
     import aisearch_config as _cfg
     app = QApplication(sys.argv)
     _config = _cfg.load_config()

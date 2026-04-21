@@ -21,7 +21,7 @@ import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
 
-VERSION = "1.95"
+VERSION = "1.96"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -257,13 +257,14 @@ class AISearchApp(QMainWindow):
 
         # Load global config first to get last_project, then reload per-project
         _global_cfg    = cfg.load_config()
+        _data_dir = attrs_mod.DATA_DIR
         db_files = sorted(
-            [f for f in os.listdir('.') if f.startswith('features_') and f.endswith('.pt')],
-            key=os.path.getmtime, reverse=True
+            [f for f in os.listdir(_data_dir) if f.startswith('features_') and f.endswith('.pt')],
+            key=lambda f: os.path.getmtime(os.path.join(_data_dir, f)), reverse=True
         )
         fallback       = db_files[0].replace('features_', '').replace('.pt', '') if db_files else ""
         saved          = _global_cfg.get("last_project", "")
-        self.current_project = saved if saved and os.path.exists(f"features_{saved}.pt") else fallback
+        self.current_project = saved if saved and os.path.exists(os.path.join(_data_dir, f"features_{saved}.pt")) else fallback
 
         self.config        = cfg.load_config(self.current_project)
         self.config["last_project"] = self.current_project  # ensure it's set
@@ -355,11 +356,20 @@ class AISearchApp(QMainWindow):
         self.btn_settings.clicked.connect(self._open_settings)
         info_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # Logo — under the settings button, right-aligned, theme-aware
+        # Logo — under the settings button, right-aligned
         self._lbl_logo = QLabel()
-        self._lbl_logo.setFixedSize(120, 120)
+        self._lbl_logo.setFixedSize(160, 160)
         self._lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_logo.setStyleSheet("background: transparent;")
         info_layout.addWidget(self._lbl_logo, alignment=Qt.AlignmentFlag.AlignRight)
+        # Load logo once (PNG with transparency — no dark/light swap needed)
+        _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aisearch_logo.png")
+        if os.path.exists(_logo_path):
+            _px = QPixmap(_logo_path).scaled(
+                160, 160,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self._lbl_logo.setPixmap(_px)
 
         self.lbl_proj_hdr = QLabel("PROJECT:")
         self.lbl_proj_hdr.setStyleSheet("color: #00ff00; font-weight: bold;")
@@ -404,6 +414,17 @@ class AISearchApp(QMainWindow):
         self.btn_browse.clicked.connect(lambda: self._enter_browse_mode())
         mode_col.addWidget(self.btn_browse)
 
+        self._btn_back = QPushButton("⏮ Back")
+        self._btn_back.setToolTip("Go back to previously viewed file")
+        self._btn_back.setStyleSheet(
+            "QPushButton { background-color: #4a4a6a; color: white; font-weight: bold; "
+            "padding: 6px 10px; border: 2px solid #6a6a9a; }"
+            "QPushButton:hover { background-color: #5a5a8a; }"
+            "QPushButton:pressed { background-color: #2a2a4a; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #555; border-color: #333; }")
+        self._btn_back.clicked.connect(self._go_back)
+        mode_col.addWidget(self._btn_back)
+
         mode_and_dup.addLayout(mode_col)
 
         # Dup-specific controls (hidden unless in dup mode)
@@ -431,6 +452,7 @@ class AISearchApp(QMainWindow):
         dup_row2 = QHBoxLayout()
         dup_row2.addWidget(QLabel("Threshold:"))
         self.spin_threshold = QSpinBox()
+        self.spin_threshold.wheelEvent = lambda e: e.ignore()
         self.spin_threshold.setRange(70, 100)
         self.spin_threshold.setValue(self.config.get("dup_threshold", 95))
         self.spin_threshold.setSuffix("%")
@@ -659,16 +681,7 @@ class AISearchApp(QMainWindow):
         self.lbl_base_dir.setStyleSheet(f"color: {base_color};")
         self.lbl_dup_status.setStyleSheet(f"color: {status_color};")
         self.btn_hide_confirmed.setStyleSheet(hide_ss)
-        # Swap logo for dark/light theme
-        _base = os.path.dirname(os.path.abspath(__file__))
-        _logo_file = "aisearch_logo.jpg" if is_dark else "aisearch_logo_light.jpg"
-        _logo_path = os.path.join(_base, _logo_file)
-        if os.path.exists(_logo_path) and hasattr(self, '_lbl_logo'):
-            _px = QPixmap(_logo_path).scaled(
-                120, 120,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            self._lbl_logo.setPixmap(_px)
+        # Logo has transparent background — no swap needed for dark/light theme
         # Ensure table text is readable in both themes
         table_text = "#000000" if not is_dark else "#ffffff"
         self.table.setStyleSheet(
@@ -677,7 +690,7 @@ class AISearchApp(QMainWindow):
 
     def reload_tag_groups(self, project=None):
         """Reload TAG_GROUPS from JSON for a project (or global default) and rebuild attr panels."""
-        tf = attrs_mod.tags_file_for_project(project or getattr(self, 'current_project', None))
+        tf = attrs_mod.tags_file_for_project(project if project and project != "default" else None)
         attrs_mod.TAG_GROUPS = attrs_mod._load_tag_groups(tf)
         attrs_mod.TAGS = [item for group in attrs_mod.TAG_GROUPS.values() for item in group]
         attrs_mod.QUALITY_TAGS      = {k for k, _ in attrs_mod.TAG_GROUPS.get("Quality", [])}
@@ -704,27 +717,34 @@ class AISearchApp(QMainWindow):
                 self.attr_panel = self._build_attr_panel()
                 self.attr_panel.hide()
                 layout.insertWidget(idx, self.attr_panel)
-        # Rebuild preview attr panel
-        pw = self.preview_handler.window
-        if pw:
-            old_scroll = pw._attr_scroll
-            visible = old_scroll.isVisible()
-            layout = pw.layout()
-            idx = layout.indexOf(old_scroll)
-            layout.removeWidget(old_scroll)
-            old_scroll.deleteLater()
+        # Rebuild preview attr panel — swap the widget inside the existing scroll area
+        pw = getattr(self.preview_handler, 'window', None)
+        if pw and hasattr(pw, '_attr_scroll'):
+            old_widget = pw._attr_scroll.widget()
             pw.attr_widget = pw._build_attr_panel()
-            from PyQt6.QtWidgets import QScrollArea
-            pw._attr_scroll = QScrollArea()
-            pw._attr_scroll.setWidgetResizable(True)
             pw._attr_scroll.setWidget(pw.attr_widget)
-            pw._attr_scroll.setMaximumHeight(500)
-            pw._attr_scroll.setStyleSheet("QScrollArea { border: none; background: #2e2e2e; }")
-            if not visible:
-                pw._attr_scroll.hide()
-            layout.insertWidget(idx, pw._attr_scroll)
+            if old_widget:
+                try:
+                    old_widget.setParent(None)
+                    old_widget.deleteLater()
+                except RuntimeError:
+                    pass  # already deleted by Qt
             if self.preview_handler.current_path:
                 pw._refresh_attrs(self.preview_handler.current_path)
+        # Reload soft canvas (AttrViewerWidget) so style changes (radio/taglist) take effect
+        if pw and hasattr(pw, '_soft_canvas'):
+            _cfg_path = attrs_mod.tags_file_for_project(project or getattr(self, 'current_project', None))
+            pw._soft_canvas.reload(_cfg_path)
+            pw._wire_canvas_bool_flags()
+            if self.preview_handler.current_path:
+                _entry = attrs_mod.get(self.attrs_data, self.preview_handler.current_path)
+                pw._soft_canvas.load_file(self.preview_handler.current_path, _entry)
+        # Also reload settings canvas if open
+        _sv = getattr(self, '_settings_win', None)
+        _cw = getattr(_sv, '_canvas_widget', None)
+        if _cw:
+            _cfg_path = attrs_mod.tags_file_for_project(project or getattr(self, 'current_project', None))
+            _cw.reload(_cfg_path)
 
     # ── Inline attribute panel ───────────────────────────────────────────────
 
@@ -751,28 +771,32 @@ class AISearchApp(QMainWindow):
         self._inline_note.editingFinished.connect(self._save_inline_attrs)
         vbox.addWidget(self._inline_note)
 
-        # Quality + Resolution + Confirmed
+        # Quality + Resolution + Confirmed — only shown if defined in TAG_GROUPS
         r1 = QHBoxLayout()
-        lq = QLabel("Q:")
-        lq.setStyleSheet("color: #aaa;")
-        r1.addWidget(lq)
-        self._quality_combo = QComboBox()
-        self._quality_combo.addItem("—", "")
-        for key, lbl in attrs_mod.TAG_GROUPS["Quality"]:
-            self._quality_combo.addItem(lbl, key)
-        self._quality_combo.setFixedWidth(70)
-        self._quality_combo.currentIndexChanged.connect(self._save_inline_attrs)
-        r1.addWidget(self._quality_combo)
-        lr = QLabel("Res:")
-        lr.setStyleSheet("color: #aaa;")
-        r1.addWidget(lr)
-        self._res_combo = QComboBox()
-        self._res_combo.addItem("—", "")
-        for key, lbl in attrs_mod.TAG_GROUPS.get("Resolution", []):
-            self._res_combo.addItem(lbl, key)
-        self._res_combo.setFixedWidth(80)
-        self._res_combo.currentIndexChanged.connect(self._save_inline_attrs)
-        r1.addWidget(self._res_combo)
+        self._quality_combo = None
+        self._res_combo = None
+        _qual_pairs = attrs_mod.TAG_GROUPS.get("Quality", [])
+        if _qual_pairs:
+            lq = QLabel("Q:"); lq.setStyleSheet("color: #aaa;"); r1.addWidget(lq)
+            self._quality_combo = QComboBox()
+            self._quality_combo.wheelEvent = lambda e: e.ignore()
+            self._quality_combo.addItem("—", "")
+            for key, lbl in _qual_pairs:
+                self._quality_combo.addItem(lbl, key)
+            self._quality_combo.setFixedWidth(70)
+            self._quality_combo.currentIndexChanged.connect(self._save_inline_attrs)
+            r1.addWidget(self._quality_combo)
+        _res_pairs = attrs_mod.TAG_GROUPS.get("Resolution", [])
+        if _res_pairs:
+            lr = QLabel("Res:"); lr.setStyleSheet("color: #aaa;"); r1.addWidget(lr)
+            self._res_combo = QComboBox()
+            self._res_combo.wheelEvent = lambda e: e.ignore()
+            self._res_combo.addItem("—", "")
+            for key, lbl in _res_pairs:
+                self._res_combo.addItem(lbl, key)
+            self._res_combo.setFixedWidth(80)
+            self._res_combo.currentIndexChanged.connect(self._save_inline_attrs)
+            r1.addWidget(self._res_combo)
         r1.addStretch()
         self._confirmed_cb = QCheckBox("≠")
         self._confirmed_cb.setToolTip("Confirmed different")
@@ -781,32 +805,39 @@ class AISearchApp(QMainWindow):
         r1.addWidget(self._confirmed_cb)
         vbox.addLayout(r1)
 
-        # Variant checkboxes — 3 columns
+        # Variant checkboxes — 3 columns (only if Variant defined in TAG_GROUPS)
         self._inline_cbs = {}
-        grid = QGridLayout()
-        grid.setSpacing(2)
-        grid.setContentsMargins(0, 0, 0, 0)
-        for i, (key, label) in enumerate(attrs_mod.TAG_GROUPS["Variant"]):
-            cb = QCheckBox(label)
-            cb.setStyleSheet("color: #e0e0e0;")
-            cb.toggled.connect(self._save_inline_attrs)
-            self._inline_cbs[key] = cb
-            grid.addWidget(cb, i // 3, i % 3)
-        vbox.addLayout(grid)
+        _variant_pairs = attrs_mod.TAG_GROUPS.get("Variant", [])
+        if _variant_pairs:
+            grid = QGridLayout()
+            grid.setSpacing(2)
+            grid.setContentsMargins(0, 0, 0, 0)
+            for i, (key, label) in enumerate(_variant_pairs):
+                cb = QCheckBox(label)
+                cb.setStyleSheet("color: #e0e0e0;")
+                cb.toggled.connect(self._save_inline_attrs)
+                self._inline_cbs[key] = cb
+                grid.addWidget(cb, i // 3, i % 3)
+            vbox.addLayout(grid)
 
-        # Audio row
-        r3 = QHBoxLayout()
-        la = QLabel("Audio:")
-        la.setStyleSheet("color: #aaa;")
-        r3.addWidget(la)
-        for key, label in attrs_mod.TAG_GROUPS["Audio"]:
-            cb = QCheckBox(label)
-            cb.setStyleSheet("color: #e0e0e0;")
-            cb.toggled.connect(self._save_inline_attrs)
-            self._inline_cbs[key] = cb
-            r3.addWidget(cb)
-        r3.addStretch()
-        vbox.addLayout(r3)
+        # Audio row — single-select combo (like Quality)
+        self._inline_audio_rbs = {}   # unused but kept so refresh/save code is safe
+        self._audio_combo = None
+        _audio_pairs = attrs_mod.TAG_GROUPS.get("Audio", [])
+        if _audio_pairs:
+            r3 = QHBoxLayout()
+            la = QLabel("Audio:")
+            la.setStyleSheet("color: #aaa;")
+            r3.addWidget(la)
+            self._audio_combo = QComboBox()
+            self._audio_combo.wheelEvent = lambda e: e.ignore()
+            self._audio_combo.addItem("—", "")
+            for key, label in _audio_pairs:
+                self._audio_combo.addItem(label, key)
+            self._audio_combo.currentIndexChanged.connect(self._save_inline_attrs)
+            r3.addWidget(self._audio_combo)
+            r3.addStretch()
+            vbox.addLayout(r3)
 
         # Project / Scene button
         btn_more = QPushButton("📝 Title / Scene…")
@@ -852,22 +883,29 @@ class AISearchApp(QMainWindow):
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, _poll)
 
-        for w in (self._quality_combo, self._res_combo, self._confirmed_cb, self._inline_note):
-            w.blockSignals(True)
+        for w in (self._quality_combo, self._res_combo, self._audio_combo,
+                  self._confirmed_cb, self._inline_note):
+            if w: w.blockSignals(True)
         for cb in self._inline_cbs.values():
             cb.blockSignals(True)
 
         self._inline_note.setText(entry.get("note", ""))
-        qual = next((k for k in attrs_mod.QUALITY_TAGS if k in tags), "")
-        self._quality_combo.setCurrentIndex(max(0, self._quality_combo.findData(qual)))
-        res  = next((k for k in attrs_mod.RESOLUTION_TAGS if k in tags), "")
-        self._res_combo.setCurrentIndex(max(0, self._res_combo.findData(res)))
+        if self._quality_combo:
+            qual = next((k for k in attrs_mod.QUALITY_TAGS if k in tags), "")
+            self._quality_combo.setCurrentIndex(max(0, self._quality_combo.findData(qual)))
+        if self._res_combo:
+            res  = next((k for k in attrs_mod.RESOLUTION_TAGS if k in tags), "")
+            self._res_combo.setCurrentIndex(max(0, self._res_combo.findData(res)))
+        if self._audio_combo:
+            _audio_val = entry.get("audio", "")
+            self._audio_combo.setCurrentIndex(max(0, self._audio_combo.findData(_audio_val)))
         for key, cb in self._inline_cbs.items():
             cb.setChecked(key in tags)
         self._confirmed_cb.setChecked(entry.get("confirmed", False))
 
-        for w in (self._quality_combo, self._res_combo, self._confirmed_cb, self._inline_note):
-            w.blockSignals(False)
+        for w in (self._quality_combo, self._res_combo, self._audio_combo,
+                  self._confirmed_cb, self._inline_note):
+            if w: w.blockSignals(False)
         for cb in self._inline_cbs.values():
             cb.blockSignals(False)
 
@@ -883,10 +921,12 @@ class AISearchApp(QMainWindow):
         if not path:
             return
         tags = [k for k, cb in self._inline_cbs.items() if cb.isChecked()]
-        qual = self._quality_combo.currentData()
+        # Audio: dedicated field (not stored in tags)
+        _audio_val = (self._audio_combo.currentData() or "") if self._audio_combo else ""
+        qual = self._quality_combo.currentData() if self._quality_combo else None
         if qual:
             tags.append(qual)
-        res = self._res_combo.currentData()
+        res = self._res_combo.currentData() if self._res_combo else None
         if res:
             tags.append(res)
         confirmed = self._confirmed_cb.isChecked()
@@ -897,7 +937,14 @@ class AISearchApp(QMainWindow):
                            note=note,
                            confirmed=confirmed,
                            project=entry.get("project", ""),
-                           scene=entry.get("scene", ""))
+                           scene=entry.get("scene", ""),
+                           audio=_audio_val,
+                           speech=entry.get("speech", ""),
+                           prompt=entry.get("prompt", ""),
+                           neg_prompt=entry.get("neg_prompt", ""),
+                           seed=entry.get("seed", ""),
+                           person_id=entry.get("person_id", ""),
+                           editable=entry.get("editable", True))
         attrs_mod.save(self.current_project, self.attrs_data)
         row = self._current_row()
         if row >= 0:
@@ -1023,7 +1070,7 @@ class AISearchApp(QMainWindow):
             for i, p in enumerate(self.data["paths"]):
                 if os.path.normpath(p) == os.path.normpath(new_path):
                     self.data["paths"][i] = old_path
-                    torch.save(self.data, f"features_{self.current_project}.pt")
+                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
         for r in range(self.table.rowCount()):
             if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(new_path):
@@ -1043,7 +1090,7 @@ class AISearchApp(QMainWindow):
             if emb is not None:
                 self.data["paths"].append(orig_path)
                 self.data["embeddings"] = torch.cat([self.data["embeddings"], emb.unsqueeze(0)])
-                torch.save(self.data, f"features_{self.current_project}.pt")
+                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
         row = min(action["row"], self.table.rowCount())
         self.table.insertRow(row)
         score_item = QTableWidgetItem(action["score"])
@@ -1098,41 +1145,13 @@ class AISearchApp(QMainWindow):
         layout.setSpacing(6)
         scroll.setWidget(inner); outer.addWidget(scroll)
 
-        # Variant
-        g_var = QGroupBox("Variant"); lv = QVBoxLayout(g_var)
         win._aw_checks = {}
-        for key, label in attrs_mod.TAG_GROUPS["Variant"]:
-            cb = QCheckBox(label); lv.addWidget(cb)
-            win._aw_checks[key] = cb
-        layout.addWidget(g_var)
-
-        # Quality (mutually exclusive)
-        g_qual = QGroupBox("Quality"); lq = QHBoxLayout(g_qual)
-        qual_group = QButtonGroup(win); qual_group.setExclusive(True)
-        win._aw_none_rb = QRadioButton("—"); qual_group.addButton(win._aw_none_rb); lq.addWidget(win._aw_none_rb)
+        win._aw_none_rb = None
         win._aw_qual_rbs = {}
-        for key, label in attrs_mod.TAG_GROUPS["Quality"]:
-            rb = QRadioButton(label); qual_group.addButton(rb); lq.addWidget(rb)
-            win._aw_qual_rbs[key] = rb
-        layout.addWidget(g_qual)
-
-        # Resolution (mutually exclusive)
-        g_res = QGroupBox("Resolution"); lr = QHBoxLayout(g_res)
-        res_group = QButtonGroup(win); res_group.setExclusive(True)
-        win._aw_none_res = QRadioButton("—"); res_group.addButton(win._aw_none_res); lr.addWidget(win._aw_none_res)
+        win._aw_none_res = None
         win._aw_res_rbs = {}
-        for key, label in attrs_mod.TAG_GROUPS["Resolution"]:
-            rb = QRadioButton(label); res_group.addButton(rb); lr.addWidget(rb)
-            win._aw_res_rbs[key] = rb
-        layout.addWidget(g_res)
-
-        # Audio (shown for video files only)
-        win._aw_g_aud = QGroupBox("Audio"); la = QHBoxLayout(win._aw_g_aud)
         win._aw_audio_checks = {}
-        for key, label in attrs_mod.TAG_GROUPS["Audio"]:
-            cb = QCheckBox(label); la.addWidget(cb)
-            win._aw_audio_checks[key] = cb
-        layout.addWidget(win._aw_g_aud)
+        win._aw_g_aud = None
 
         # Usage
         g_meta = QGroupBox("Usage"); lm = QVBoxLayout(g_meta)
@@ -1154,6 +1173,7 @@ class AISearchApp(QMainWindow):
         # Buttons
         btn_row = QHBoxLayout()
         btn_save  = QPushButton("Save")
+        btn_save.setStyleSheet(cfg.btn_ss("btn_write", self.config))
         btn_clear = QPushButton("Clear")
         btn_close = QPushButton("Close"); btn_close.clicked.connect(win.close)
 
@@ -1170,7 +1190,8 @@ class AISearchApp(QMainWindow):
                                note=win._aw_note_edit.toPlainText().strip(),
                                confirmed=win._aw_confirmed_cb.isChecked(),
                                project=win._aw_proj_edit.text().strip(),
-                               scene=win._aw_scene_edit.text().strip() if is_video else "")
+                               scene=win._aw_scene_edit.text().strip() if is_video else "",
+                               editable=entry.get("editable", True))
             attrs_mod.save(self.current_project, self.attrs_data)
             row = self._current_row()
             self._refresh_inline_attrs(path)
@@ -1186,8 +1207,8 @@ class AISearchApp(QMainWindow):
         def _clear():
             for cb in win._aw_checks.values(): cb.setChecked(False)
             for cb in win._aw_audio_checks.values(): cb.setChecked(False)
-            win._aw_none_rb.setChecked(True)
-            win._aw_none_res.setChecked(True)
+            if win._aw_none_rb: win._aw_none_rb.setChecked(True)
+            if win._aw_none_res: win._aw_none_res.setChecked(True)
             win._aw_proj_edit.clear(); win._aw_scene_edit.clear()
             win._aw_note_edit.clear(); win._aw_confirmed_cb.setChecked(False)
 
@@ -1213,16 +1234,16 @@ class AISearchApp(QMainWindow):
             cb.setChecked(key in cur_tags)
 
         has_qual = bool(cur_tags & attrs_mod.QUALITY_TAGS)
-        win._aw_none_rb.setChecked(not has_qual)
+        if win._aw_none_rb: win._aw_none_rb.setChecked(not has_qual)
         for key, rb in win._aw_qual_rbs.items():
             rb.setChecked(key in cur_tags)
 
         has_res = bool(cur_tags & attrs_mod.RESOLUTION_TAGS)
-        win._aw_none_res.setChecked(not has_res)
+        if win._aw_none_res: win._aw_none_res.setChecked(not has_res)
         for key, rb in win._aw_res_rbs.items():
             rb.setChecked(key in cur_tags)
 
-        win._aw_g_aud.setVisible(is_video)
+        if win._aw_g_aud: win._aw_g_aud.setVisible(is_video)
         win._aw_scene_lbl.setVisible(is_video)
         win._aw_scene_edit.setVisible(is_video)
         for key, cb in win._aw_audio_checks.items():
@@ -1380,20 +1401,39 @@ class AISearchApp(QMainWindow):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
             self._settings_win = SettingsView(self, self, tab)
         else:
-            self._settings_win.show()
-            self._settings_win.raise_()
-            if tab:
-                self._settings_win.tabs.setCurrentIndex(tab)
+            # Refresh filename rules and attr sections from disk each time settings opens
+            _reload_fn = getattr(self._settings_win, '_reload_fn_rules', None)
+            if _reload_fn:
+                _reload_fn()
+        self._settings_win.show()
+        self._settings_win.raise_()
+        self._settings_win.activateWindow()
+        if tab:
+            self._settings_win.tabs.setCurrentIndex(tab)
 
     # ── Project management ───────────────────────────────────────────────────
 
     def set_project(self, name):
         # Save current project's config before switching
         cfg.save_config(self.config, self.current_project)
+        # Ensure per-project filename rules file exists so auto_rename doesn't
+        # bleed from the global fallback file into newly-created projects.
+        # Copy the global default so the new project inherits existing rules.
+        if name and name != "default":
+            _proj_rules_path = attrs_mod.filename_rules_save_path_for_project(name)
+            if not os.path.exists(_proj_rules_path):
+                _default_cfg = attrs_mod.load_filename_config(None)
+                attrs_mod.save_filename_config(dict(_default_cfg), name)
         # Reset preview window so it recreates fresh (same as app restart).
         # This avoids stale splitter/attr state from the old project.
         _ph = getattr(self, 'preview_handler', None)
         if _ph and _ph.window:
+            # Stop pending save timers BEFORE switching project data — otherwise
+            # the 800ms debounce fires after attrs_data is replaced with the new
+            # project's data, writing the old file's path into the wrong project.
+            _timer = getattr(_ph.window, '_text_save_timer', None)
+            if _timer:
+                _timer.stop()
             _g = _ph.window.geometry()
             self.config["preview_geometry"] = [_g.x(), _g.y(), _g.width(), _g.height()]
             _ph.window.hide()
@@ -1435,12 +1475,19 @@ class AISearchApp(QMainWindow):
                 _idx = _fn_cb.findText(name)
                 if _idx >= 0:
                     _fn_cb.setCurrentIndex(_idx)
-                else:
-                    _fn_cb.setCurrentText(name)
             # Reload rules + re-sync auto_rename + enable/disable container
             _reload_fn = getattr(_sw, '_reload_fn_rules', None)
             if _reload_fn:
                 _reload_fn()
+            # Sync attributes tab combo to current project + reload sections
+            _attr_cb = getattr(_sw, '_attr_proj_cb', None)
+            if _attr_cb:
+                _idx = _attr_cb.findText(name)
+                if _idx >= 0:
+                    _attr_cb.setCurrentIndex(_idx)
+            _reload_attr = getattr(_sw, '_reload_attr_sections', None)
+            if _reload_attr:
+                _reload_attr()
         _pw = getattr(getattr(self, "preview_handler", None), "window", None)
         if _pw:
             _chk = getattr(_pw, "_chk_auto_rename", None)
@@ -1448,9 +1495,6 @@ class AISearchApp(QMainWindow):
                 _chk.blockSignals(True)
                 _chk.setChecked(_ar)
                 _chk.blockSignals(False)
-            _btn = getattr(_pw, "_btn_auto_rename", None)
-            if _btn:
-                _btn.setVisible(_ar)
 
     def load_db(self):
         name = self.current_project.strip()
@@ -1518,18 +1562,44 @@ class AISearchApp(QMainWindow):
             self._watcher.deleteLater()
             self._watcher = None
         if not watch_dirs:
+            if getattr(self, '_watch_debounce', None):
+                self._watch_debounce.stop()
+            if getattr(self, '_watch_fallback', None):
+                self._watch_fallback.stop()
             return
         self._watcher = QFileSystemWatcher(watch_dirs, self)
         self._watcher.directoryChanged.connect(self._on_dir_changed)
+        # Debounce timer — restarted on each directory change; fires once after quiet period
+        if not getattr(self, '_watch_debounce', None):
+            self._watch_debounce = QTimer(self)
+            self._watch_debounce.setSingleShot(True)
+            self._watch_debounce.timeout.connect(self._scan_new_files)
+        # Periodic fallback: re-scan every 30s in case watcher missed an event
+        if not getattr(self, '_watch_fallback', None):
+            self._watch_fallback = QTimer(self)
+            self._watch_fallback.timeout.connect(self._scan_new_files)
+        self._watch_fallback.start(30_000)
 
     def _on_dir_changed(self, _path):
-        QTimer.singleShot(2000, self._scan_new_files)
+        # Restart the debounce timer — rapid changes collapse into one scan
+        self._watch_debounce.start(2000)
 
     def _scan_new_files(self):
         """Add new files from watch_dirs to the current project DB."""
+        try:
+            self._do_scan_new_files()
+        except Exception:
+            pass  # never let an exception permanently kill watch-dir detection
+
+
+    def _go_back(self):
+        """Go back: enter Browse mode on the current file's directory."""
+        self._enter_browse_mode()
+
+
+    def _do_scan_new_files(self):
         if not self.data: return
-        # Skip if a settings scan/rename is in progress — paths are being changed on disk
-        # and data["paths"] hasn't been updated yet, so missing/new detection would be wrong.
+        # Skip if a settings scan/rename is in progress
         if getattr(self, '_watcher_paused', False): return
         scan_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
         if not scan_dirs: return
@@ -1537,13 +1607,8 @@ class AISearchApp(QMainWindow):
         paths = self.data.get("paths", [])
         exts  = logic.EXT_IMG + logic.EXT_VID
 
-        # ── Remove missing files ──────────────────────────────────────────────
+        # ── Detect missing files ──────────────────────────────────────────────
         missing_idx = [i for i, p in enumerate(paths) if not os.path.exists(p)]
-        if missing_idx:
-            keep = [i for i in range(len(paths)) if i not in set(missing_idx)]
-            self.data["paths"]      = [paths[i] for i in keep]
-            self.data["embeddings"] = self.data["embeddings"][keep]
-            paths = self.data["paths"]
 
         # ── Add new files from watch dirs ─────────────────────────────────────
         known = set(os.path.normpath(p) for p in paths)
@@ -1556,71 +1621,125 @@ class AISearchApp(QMainWindow):
                     if fp not in known:
                         new_files.append(fp)
 
+        # ── Match moved files by filename before removing them ────────────────
+        # If a missing file has a unique basename match among new files, treat
+        # it as a move: reuse the embedding, transfer attrs, skip re-extraction.
+        if missing_idx and new_files:
+            import aisearch_attrs as _am_tmp
+            new_by_name = {}
+            for fp in new_files:
+                new_by_name.setdefault(os.path.basename(fp), []).append(fp)
+
+            moved_attrs_dirty = False
+            handled_missing = set()
+            handled_new = set()
+            for i in missing_idx:
+                old_path = paths[i]
+                candidates = new_by_name.get(os.path.basename(old_path), [])
+                if len(candidates) == 1:
+                    new_path = candidates[0]
+                    self.data["paths"][i] = new_path
+                    if old_path in self.attrs_data:
+                        self.attrs_data[new_path] = self.attrs_data.pop(old_path)
+                        moved_attrs_dirty = True
+                    handled_missing.add(i)
+                    handled_new.add(new_path)
+
+            if handled_missing:
+                missing_idx = [i for i in missing_idx if i not in handled_missing]
+                new_files   = [fp for fp in new_files if fp not in handled_new]
+                paths = self.data["paths"]
+                known = set(os.path.normpath(p) for p in paths)
+                if moved_attrs_dirty:
+                    _am_tmp.save(self.current_project, self.attrs_data)
+                torch.save(self.data,
+                           os.path.join(_am_tmp.DATA_DIR,
+                                        f"features_{self.current_project}.pt"))
+                # Refresh table for moved files
+                QTimer.singleShot(0, self.load_table)
+
+        # ── Remove truly missing files (not matched as moves) ─────────────────
+        if missing_idx:
+            keep = [i for i in range(len(self.data["paths"])) if i not in set(missing_idx)]
+            self.data["paths"]      = [self.data["paths"][i] for i in keep]
+            self.data["embeddings"] = self.data["embeddings"][keep]
+            paths = self.data["paths"]
+
+        # Sort by mtime so we process and preview the most recently created file
+        new_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+
         import aisearch_attrs as attrs_mod
         added = 0
         attrs_dirty = False
         retry_files = []
+        # Track sizes from last check for two-stage stability test
+        _prev_sizes = getattr(self, '_watch_prev_sizes', {})
+        _next_sizes = {}
         for path in new_files:
-            # Check file size is stable (not still being written)
             try:
-                sz1 = os.path.getsize(path)
+                sz = os.path.getsize(path)
             except OSError:
                 retry_files.append(path)
                 continue
+            if sz == 0:
+                retry_files.append(path)
+                continue
+            # Two-stage size check: skip if size changed since last attempt (still writing)
+            prev_sz = _prev_sizes.get(path)
+            if prev_sz is not None and sz != prev_sz:
+                _next_sizes[path] = sz
+                retry_files.append(path)
+                continue
+            if prev_sz is None:
+                # First sight — record size and defer one cycle to confirm stability
+                _next_sizes[path] = sz
+                retry_files.append(path)
+                continue
+            # prev_sz == sz and sz > 0 → file is stable, proceed
             emb = logic.extract_feature(path)
             if emb is None:
-                # Could still be mid-write — schedule a retry
                 retry_files.append(path)
                 continue
             self.data["paths"].append(path)
             self.data["embeddings"] = torch.cat(
                 [self.data["embeddings"], emb.unsqueeze(0)])
             added += 1
-            # Auto-detect info and mark editable for all watch-dir files
-            entry = dict(attrs_mod.get(self.attrs_data, path))
-            tags  = list(entry.get("tags", []))
-            changed = False
-            if not any(t in attrs_mod.RESOLUTION_TAGS for t in tags):
-                tag = attrs_mod.detect_resolution_tag(path)
-                if tag:
-                    tags = [t for t in tags if t not in attrs_mod.RESOLUTION_TAGS] + [tag]
-                    changed = True
-            if not any(t in attrs_mod.SOURCE_TAGS for t in tags):
-                src, prompt, seed = attrs_mod.detect_ai_source(path)
-                if src:
-                    tags = [t for t in tags if t not in attrs_mod.SOURCE_TAGS] + [src]
-                    changed = True
-                if prompt and not entry.get("prompt"):
-                    entry["prompt"] = prompt; changed = True
-                if seed and not entry.get("seed"):
-                    entry["seed"] = seed; changed = True
-            if not entry.get("meta"):
-                meta = attrs_mod.extract_metadata(path)
-                if meta:
-                    entry["meta"] = meta; changed = True
-            if not entry.get("editable", False):
-                entry["editable"] = True; changed = True
-            if changed:
-                entry["tags"] = tags
-                self.attrs_data[path] = entry
-                attrs_dirty = True
+            self.attrs_data = attrs_mod.auto_set_all(
+                self.attrs_data, path, self.current_project)
+            attrs_dirty = True
+        self._watch_prev_sizes = _next_sizes  # keep sizes only for pending files
+
         if attrs_dirty:
             attrs_mod.save(self.current_project, self.attrs_data)
 
         if missing_idx or added:
-            torch.save(self.data, f"features_{self.current_project}.pt")
+            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
             parts = []
-            if added:          parts.append(f"{added} added")
-            if missing_idx:    parts.append(f"{len(missing_idx)} removed")
-            self.statusBar().showMessage(
-                f"Auto-updated: {', '.join(parts)}.", 4000)
-            if added and new_files and not getattr(self, '_search_running', False):
-                newest = new_files[-1]
-                QTimer.singleShot(0, lambda p=newest: self.run_search(p))
+            if added:       parts.append(f"{added} added")
+            if missing_idx: parts.append(f"{len(missing_idx)} removed")
+            self.statusBar().showMessage(f"Auto-updated: {', '.join(parts)}.", 4000)
+            if added:
+                # Switch to browse mode on the folder where the newest file landed
+                added_paths = [p for p in new_files if p in set(self.data["paths"])]
+                if added_paths:
+                    added_paths.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+                    newest = added_paths[-1]
+                    def _browse_to_arrival(p=newest):
+                        if hasattr(self, '_search_cancel'):
+                            self._search_cancel[0] = True
+                        self._search_running = False
+                        self._enter_browse_mode(os.path.dirname(os.path.abspath(p)))
+                        target = os.path.normpath(p)
+                        for row in range(self.table.rowCount()):
+                            rpath = self.table.get_row_path(row)
+                            if rpath and os.path.normpath(rpath) == target:
+                                self._select_row(row)
+                                break
+                    QTimer.singleShot(0, _browse_to_arrival)
 
-        # Retry files that failed (still being written) — check again in 5s
+        # Re-check pending files after 3s
         if retry_files:
-            QTimer.singleShot(5000, self._scan_new_files)
+            self._watch_debounce.start(3000)
 
     # ── Duplicate finder ─────────────────────────────────────────────────────
 
@@ -1655,7 +1774,7 @@ class AISearchApp(QMainWindow):
         f = self._dup_file_path()
         if os.path.exists(f):
             os.remove(f)
-        self._find_duplicates()
+        self._run_dup_scan()
 
 
 
@@ -1823,12 +1942,18 @@ class AISearchApp(QMainWindow):
         self._dup_poll_timer.start(200)
 
     def _find_duplicates(self):
-        force_rescan = QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
-        if not force_rescan and os.path.exists(self._dup_file_path()):
+        """Enter dup mode. Load cached results if available; otherwise just show controls.
+        Actual scan is triggered by the ⟳ Scan button."""
+        self._update_mode_buttons("dup")
+        self._dup_controls_widget.show()
+        self.config["last_mode"] = "dup"
+        if os.path.exists(self._dup_file_path()):
             self._load_dup_results(update_spinner=False)
-            return
-        if force_rescan and os.path.exists(self._dup_file_path()):
-            os.remove(self._dup_file_path())
+        else:
+            self.lbl_dup_status.setText("Press ⟳ Scan to find duplicates.")
+
+    def _run_dup_scan(self):
+        """Actually run the duplicate scan (called by ⟳ Scan button)."""
 
         threshold = self.spin_threshold.value() / 100.0
         if threshold >= 1.0:
@@ -2074,7 +2199,7 @@ class AISearchApp(QMainWindow):
     def _dup_file_path(self):
         pct = self.spin_threshold.value()
         suffix = "hash" if pct >= 100 else f"{pct}pct"
-        return f"dups_{self.current_project}_{suffix}.json"
+        return os.path.join(attrs_mod.DATA_DIR, f"dups_{self.current_project}_{suffix}.json")
 
     def _save_dup_results(self):
         if not self._dup_display_data:
@@ -2597,12 +2722,16 @@ class AISearchApp(QMainWindow):
 
     def _update_mode_buttons(self, mode):
         """Highlight the active mode button; show dup controls only in dup mode."""
+        _sep_colors = {"search": "#2a8ad4", "dup": "#9b6dff", "browse": "#3a8a3a"}
         for btn, m in [(self.btn_mode_search, "search"),
                        (self.btn_find_dups,   "dup"),
                        (self.btn_browse,       "browse")]:
             active_ss, inactive_ss = self._mode_styles[m]
             btn.setStyleSheet(active_ss if m == mode else inactive_ss)
         self._dup_controls_widget.setVisible(mode == "dup")
+        pw = getattr(getattr(self, 'preview_handler', None), 'window', None)
+        if pw:
+            pw.set_mode_color(_sep_colors.get(mode, '#1a1a1a'))
 
     def _enter_search_mode(self):
         """Return to search mode — search selected row, last query, or just reset."""
@@ -2650,10 +2779,12 @@ class AISearchApp(QMainWindow):
         except PermissionError:
             return
         files = sorted(
-            os.path.join(directory, f)
-            for f in entries
-            if f.lower().endswith(valid_exts)
-            and os.path.isfile(os.path.join(directory, f))
+            (os.path.join(directory, f)
+             for f in entries
+             if f.lower().endswith(valid_exts)
+             and os.path.isfile(os.path.join(directory, f))),
+            key=lambda p: os.path.getmtime(p),
+            reverse=True  # newest first
         )
 
         self.table.setHorizontalHeaderLabels(["#", "Size", "Name", "Path", "Date"])
@@ -2665,7 +2796,7 @@ class AISearchApp(QMainWindow):
                              os.path.basename(fp),
                              self._mask_path(fp),
                              fp)
-        self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+        self.table.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
         self.table.setSortingEnabled(True)
 
         self._browse_bar.setText(f"📂  {directory}  —  {len(files)} files   [← left arrow to search]")
@@ -2731,7 +2862,7 @@ class AISearchApp(QMainWindow):
             keep = [i for i in range(len(self.data["paths"])) if i != idx]
             self.data["paths"]      = [self.data["paths"][i] for i in keep]
             self.data["embeddings"] = self.data["embeddings"][keep]
-            torch.save(self.data, f"features_{self.current_project}.pt")
+            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
         # Remove the row and select the next one
         was_query = (row == 0)
         self.table.removeRow(row)
@@ -2862,7 +2993,7 @@ class AISearchApp(QMainWindow):
             for i, p in enumerate(self.data["paths"]):
                 if os.path.normpath(p) == os.path.normpath(src_path):
                     self.data["paths"][i] = final_path
-                    torch.save(self.data, f"features_{self.current_project}.pt")
+                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
 
         self._update_row(row, src_path, final_path, overwrite, dest_path)
@@ -2899,7 +3030,7 @@ class AISearchApp(QMainWindow):
 
         self._post_move_dup_cleanup()
         if db_changed and self.data:
-            torch.save(self.data, f"features_{self.current_project}.pt")
+            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
 
     def move_to_folder_manually(self):
         row = self._current_row()
@@ -2961,7 +3092,7 @@ class AISearchApp(QMainWindow):
                 pass
             name_item.setFlags(orig_flags)
 
-            if hint == QAbstractItemDelegate.EndEditHint.RevertModelData:
+            if hint == QAbstractItemDelegate.EndEditHint.RevertModelCache:
                 name_item.setText(old_name)
                 return
 
@@ -2978,7 +3109,7 @@ class AISearchApp(QMainWindow):
                 if self.data and "paths" in self.data and old_path in self.data["paths"]:
                     idx = self.data["paths"].index(old_path)
                     self.data["paths"][idx] = new_path
-                    torch.save(self.data, f"features_{self.current_project}.pt")
+                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                 if old_path in self.attrs_data:
                     self.attrs_data[new_path] = self.attrs_data.pop(old_path)
                     attrs_mod.save(self.current_project, self.attrs_data)
@@ -3092,7 +3223,7 @@ class AISearchApp(QMainWindow):
 
         if deleted_any:
             if self.data:
-                torch.save(self.data, f"features_{self.current_project}.pt")
+                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
             self._cleanup_singleton_groups()
             self._rebuild_dup_display_data()
             self._save_dup_results()

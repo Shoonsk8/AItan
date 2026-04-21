@@ -1,11 +1,13 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QScrollArea, QFrame,
-                              QToolButton, QApplication, QInputDialog, QMessageBox)
+                              QToolButton, QApplication, QInputDialog, QMessageBox,
+                              QMenu, QComboBox)
 from PyQt6.QtCore import Qt, QTimer, QMimeData
 from PyQt6.QtGui import QPixmap, QDrag
 
 import aisearch_attrs as attrs_mod
+import aisearch_config as cfg
 
 _CARD_MIME  = "PERSON_CARD"
 _GROUP_MIME = "REORDER_PERSON_GROUP"
@@ -39,12 +41,15 @@ class _PersonCard(QFrame):
     _SS_DROP   = "QFrame { background:#252535; border:1px solid #5566bb; border-radius:5px; }"
 
     def __init__(self, pid: str, src: str, click_cb=None,
-                 unlink_cb=None, show_unlink=False, link_cb=None, parent=None):
+                 unlink_cb=None, show_unlink=False, link_cb=None,
+                 attrs_getter=None, parent=None):
         super().__init__(parent)
         self._pid = pid
+        self._src = src
         self._click_cb = click_cb
         self._unlink_cb = unlink_cb
         self._link_cb = link_cb   # if set, card accepts drops to create a new group
+        self._attrs_getter = attrs_getter  # callable(path) → attrs dict
         self._drag_start = None
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setStyleSheet(self._SS_NORMAL)
@@ -101,6 +106,47 @@ class _PersonCard(QFrame):
         root.addWidget(lbl)
 
         self.setFixedWidth(_THUMB + 16)
+
+    # ── Context menu ──────────────────────────────────────────────────────────
+
+    def contextMenuEvent(self, event):
+        path = self._src
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu{background:#2a2a2a;color:#ddd;border:1px solid #555;}"
+            "QMenu::item:selected{background:#4a7a4e;}"
+            "QMenu::separator{background:#555;height:1px;margin:2px 0;}")
+        act_path     = menu.addAction("📋 Copy Path")
+        act_filename = menu.addAction("📋 Copy Filename")
+        act_stem     = menu.addAction("📋 Copy Stem (no ext)")
+        if self._attrs_getter and path:
+            menu.addSeparator()
+            act_attrs = menu.addAction("📋 Copy Attributes")
+        else:
+            act_attrs = None
+        chosen = menu.exec(event.globalPos())
+        if not chosen:
+            return
+        cb = QApplication.clipboard()
+        if chosen == act_path and path:
+            cb.setText(os.path.abspath(path))
+        elif chosen == act_filename and path:
+            cb.setText(os.path.basename(path))
+        elif chosen == act_stem and path:
+            cb.setText(os.path.splitext(os.path.basename(path))[0])
+        elif chosen == act_attrs and path and self._attrs_getter:
+            entry = self._attrs_getter(path) or {}
+            parts = []
+            tags = entry.get("tags", [])
+            if tags:
+                parts.append("tags: " + ", ".join(tags))
+            coded = entry.get("coded", {})
+            if coded:
+                parts.append("coded: " + str(coded))
+            note = entry.get("note", "")
+            if note:
+                parts.append("note: " + note)
+            cb.setText("\n".join(parts) if parts else "(no attributes)")
 
     # ── Mouse: drag + click ───────────────────────────────────────────────────
 
@@ -213,6 +259,12 @@ class _PersonGroup(QWidget):
                 name = n
                 self._primary_pid = p
                 break
+        # Default name: decimal number derived from the hex person ID
+        if not name:
+            try:
+                name = str(int(self._primary_pid, 16))
+            except ValueError:
+                name = self._primary_pid
 
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("Person name…")
@@ -232,6 +284,10 @@ class _PersonGroup(QWidget):
         # Also save immediately on Return / focus-loss
         self._name_edit.editingFinished.connect(
             lambda: save_name_cb(self._primary_pid, self._name_edit.text().strip()))
+
+        # If no existing name was in the registry, persist the default number now
+        if show_name and not any(registry.get(p, "") for p in sorted_pids):
+            QTimer.singleShot(0, lambda: save_name_cb(self._primary_pid, self._name_edit.text().strip()))
 
         hdr_lay.addWidget(self._name_edit, stretch=1)
 
@@ -279,6 +335,8 @@ class _PersonGroup(QWidget):
                 click_cb=_mk_click(),
                 unlink_cb=unlink_cb,
                 show_unlink=multi,
+                attrs_getter=lambda _s=src: attrs_mod.get(
+                    getattr(self._app, "attrs_data", {}), _s) if _s else {},
             )
             cards_lay.addWidget(card)
 
@@ -577,21 +635,133 @@ class _PersonMixin:
 
         # ── Header ───────────────────────────────────────────────────────────
         hdr = QHBoxLayout()
-        self._person_tab_proj_lbl = QLabel()
-        self._person_tab_proj_lbl.setStyleSheet("color:#66ccff;")
-        hdr.addWidget(self._person_tab_proj_lbl)
+        hdr.addWidget(QLabel("Project:"))
+        self._person_proj_cb = QComboBox()
+        self._person_proj_cb.wheelEvent = lambda e: e.ignore()
+        _person_projs = ["default"] + sorted(
+            f.replace("features_", "").replace(".pt", "")
+            for f in os.listdir(attrs_mod.DATA_DIR)
+            if f.startswith("features_") and f.endswith(".pt")
+        )
+        self._person_proj_cb.addItems(_person_projs)
+        _cur_proj = getattr(self.app, "current_project", "default") or "default"
+        _idx = self._person_proj_cb.findText(_cur_proj)
+        self._person_proj_cb.blockSignals(True)
+        if _idx >= 0:
+            self._person_proj_cb.setCurrentIndex(_idx)
+        self._person_proj_cb.blockSignals(False)
+        hdr.addWidget(self._person_proj_cb)
+
+        btn_person_load = QPushButton("Load")
+        btn_person_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
+        hdr.addWidget(btn_person_load)
+
+        self._btn_person_over = btn_person_over = QPushButton("💾 Overwrite")
+        btn_person_over.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
+        hdr.addWidget(btn_person_over)
+
+        self._person_undo_stack = []  # list of (proj, registry_dict)
+        self._btn_person_undo = QPushButton("↩ Undo")
+        self._btn_person_undo.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:3px 8px;"))
+        self._btn_person_undo.setEnabled(False)
+        self._btn_person_undo.setToolTip("Undo last Overwrite or Append")
+        hdr.addWidget(self._btn_person_undo)
+
+        self._btn_person_append = btn_person_append = QPushButton("💾 Append")
+        btn_person_append.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
+        hdr.addWidget(btn_person_append)
+
+        self._person_editing_lbl = QLabel()
+        self._person_editing_lbl.setStyleSheet("color:#aaa; font-style:italic;")
+        hdr.addWidget(self._person_editing_lbl)
+
         hdr.addStretch()
+
         btn_new_group = QPushButton("+ New Group")
-        btn_new_group.setFixedWidth(100)
-        btn_new_group.setStyleSheet(
-            "QPushButton { background:#2a3a2a; color:#88cc88; border:1px solid #446644; "
-            "border-radius:3px; } QPushButton:hover { background:#3a4a3a; }")
+        btn_new_group.setMinimumWidth(130)
+        btn_new_group.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "border:none; border-radius:3px;"))
         btn_new_group.clicked.connect(self._add_pending_group)
         hdr.addWidget(btn_new_group)
         btn_refresh = QPushButton("↺ Refresh")
-        btn_refresh.setFixedWidth(90)
-        btn_refresh.clicked.connect(lambda: self._refresh_person_tab())
+        btn_refresh.setMinimumWidth(110)
+        btn_refresh.clicked.connect(lambda: self._refresh_person_tab(self._person_proj_cb.currentText() or None))
         hdr.addWidget(btn_refresh)
+
+        def _do_person_load():
+            name = self._person_proj_cb.currentText() or None
+            self._refresh_person_tab(name)
+        def _push_undo(proj):
+            """Save current state of proj's registry to undo stack."""
+            snapshot = dict(attrs_mod.load_person_registry(proj))
+            self._person_undo_stack.append((proj, snapshot))
+            self._btn_person_undo.setEnabled(True)
+
+        def _do_undo():
+            if not self._person_undo_stack:
+                return
+            proj, snapshot = self._person_undo_stack.pop()
+            attrs_mod.save_person_registry(snapshot, proj)
+            if not self._person_undo_stack:
+                self._btn_person_undo.setEnabled(False)
+            # Refresh view if we undid the currently loaded project
+            if proj == getattr(self, '_person_tab_project', None):
+                self._rebuild_person_groups()
+
+        def _do_person_overwrite():
+            import shutil
+            from PyQt6.QtWidgets import QMessageBox, QCheckBox as _QCB
+            target = self._person_proj_cb.currentText() or None
+            src_proj = self._person_tab_project
+            src_f = attrs_mod.person_registry_file_for_project(src_proj)
+            dst_f = attrs_mod.person_registry_file_for_project(target)
+            if src_f == dst_f:
+                return
+            if not getattr(self, '_person_overwrite_skip_warn', False):
+                _mb = QMessageBox(self)
+                _mb.setIcon(QMessageBox.Icon.Warning)
+                _mb.setWindowTitle("Overwrite")
+                _mb.setText(f"This will overwrite the person registry for <b>'{target or 'default'}'</b>.<br>Continue?")
+                _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                _cb = _QCB("Don't show this warning again")
+                _mb.setCheckBox(_cb)
+                if _mb.exec() != QMessageBox.StandardButton.Yes:
+                    return
+                if _cb.isChecked():
+                    self._person_overwrite_skip_warn = True
+            _push_undo(target)
+            if os.path.exists(src_f):
+                shutil.copy2(src_f, dst_f)
+            if hasattr(self, '_btn_person_over'):
+                self._flash_saved_btn(self._btn_person_over)
+
+        def _do_person_append():
+            from PyQt6.QtWidgets import QMessageBox
+            target = self._person_proj_cb.currentText() or None
+            src_proj = self._person_tab_project
+            if attrs_mod.person_registry_file_for_project(src_proj) == \
+               attrs_mod.person_registry_file_for_project(target):
+                return
+            src_reg = attrs_mod.load_person_registry(src_proj)
+            dst_reg = attrs_mod.load_person_registry(target)
+            added = 0
+            for pid, desc in src_reg.items():
+                if pid not in dst_reg:
+                    dst_reg[pid] = desc
+                    added += 1
+            _push_undo(target)
+            attrs_mod.save_person_registry(dst_reg, target)
+            if hasattr(self, '_btn_person_append'):
+                self._flash_saved_btn(self._btn_person_append)
+
+        from PyQt6.QtGui import QKeySequence
+        from PyQt6.QtGui import QShortcut
+        _undo_sc = QShortcut(QKeySequence("Ctrl+Z"), tab_w)
+        _undo_sc.activated.connect(_do_undo)
+
+        btn_person_load.clicked.connect(_do_person_load)
+        btn_person_over.clicked.connect(_do_person_overwrite)
+        btn_person_append.clicked.connect(_do_person_append)
+        self._btn_person_undo.clicked.connect(_do_undo)
         outer.addLayout(hdr)
 
         # ── Two-column splitter ───────────────────────────────────────────────
@@ -624,9 +794,17 @@ class _PersonMixin:
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         outer.addWidget(splitter)
+        self._person_splitter = splitter
+
+        # Loading placeholder — shown until first _rebuild_person_groups completes
+        self._person_loading_lbl = QLabel("Loading…")
+        self._person_loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._person_loading_lbl.setStyleSheet("color:#888; font-size:16px; padding:40px;")
+        outer.addWidget(self._person_loading_lbl)
+        splitter.setVisible(False)
 
         tabs.addTab(tab_w, "👤 Persons")
-        QTimer.singleShot(0, self._refresh_person_tab)
+        QTimer.singleShot(0, lambda: self._refresh_person_tab(self._person_proj_cb.currentText() or None))
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -634,9 +812,16 @@ class _PersonMixin:
         if proj is None:
             proj = getattr(self.app, "current_project", "")
         self._person_tab_project = proj
-        if not hasattr(self, '_person_tab_proj_lbl'):
-            return  # tab not built yet — will pick up correct project when built
-        self._person_tab_proj_lbl.setText(f"Project: <b>{proj}</b>")
+        if not hasattr(self, '_person_proj_cb'):
+            return  # tab not built yet
+        cb = self._person_proj_cb
+        _idx = cb.findText(proj or "default")
+        if _idx >= 0:
+            cb.blockSignals(True)
+            cb.setCurrentIndex(_idx)
+            cb.blockSignals(False)
+        if hasattr(self, '_person_editing_lbl'):
+            self._person_editing_lbl.setText(f"Editing: {proj or 'default'}")
         self._rebuild_person_groups()
 
     def _rebuild_person_groups(self):
@@ -655,13 +840,12 @@ class _PersonMixin:
                 item.widget().deleteLater()
 
         proj       = getattr(self, "_person_tab_project", None) or getattr(self.app, "current_project", "")
-        registry   = attrs_mod.load_person_registry()
+        registry   = attrs_mod.load_person_registry(proj)
         db         = attrs_mod.load_faces_db(proj)
         faces      = db.get("faces", {})
         aliases      = attrs_mod.load_person_aliases()
         right_groups = attrs_mod.load_right_groups()
-        all_pids   = sorted(p for p in set(list(faces.keys()) + list(registry.keys()))
-                            if p != "000")
+        all_pids   = sorted(p for p in faces.keys() if p != "000")
 
         pid_to_path = {}
         # Primary: face DB source_path
@@ -729,6 +913,14 @@ class _PersonMixin:
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             right_lay.insertWidget(0, lbl)
 
+        # Hide loading label, show content
+        _loading = getattr(self, '_person_loading_lbl', None)
+        if _loading and _loading.isVisible():
+            _loading.setVisible(False)
+        _splitter = getattr(self, '_person_splitter', None)
+        if _splitter and not _splitter.isVisible():
+            _splitter.setVisible(True)
+
     def _open_person_preview(self, pid, src):
         ph = getattr(getattr(self, "app", None), "preview_handler", None)
         # Try source_path first
@@ -748,9 +940,9 @@ class _PersonMixin:
         """Remove a person ID from registry, faces DB, and aliases."""
         proj = getattr(self, "_person_tab_project", None) or getattr(self.app, "current_project", "")
         # Registry
-        registry = attrs_mod.load_person_registry()
+        registry = attrs_mod.load_person_registry(proj)
         registry.pop(pid, None)
-        attrs_mod.save_person_registry(registry)
+        attrs_mod.save_person_registry(registry, proj)
         # Faces DB
         db = attrs_mod.load_faces_db(proj)
         db.get("faces", {}).pop(pid, None)
@@ -796,7 +988,7 @@ class _PersonMixin:
     def _promote_pending_group(self, pending_widget, pid):
         """Replace the pending drop zone with a real single-member group."""
         proj       = getattr(self, "_person_tab_project", None) or getattr(self.app, "current_project", "")
-        registry   = attrs_mod.load_person_registry()
+        registry   = attrs_mod.load_person_registry(proj)
         db         = attrs_mod.load_faces_db(proj)
         faces      = db.get("faces", {})
         pid_to_path = {}

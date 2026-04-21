@@ -1,5 +1,6 @@
 import os
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, QApplication)
+from PyQt6.QtCore import Qt
 import aisearch_config as cfg
 from aisearch_settings_widgets import _WsSec, _WsGroup
 from aisearch_settings_db import _DbMixin
@@ -7,13 +8,20 @@ from aisearch_settings_appearance import _AppearanceMixin
 from aisearch_settings_attrs import _AttrsMixin
 from aisearch_settings_filename import _FilenameMixin
 from aisearch_settings_person import _PersonMixin
+from aisearch_settings_metadata import _MetadataMixin
+from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "1.95"
+VERSION = "1.96"
 
 
-class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, QDialog):
+class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
     def __init__(self, parent, app_instance, initial_tab=0):
         super().__init__(parent)
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint)
         self.app = app_instance
         self.setWindowTitle(f"Settings & DB Maintenance - Ver {VERSION}")
         self.resize(800, 850)
@@ -43,13 +51,16 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
             self._build_appearance_tab,   # Tab 4: 🖌 Appearance
             self._build_attrs_tab,        # Tab 5: 🏷 Attributes
             self._build_filename_tab,     # Tab 6: 📁 Filename Rules
+            self._build_metadata_tab,     # Tab 7: 🔗 Meta Map
+            self._build_canvas_tab,       # Tab 8: 🖼 Canvas
         ]
         self._tabs_built = set()
         self._tabs_ready = set()   # set after actual widget build completes
 
         # Add placeholder widgets so tab labels are visible immediately
         _labels = ["🗄 Database", "👤 Persons", "⚙ Settings",
-                   "🎨 Thresholds", "🖌 Appearance", "🏷 Attributes", "📁 Filename Rules"]
+                   "🎨 Thresholds", "🖌 Appearance", "🏷 Attributes", "📁 Filename Rules",
+                   "🔗 Meta Map", "🖼 Canvas"]
         for lbl in _labels:
             self.tabs.addTab(QWidget(), lbl)
 
@@ -78,6 +89,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         last = self.tabs.count() - 1
         lbl = self.tabs.tabText(last)
         widget = self.tabs.widget(last)
+        self.tabs.setUpdatesEnabled(False)
         self.tabs.removeTab(last)
         self.tabs.removeTab(index)  # Qt auto-switches away from current tab here
         self.tabs.insertTab(index, widget, lbl)
@@ -85,6 +97,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
             placeholder.deleteLater()
         # Restore selection — removeTab(index) above switches Qt to a different tab
         self.tabs.setCurrentIndex(index)
+        self.tabs.setUpdatesEnabled(True)
         self._tabs_ready.add(index)
         # If tab 0 just finished building, run the sync that showEvent couldn't
         if index == 0:
@@ -95,6 +108,18 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         # Re-sync the scan section once tab 0 widgets are actually ready
         if 0 in self._tabs_ready:
             self._sync_scan_section(self.app.current_project)
+
+    def _flash_saved_btn(self, btn, ms=1800):
+        """Briefly turn button green with '✓ Saved' text, then restore."""
+        from PyQt6.QtCore import QTimer
+        orig_text = btn.text()
+        orig_ss   = btn.styleSheet()
+        btn.setText("✓ Saved")
+        btn.setStyleSheet(
+            "QPushButton { background:#1a7a1a; color:#ccffcc; font-weight:bold;"
+            " border:1px solid #44cc44; padding:3px 10px; }"
+            "QPushButton:hover { background:#1a9a1a; }")
+        QTimer.singleShot(ms, lambda: (btn.setText(orig_text), btn.setStyleSheet(orig_ss)))
 
     def closeEvent(self, event):
         # Always hide instead of destroy — avoids rebuilding all tabs on next open

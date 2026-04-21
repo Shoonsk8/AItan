@@ -5,15 +5,15 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QMenu,
                               QApplication, QDialog, QHBoxLayout, QPushButton,
                               QCheckBox, QComboBox, QGridLayout, QLineEdit,
                               QTextEdit, QScrollArea, QSizePolicy,
-                              QSplitter, QSplitterHandle, QToolButton)
+                              QSplitter, QSplitterHandle, QToolButton, QMessageBox)
 import aisearch_attrs as attrs_mod
-from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize
+from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor, QImage
 
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 
-VERSION = "1.95"
+VERSION = "1.96"
 
 
 def _read_embedded_meta(path):
@@ -107,7 +107,7 @@ def _bake_embedded_meta(path, data):
         "person_id":  data.get("person_id", ""),
     })
     try:
-        if ext.endswith(('.mp4', '.m4v')):
+        if ext.endswith(('.mp4', '.m4v', '.mov')):
             from mutagen.mp4 import MP4
             video = MP4(path)
             video["\xa9cmt"] = [f"PROMPT: {data.get('prompt','')}\nDATA: {payload}"]
@@ -316,16 +316,14 @@ class _AttrSection(QWidget):
 
         lbl = QLabel(title)
         lbl.setStyleSheet("color:#f0c040; font-weight:bold; font-size:9pt;")
-        hdr_lay.addWidget(lbl, stretch=1)
+        hdr_lay.addWidget(lbl)
 
-        # Arrange-mode drag handle (hidden until arrange mode is on)
-        self._drag_handle = QLabel("⠿")
-        self._drag_handle.setFixedSize(22, 18)
-        self._drag_handle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._drag_handle.setStyleSheet("color:#888; font-size:12pt;")
-        self._drag_handle.setCursor(Qt.CursorShape.SizeVerCursor)
-        self._drag_handle.setVisible(False)
-        hdr_lay.addWidget(self._drag_handle)
+        self._info_lbl = QLabel("")
+        self._info_lbl.setStyleSheet("color:#888; font-size:8pt;")
+        self._info_lbl.setVisible(False)
+        hdr_lay.addWidget(self._info_lbl)
+
+        self._hdr_lay = hdr_lay   # exposed so callers can append widgets
 
         root.addWidget(hdr)
 
@@ -353,6 +351,10 @@ class _AttrSection(QWidget):
             p.updateGeometry()
             p = p.parentWidget()
 
+    def set_info(self, text: str):
+        self._info_lbl.setText(text)
+        self._info_lbl.setVisible(bool(text))
+
     def set_expand_callback(self, cb):
         self._expand_cb = cb
 
@@ -375,9 +377,12 @@ _THUMB_CACHE: dict = {}
 
 class PreviewWindow(QWidget):
     """Standalone preview window."""
+    _raw_refresh_signal = pyqtSignal(str)   # emitted from background thread with file path
+
     def __init__(self, handler):
         super().__init__()
         self.handler = handler
+        self._file_info_text = ""
         self.setWindowFlag(Qt.WindowType.Window)
         self.resize(700, 700)
         self.setStyleSheet("background-color: black;")
@@ -388,6 +393,7 @@ class PreviewWindow(QWidget):
         self._resize_timer.setInterval(80)
         self._resize_timer.timeout.connect(self._on_resize_settled)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._raw_refresh_signal.connect(self._on_raw_refresh)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -441,6 +447,14 @@ class PreviewWindow(QWidget):
         self._btn_toggle_left.clicked.connect(self._toggle_attrs)
         _lbar_layout.addWidget(self._btn_toggle_left)
         _lbar_layout.addStretch()
+        self._btn_back_left = QPushButton("⏮")
+        self._btn_back_left.setFlat(True)
+        self._btn_back_left.setToolTip("Go back to previously viewed file")
+        self._btn_back_left.setStyleSheet(
+            "color: #aaa; background-color: #1a1a1a; border: none; padding: 4px;")
+        self._btn_back_left.setFixedSize(26, 26)
+        self._btn_back_left.clicked.connect(handler._go_back_from_preview)
+        _lbar_layout.addWidget(self._btn_back_left)
         self._btn_orient_left = QPushButton("⇕")
         self._btn_orient_left.setFlat(True)
         self._btn_orient_left.setToolTip("Toggle attr pane side / below")
@@ -474,6 +488,14 @@ class PreviewWindow(QWidget):
         self._btn_toggle_top.setFixedHeight(26)
         self._btn_toggle_top.clicked.connect(self._toggle_attrs)
         _tbar_layout.addWidget(self._btn_toggle_top)
+        self._btn_back_top = QPushButton("⏮")
+        self._btn_back_top.setFlat(True)
+        self._btn_back_top.setToolTip("Go back to previously viewed file")
+        self._btn_back_top.setStyleSheet(
+            "color: #aaa; background-color: #1a1a1a; border: none; padding: 4px;")
+        self._btn_back_top.setFixedSize(26, 26)
+        self._btn_back_top.clicked.connect(handler._go_back_from_preview)
+        _tbar_layout.addWidget(self._btn_back_top)
         self.btn_orient = QPushButton("⇔")
         self.btn_orient.setFlat(True)
         self.btn_orient.setToolTip("Toggle attr pane side / below")
@@ -486,6 +508,15 @@ class PreviewWindow(QWidget):
 
         # btn_toggle_attrs points to whichever strip is active (top in vertical mode)
         self.btn_toggle_attrs = self._btn_toggle_top
+
+        # Info bar — shown in horizontal mode above the attr scroll
+        self._info_bar = QLabel("")
+        self._info_bar.setFixedHeight(18)
+        self._info_bar.setStyleSheet(
+            "background-color: #1a1a1a; color: #888; font-size: 8pt; padding: 0 6px;")
+        self._info_bar.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self._info_bar.setVisible(False)
+        _inner_vbox.addWidget(self._info_bar)
 
         # Attr panel scroll area — panel built lazily on first expand/navigate
         _tags_f = attrs_mod.tags_file_for_project(
@@ -539,23 +570,6 @@ class PreviewWindow(QWidget):
 
     def eventFilter(self, obj, event):
         """Catch mouse press/release and drops on the scroll area viewport and label."""
-        # --- Section drag-handle events ---
-        for sec in getattr(self, '_attr_sections', []):
-            if obj is sec._drag_handle:
-                t = event.type()
-                if t == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                    self._drag_sec = sec
-                    return True
-                elif t == QEvent.Type.MouseMove and getattr(self, '_drag_sec', None) is sec:
-                    self._do_drag_move(event.globalPosition().toPoint().y())
-                    return True
-                elif t == QEvent.Type.MouseButtonRelease:
-                    if getattr(self, '_drag_sec', None) is sec:
-                        self._drag_sec = None
-                        self._save_section_order()
-                    return True
-                break
-
         # --- Scroll area / label events ---
         if obj is self.scroll_area.viewport() or obj is self.label:
             if event.type() == QEvent.Type.MouseButtonPress:
@@ -613,6 +627,8 @@ class PreviewWindow(QWidget):
             self.handler._copy_path_to_clipboard()
         elif key == Qt.Key.Key_Delete:
             self.handler.app.delete_file()
+        elif key == Qt.Key.Key_Backspace:
+            self.handler._go_back_from_preview()
         elif key == Qt.Key.Key_Down:
             self.handler._navigate(1)
         elif key == Qt.Key.Key_Up:
@@ -663,53 +679,14 @@ class PreviewWindow(QWidget):
         _key_to_group = {k: grp for grp, keys in _sec_groups.items() for k in keys}
         def _grp_name(key): return _key_to_group.get(key, key)
 
-        # Top row: info label + Quality + Change File Name
-        r1 = QHBoxLayout()
-        self._info_label = QLabel("")
-        self._info_label.setStyleSheet("color: #e0e0e0;")
-        r1.addWidget(self._info_label, stretch=1)
-        lq = QLabel("Quality:")
-        lq.setStyleSheet("color: #aaa;")
-        r1.addWidget(lq)
+        # Keep _quality_combo as orphan widget for _save_attrs/_refresh_attrs compat
         self._quality_combo = QComboBox()
+        self._quality_combo.wheelEvent = lambda e: e.ignore()
         self._quality_combo.addItem("—", "")
-        for key, lbl in attrs_mod.TAG_GROUPS["Quality"]:
+        for key, lbl in attrs_mod.TAG_GROUPS.get("Quality", []):
             self._quality_combo.addItem(lbl, key)
-        self._quality_combo.setFixedWidth(105)
         self._quality_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._quality_combo.currentIndexChanged.connect(self._save_attrs)
-        r1.addWidget(self._quality_combo)
-        self._btn_auto_rename = QPushButton("Change File Name")
-        self._btn_auto_rename.setStyleSheet(
-            "QPushButton { background-color: #22aa66; color: white; border: none; padding: 3px 8px; font-weight: bold; }"
-            "QPushButton:disabled { background-color: #555555; color: #888888; border: none; padding: 3px 8px; }"
-        )
-        self._btn_auto_rename.setToolTip(
-            "Detect person ID + pose, then rename to canonical form")
-        self._btn_auto_rename.clicked.connect(self._on_auto_rename)
-        self._btn_auto_rename.setVisible(
-            attrs_mod.load_filename_config(getattr(self.handler.app, "current_project", None)).get("auto_rename", False))
-        r1.addWidget(self._btn_auto_rename)
-
-        self._btn_arrange = QPushButton("≡ Arrange")
-        self._btn_arrange.setCheckable(True)
-        self._btn_arrange.setFixedWidth(78)
-        self._btn_arrange.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._btn_arrange.setStyleSheet(
-            "QPushButton { background:#3a3a3a; color:#aaa; border:none; padding:3px 6px; }"
-            "QPushButton:checked { background:#4a3a6e; color:#ddd; }")
-        self._btn_arrange.toggled.connect(self._toggle_arrange_mode)
-        r1.addWidget(self._btn_arrange)
-        self._protected_check = QPushButton("🔓 Editable")
-        self._protected_check.setCheckable(True)
-        self._protected_check.setToolTip("🔓 Editable — app may auto-rename\n🔒 Locked — app will not rename")
-        self._protected_check.setStyleSheet(
-            "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
-        self._protected_check.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._protected_check.toggled.connect(self._save_attrs)
-        self._protected_check.toggled.connect(self._apply_protected_lock)
-        r1.addWidget(self._protected_check)
-        vbox.addLayout(r1)
 
         # Note row (at top for quick access) — hidden when project defines "note" as a text field
         self._note_row_widget = QWidget()
@@ -723,11 +700,8 @@ class PreviewWindow(QWidget):
         self._project_edit.setStyleSheet(
             "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
         self._project_edit.editingFinished.connect(self._save_attrs)
-        self._project_edit.textChanged.connect(lambda _: self._update_bake_btn("pending"))
         r_title.addWidget(self._project_edit, stretch=1)
-        vbox.addWidget(self._note_row_widget)
-
-        self._attr_cbs = {}
+        # note row kept as orphan widget (referenced by _refresh_attrs/_save_attrs)
 
         # ── Coded filename fields ─────────────────────────────────────────
         _field_ss = "background:#3a3a3a; color:#e0e0e0; border:1px solid #555; font-family:monospace;"
@@ -745,6 +719,7 @@ class PreviewWindow(QWidget):
 
         # Editable combo — shows registered IDs, user can type a new one
         self._person_id_combo = QComboBox()
+        self._person_id_combo.wheelEvent = lambda e: e.ignore()
         self._person_id_combo.setEditable(True)
         self._person_id_combo.setMinimumWidth(140)
         self._person_id_combo.setStyleSheet(_field_ss)
@@ -769,7 +744,7 @@ class PreviewWindow(QWidget):
         self._btn_detect_person.setVisible(False)  # disabled — not working
         self._btn_detect_person.clicked.connect(self._on_detect_person)
 
-        vbox.addLayout(rA)
+        # person row kept as orphan (referenced by _refresh_attrs/_save_attrs)
         self._refresh_person_id_combo()   # populate from face DB
 
         # ── Coded fields — collapsible sections ─────────────────────────────
@@ -797,7 +772,7 @@ class PreviewWindow(QWidget):
                 "WH": [("WH_Hip", 1, "Hip"),        ("WH_Waist", 2, "Waist")],
                 "PM": [("PM_Motion", 1, "Motion"),  ("PM_Posture", 2, "Posture")],
                 "CS": [("CS_Light", 1, "Light"),    ("CS_Angle", 2, "Angle"), ("CS_Shot", 3, "Shot")],
-                "BG": [("BG_Major", 3, "Major")],
+                "BG": [("Background", 3, "Major")],
             }
 
         # Helper: decode a coded field value to human-readable string
@@ -827,6 +802,7 @@ class PreviewWindow(QWidget):
 
         def _make_combo(sub_grp):
             cb = QComboBox()
+            cb.wheelEvent = lambda e: e.ignore()
             cb.setMaximumWidth(148)
             cb.setStyleSheet("background:#3a3a3a; color:#e0e0e0; border:1px solid #555;")
             cb.addItem("—", "")
@@ -893,7 +869,7 @@ class PreviewWindow(QWidget):
             # J (Julian) is auto-set by the program — show as read-only label
             if letter == "J":
                 fe2 = QLineEdit()
-                fe2.setFixedWidth(75)    # wide enough for "250408"
+                fe2.setFixedWidth(130)   # wide enough for "26-04-17 10:30:45"
                 fe2.setReadOnly(True)
                 fe2.setStyleSheet(
                     "background:#1a1a1a; color:#888888; border:1px solid #333;"
@@ -929,8 +905,10 @@ class PreviewWindow(QWidget):
         # _COMBO_ALIAS: section key in __section_groups__ → CODED_FIELDS key
         # (e.g. H in config → HC in CODED_FIELDS; used so _code_combos key matches parse output)
         _COMBO_ALIAS  = {"H": "HC"}
-        # Styles that should be skipped (handled by taglist/text loop below)
-        _SKIP_STYLES  = {"matrix", "boolean", "taglist", "text", ""}
+        # Coded styles → rendered in the group coded-section widget
+        # Soft styles  → rendered in the soft sections area (taglist/combo/text)
+        _CODED_STYLES = {"id", "1dig", "2dig", "3dig"}
+        _SKIP_STYLES  = {"matrix", "boolean", "taglist", "text", ""}  # skip in coded widget
         _STYLE_DIGITS = {"1dig": 1, "2dig": 2, "3dig": 3}
 
         def _add_id_field(sec_layout, key):
@@ -940,6 +918,20 @@ class PreviewWindow(QWidget):
             _display = _field_names.get(key, key)
             _lbl = QLabel(f"{_display}:"); _lbl.setStyleSheet(_lbl_ss)
             vb.addWidget(_lbl)
+            # J is a timestamp — show as decoded date, read-only
+            if key == "J":
+                fe = QLineEdit()
+                fe.setFixedWidth(130)
+                fe.setReadOnly(True)
+                fe.setStyleSheet(
+                    "background:#1a1a1a; color:#888888; border:1px solid #333;"
+                    " font-family:monospace; padding:1px 3px;")
+                fe.setPlaceholderText("auto")
+                fe.setToolTip("Julian date — set automatically")
+                self._code_edits["j"] = fe
+                vb.addWidget(fe)
+                sec_layout.addWidget(box)
+                return fe
             fe = QLineEdit()
             fe.setFixedWidth(52); fe.setMaxLength(4)
             fe.setStyleSheet(_field_ss); fe.setPlaceholderText("000")
@@ -952,21 +944,26 @@ class PreviewWindow(QWidget):
 
         _group_order_list = _proj_tg_early.get("__group_order__", [])
         _section_styles_all = _proj_tg_early.get("__section_styles__", {})
-        _INTERNAL_GROUP = "Internal"
+        _INTERNAL_GROUP = "Internal"   # kept for _non_internal_keys compat — no longer skipped
 
-        # Ensure W/ED/Fix are always created (needed by _refresh_attrs)
-        self._w_check  = QCheckBox("W");  self._w_check.setVisible(False)
-        self._ed_check = QCheckBox("ED"); self._ed_check.setVisible(False)
+        # Create boolean flag checkboxes dynamically from CODED_FIELDS (digits==0)
+        self._bool_flag_checks = {}  # letter.lower() -> QCheckBox
+        for _ltr, _lbl, _digs in attrs_mod.CODED_FIELDS:
+            if _digs == 0:
+                _lk = _ltr.lower()
+                _cb = QCheckBox(_ltr)
+                _cb.setVisible(False)
+                _cb.toggled.connect(lambda _, _l=_ltr: self._on_bool_flag_toggled(_l))
+                self._bool_flag_checks[_lk] = _cb
+                self._code_edits[_lk] = _cb
+        # Backward-compat refs (used by legacy code paths)
+        self._w_check  = self._bool_flag_checks.get("wm",  QCheckBox("WM"))
+        self._ed_check = self._bool_flag_checks.get("ed",  QCheckBox("ED"))
         self._btn_normalize = QPushButton("Fix"); self._btn_normalize.setVisible(False)
-        self._w_check.toggled.connect(self._on_name_edit_finished)
-        self._ed_check.toggled.connect(self._on_name_edit_finished)
         self._btn_normalize.clicked.connect(self._on_normalize_filename)
-        self._code_edits["w"]  = self._w_check
-        self._code_edits["ed"] = self._ed_check
 
         self._field_to_section = {}   # letter.lower() -> _AttrSection
         self._attr_sections = []      # ordered list of all reorderable _AttrSection widgets
-        self._drag_sec = None         # section currently being dragged in arrange mode
 
         # Container for coded sections — reordering operates inside here
         self._sections_container = QWidget()
@@ -974,11 +971,9 @@ class PreviewWindow(QWidget):
         self._sections_vbox = QVBoxLayout(self._sections_container)
         self._sections_vbox.setContentsMargins(0, 0, 0, 0)
         self._sections_vbox.setSpacing(0)
-        vbox.addWidget(self._sections_container)
+        # coded sections container kept as orphan (widgets created for compatibility)
 
         for _grp in _group_order_list:
-            if _grp == _INTERNAL_GROUP:
-                continue
             _grp_keys = _sec_groups.get(_grp, [])
 
             # Decide how to render each key in the group.
@@ -1044,51 +1039,71 @@ class PreviewWindow(QWidget):
                 else:
                     _sec_w.register_clear(_add_plain_field(_sec_lay, _sk.upper(), _extra))
 
-            # W / ED / Fix controls appended to whichever group contains CS
+            # Boolean flag checkboxes + Fix appended to whichever group contains CS
             if _has_cs:
                 _flags_box = QWidget(); _flags_vb = QVBoxLayout(_flags_box)
                 _flags_vb.setContentsMargins(0, 0, 0, 0); _flags_vb.setSpacing(2)
-                self._w_check.setVisible(True);  _flags_vb.addWidget(self._w_check)
-                self._ed_check.setVisible(True); _flags_vb.addWidget(self._ed_check)
+                for _lk, _cb in self._bool_flag_checks.items():
+                    _cb.setVisible(True); _flags_vb.addWidget(_cb)
                 self._btn_normalize.setVisible(True); _flags_vb.addWidget(self._btn_normalize)
                 _sec_lay.addWidget(_flags_box)
                 def _clear_flags():
-                    for _c in (self._w_check, self._ed_check):
-                        _c.blockSignals(True); _c.setChecked(False); _c.blockSignals(False)
+                    for _cb in self._bool_flag_checks.values():
+                        _cb.blockSignals(True); _cb.setChecked(False); _cb.blockSignals(False)
                     self._on_name_edit_finished()
                 _sec_w.register_clear(_clear_flags)
 
             _sec_lay.addStretch()
 
+        # ── Catch-all: any CODED_FIELDS entry not yet rendered ────────────────
+        # Ensures new fields added to CODED_FIELDS appear automatically without
+        # needing manual section configuration in attrs_tags.json.
+        _unrendered = [
+            (ltr, lbl, dig) for ltr, lbl, dig in attrs_mod.CODED_FIELDS
+            if ltr.lower() not in self._code_edits and dig > 0
+        ]
+        if _unrendered:
+            _extra_sec = _AttrSection("Other")
+            self._sections_vbox.addWidget(_extra_sec)
+            self._attr_sections.append(_extra_sec)
+            _extra_lay = QHBoxLayout(_extra_sec.content)
+            _extra_lay.setContentsMargins(6, 2, 6, 4); _extra_lay.setSpacing(6)
+
+            def _make_expand_cb_extra(sw=_extra_sec):
+                def _cb():
+                    if self._attr_path:
+                        self._refresh_attrs(self._attr_path)
+                return _cb
+            _extra_sec.set_expand_callback(_make_expand_cb_extra())
+
+            for _ltr, _lbl, _dig in _unrendered:
+                # Use combo if field has combo specs, otherwise plain edit
+                if _ltr in _combo_specs:
+                    _hid = QLineEdit(panel); _hid.setVisible(False)
+                    self._code_edits[_ltr.lower()] = _hid
+                    _extra_sec.register_clear(_add_combo_field(_extra_lay, _ltr, _hid))
+                else:
+                    _extra_sec.register_clear(_add_plain_field(_extra_lay, _ltr, _dig))
+                self._field_to_section[_ltr.lower()] = _extra_sec
+            _extra_lay.addStretch()
+
         # Decode label — shows human-readable breakdown of current coded values
         self._decode_lbl = QLabel("")
         self._decode_lbl.setStyleSheet("color:#888; font-size:8pt;")
         self._decode_lbl.setWordWrap(True)
-        vbox.addWidget(self._decode_lbl)
+        # decode_lbl and x_hint kept as orphans
         self._decode_field_fn = _decode_field   # store for use in _refresh_attrs
 
-        # X category hint label (kept for X expression category display)
         self._x_hint = QLabel("")
         self._x_hint.setStyleSheet("color:#888; font-size:8pt;")
-        vbox.addWidget(self._x_hint)
 
         # Keep _name_edit as hidden alias so existing code doesn't break
         self._name_edit = self._code_edits.get("b", QLineEdit())
 
-        # Seed row (always shown)
-        r5 = QHBoxLayout()
-        ls2 = QLabel("Seed:")
-        ls2.setStyleSheet("color: #aaa;")
-        r5.addWidget(ls2)
+        # Seed edit kept as orphan (referenced by _refresh_attrs/_save_attrs)
         self._seed_edit = QLineEdit()
-        self._seed_edit.setFixedWidth(140)
-        self._seed_edit.setStyleSheet(
-            "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
         self._seed_edit.editingFinished.connect(self._save_attrs)
         self._seed_edit.editingFinished.connect(lambda: self._update_bake_btn("pending"))
-        r5.addWidget(self._seed_edit)
-        r5.addStretch()
-        vbox.addLayout(r5)
 
         # ── Dynamic sections driven by attrs_tags.json ──────────────────────
         self._text_save_timer = QTimer()
@@ -1097,204 +1112,32 @@ class PreviewWindow(QWidget):
         self._text_save_timer.timeout.connect(self._save_attrs)
         self._text_save_timer.timeout.connect(lambda: self._update_bake_btn("pending"))
 
-        self._text_edits = {}    # section_key → QTextEdit
-        self._attr_select = {}   # section_key → {"combo": QComboBox, "data": [[k,l],...], "freq": bool}
-        _proj_tg        = _proj_tg_early   # already loaded above
-        _section_order  = _proj_tg.get("__section_order__", [])
-        _section_styles = _proj_tg.get("__section_styles__", {})
-        _tf_data        = _proj_tg.get("__text_fields__", {})
-        if not isinstance(_tf_data, dict):
-            _tf_data = {}
-        _SKIP_SECS = {"Quality"}   # Quality is already a dropdown at the top
+        self._soft_sec_map = {}  # kept: referenced by legacy drag-reorder code
 
-        # Separate sections by render style
-        _taglist_secs = []
-        _combo_secs   = []   # matrix style → frequency-sorted single-select QComboBox
-        _text_secs    = []
-        for _sec_key in _section_order:
-            if _sec_key in _SKIP_SECS:
-                continue
-            _style = _section_styles.get(_sec_key, "")
-            if _style in ("taglist", "boolean"):
-                _grp_data = _proj_tg.get(_sec_key, [])
-                if isinstance(_grp_data, list) and _grp_data:
-                    _taglist_secs.append((_sec_key, _grp_data))
-            elif _style == "matrix":
-                _grp_data = _proj_tg.get(_sec_key, [])
-                if isinstance(_grp_data, list) and _grp_data:
-                    _combo_secs.append((_sec_key, _grp_data))
-            elif _style == "text":
-                _text_secs.append(_sec_key)
+        # ── Soft canvas — free-canvas AttrViewerWidget (main attr UI) ───────────
+        from attr_viewer import AttrViewerWidget as _AV
+        _cfg_path = attrs_mod.tags_file_for_project(self.handler.app.current_project)
+        self._soft_canvas = _AV(config_path=_cfg_path, parent=None)
+        self._soft_canvas.setMinimumHeight(300)
+        vbox.addWidget(self._soft_canvas, stretch=1)
+        self._soft_canvas.data_changed.connect(self._text_save_timer.start)
+        self._soft_canvas.data_changed.connect(lambda: self._update_bake_btn("pending"))
+        self._wire_canvas_bool_flags()
+        # Design and Drag Mode only available when Arrangement in preview is ON
+        _show_raw = self.handler.app.config.get("show_raw_data", False)
+        _snap_cb = getattr(self._soft_canvas, "_snap_cb", None)
+        _drag_cb = getattr(self._soft_canvas, "_drag_cb", None)
+        if not _show_raw:
+            if _snap_cb:
+                _snap_cb.setEnabled(False)
+                _snap_cb.setChecked(False)
+                self._soft_canvas._set_snap(False)
+            if _drag_cb:
+                _drag_cb.setEnabled(False)
+                _drag_cb.setChecked(False)
 
-        # ── Tag group sections — frequency-sorted toggle buttons ─────────────
-        _tag_usage = self._load_tag_usage()
-        _BTN_SS_OFF = (
-            "QPushButton { background:#333; color:#bbb; border:1px solid #555;"
-            " padding:2px 6px; border-radius:3px; font-size:8pt; }"
-            "QPushButton:hover { background:#444; }")
-        _BTN_SS_ON  = (
-            "QPushButton { background:#4a7a4e; color:#e8ffe8; border:1px solid #6aaa6e;"
-            " padding:2px 6px; border-radius:3px; font-size:8pt; font-weight:bold; }"
-            "QPushButton:hover { background:#5a8a5e; }")
-        for _sec_key, _grp_data in _taglist_secs:
-            _sec_name = _sec_key.replace("_", " ").title()
-            _ts_sec = _AttrSection(_sec_name)
-            self._sections_vbox.addWidget(_ts_sec)
-            self._attr_sections.append(_ts_sec)
-            _ts_grid = QGridLayout(_ts_sec.content)
-            _ts_grid.setContentsMargins(4, 2, 4, 4)
-            _ts_grid.setSpacing(3)
-            # Sort by usage count descending, stable (preserves definition order for ties)
-            _sorted_tags = sorted(_grp_data, key=lambda kv: -_tag_usage.get(kv[0], 0))
-            _COLS = 6
-            for _ti, (_key, _label) in enumerate(_sorted_tags):
-                _tbtn = QPushButton(_label)
-                _tbtn.setCheckable(True)
-                _tbtn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                _tbtn.setStyleSheet(_BTN_SS_OFF)
-                def _on_tag_toggle(checked, k=_key, b=_tbtn,
-                                   on_ss=_BTN_SS_ON, off_ss=_BTN_SS_OFF):
-                    b.setStyleSheet(on_ss if checked else off_ss)
-                    if checked:
-                        self._increment_tag_usage(k)
-                    self._save_attrs()
-                _tbtn.toggled.connect(_on_tag_toggle)
-                self._attr_cbs[_key] = _tbtn
-                _ts_grid.addWidget(_tbtn, _ti // _COLS, _ti % _COLS)
-
-        # ── Matrix/select sections — frequency-sorted single-select QComboBox ──
-        _CB_SS = ("QComboBox { background:#2e2e2e; color:#ddd; border:1px solid #555;"
-                  " padding:2px 6px; border-radius:3px; font-size:8pt; }"
-                  "QComboBox::drop-down { border:none; }"
-                  "QComboBox QAbstractItemView { background:#2e2e2e; color:#ddd;"
-                  " selection-background-color:#4a7a4e; }")
-        for _sec_key, _grp_data in _combo_secs:
-            _sec_name = _sec_key.replace("_", " ").title()
-            _ms_sec = _AttrSection(_sec_name)
-            self._sections_vbox.addWidget(_ms_sec)
-            self._attr_sections.append(_ms_sec)
-            _ms_lay = QHBoxLayout(_ms_sec.content)
-            _ms_lay.setContentsMargins(4, 2, 4, 4); _ms_lay.setSpacing(6)
-
-            _cb = QComboBox()
-            _cb.setStyleSheet(_CB_SS)
-            _cb.setMinimumWidth(160)
-            _cb.addItem("—", "")   # blank / no selection
-            _sorted_data = sorted(_grp_data, key=lambda kv: -_tag_usage.get(kv[0], 0))
-            for _k, _lbl in _sorted_data:
-                _cb.addItem(_lbl, _k)
-
-            _freq_lbl = QLabel("freq")
-            _freq_lbl.setStyleSheet("color:#666; font-size:7pt;")
-            _ms_lay.addWidget(_cb)
-            _ms_lay.addWidget(_freq_lbl)
-            _ms_lay.addStretch()
-
-            self._attr_select[_sec_key] = {"combo": _cb, "data": _grp_data, "freq": True}
-
-            def _on_select(idx, sk=_sec_key, cb=_cb):
-                key = cb.currentData()
-                if key:
-                    self._increment_tag_usage(key)
-                    self._rebuild_select_combo(sk)
-                self._save_attrs()
-            _cb.currentIndexChanged.connect(_on_select)
-
-            # Right-click on combo toggles freq ↔ alpha sort
-            _cb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            def _on_ctx(pos, sk=_sec_key, lbl=_freq_lbl):
-                info = self._attr_select.get(sk)
-                if not info: return
-                info["freq"] = not info["freq"]
-                lbl.setText("freq" if info["freq"] else "alpha")
-                lbl.setStyleSheet(
-                    "color:#666; font-size:7pt;" if info["freq"]
-                    else "color:#8ab; font-size:7pt; font-style:italic;")
-                self._rebuild_select_combo(sk)
-            _cb.customContextMenuRequested.connect(_on_ctx)
-
-            _ms_sec.register_clear(lambda cb=_cb: (cb.blockSignals(True),
-                                                    cb.setCurrentIndex(0),
-                                                    cb.blockSignals(False)))
-
-        # ── Restore saved section order ───────────────────────────────────────
-        _saved_order = self.handler.app.config.get("attr_section_order", [])
-        if _saved_order:
-            _by_title = {s._title: s for s in self._attr_sections}
-            _reordered = [_by_title[t] for t in _saved_order if t in _by_title]
-            _remaining = [s for s in self._attr_sections if s not in _reordered]
-            _final = _reordered + _remaining
-            if _final != self._attr_sections:
-                self._attr_sections = _final
-                sv = self._sections_vbox
-                for s in _final:
-                    sv.removeWidget(s)
-                for s in _final:
-                    sv.addWidget(s)
-
-        # ── Text areas (one per section, with display name label) ────────────
-        for _sec_key in _text_secs:
-            _tf_info     = _tf_data.get(_sec_key, {})
-            _label_str   = _tf_info.get("label", _sec_key.replace("_", " ").title())
-            _placeholder = _tf_info.get("placeholder", "")
-            _lbl2 = QLabel(f"{_label_str}:")
-            _lbl2.setStyleSheet("color: #aaa;")
-            vbox.addWidget(_lbl2)
-            _te = QTextEdit()
-            _te.setMinimumHeight(28)
-            _te.setFixedHeight(28)
-            _te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            _te.textChanged.connect(lambda te=_te: _resize_textedit(te))
-
-
-
-
-
-
-            _te.setPlaceholderText(_placeholder or f"{_label_str}…")
-            _te.setStyleSheet(
-                "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
-            _te.textChanged.connect(self._text_save_timer.start)
-            vbox.addWidget(_te)
-            self._text_edits[_sec_key] = _te
-
-
-# ── Raw Metadata Section ──────────────────────────────────────────
-
-
-
-
-
-
-        self._raw_meta_sec = _AttrSection("Raw Info")
-        vbox.addWidget(self._raw_meta_sec)
-        _raw_lay = QVBoxLayout(self._raw_meta_sec.content)
-        _raw_lay.setContentsMargins(6, 4, 6, 6)
-        
-        self._raw_meta_edit = QTextEdit()
-        self._raw_meta_edit.setReadOnly(True)
-        self._raw_meta_edit.setFixedHeight(120)
-        self._raw_meta_edit.setStyleSheet(
-            "background-color: #1a1a1a; color: #999; border: 1px solid #333; "
-            "font-family: monospace; font-size: 8pt;"
-        )
-        self._raw_meta_edit.setPlaceholderText("No technical metadata available.")
-        _raw_lay.addWidget(self._raw_meta_edit)
-
-
-
-
-
-
-        # Bake row: read from file / bake to file
+        # Bake row: always visible
         r_bake = QHBoxLayout()
-        self._btn_read_meta = QPushButton("Read from File")
-        self._btn_read_meta.setToolTip(
-            "Import prompt/seed/model embedded in the physical file into the database")
-        self._btn_read_meta.setStyleSheet(
-            "background:#3a4a3a; color:#e0e0e0; border:1px solid #556655; padding:2px 6px;")
-        self._btn_read_meta.clicked.connect(self._read_file_meta)
-        r_bake.addWidget(self._btn_read_meta)
         self._btn_bake_meta = QPushButton("Bake to File")
         self._btn_bake_meta.setToolTip(
             "Embed prompt/seed/model from database into the physical file")
@@ -1323,22 +1166,65 @@ class PreviewWindow(QWidget):
             fn_cfg = attrs_mod.load_filename_config(proj)
             fn_cfg["auto_rename"] = v
             attrs_mod.save_filename_config(fn_cfg, proj)
-            # Sync settings dialog checkbox if open
             sv = getattr(self.handler.app, "_settings_win", None)
             if sv and hasattr(sv, "chk_rename_on_scan") and sv.chk_rename_on_scan.isChecked() != v:
                 sv.chk_rename_on_scan.blockSignals(True)
                 sv.chk_rename_on_scan.setChecked(v)
                 sv.chk_rename_on_scan.blockSignals(False)
-            # Sync btn_auto_rename visibility
-            if hasattr(self, "_btn_auto_rename"):
-                self._btn_auto_rename.setVisible(v)
         self._chk_auto_rename.toggled.connect(_on_ar_toggle)
         r_bake.addWidget(self._chk_auto_rename)
+        self._protected_check = QPushButton("🔓 Editable")
+        self._protected_check.setCheckable(True)
+        self._protected_check.setToolTip("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename")
+        self._protected_check.setStyleSheet(
+            "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
+        self._protected_check.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._protected_check.toggled.connect(lambda _: self._save_attrs())
+        self._protected_check.toggled.connect(self._apply_protected_lock)
+        r_bake.addWidget(self._protected_check)
         self._bake_err_label = QLabel("")
         self._bake_err_label.setStyleSheet("color:#ff6666; font-size:10px;")
         self._bake_err_label.setWordWrap(True)
         r_bake.addWidget(self._bake_err_label, stretch=1)
         vbox.addLayout(r_bake)
+
+        # ── Raw Data section (collapsed by default) ───────────────────────
+        self._raw_meta_sec = _AttrSection("Raw Data")
+        vbox.addWidget(self._raw_meta_sec)
+        # Place the soft canvas toolbar inline in the section header
+        _toolbar = getattr(self._soft_canvas, "_toolbar_widget", None)
+        if _toolbar:
+            _toolbar.setParent(self._raw_meta_sec)
+            _toolbar.setVisible(True)
+            self._raw_meta_sec._hdr_lay.addWidget(_toolbar, stretch=1)
+        _raw_lay = QVBoxLayout(self._raw_meta_sec.content)
+        _raw_lay.setContentsMargins(6, 4, 6, 6)
+        _raw_lay.setSpacing(4)
+        self._raw_meta_edit = QTextEdit()
+        self._raw_meta_edit.setReadOnly(True)
+        self._raw_meta_edit.setFixedHeight(160)
+        self._raw_meta_edit.setStyleSheet(
+            "background-color: #1a1a1a; color: #ccc; border: 1px solid #333; "
+            "font-family: monospace; font-size: 8pt;")
+        self._raw_meta_edit.setPlaceholderText("No data.")
+        _raw_lay.addWidget(self._raw_meta_edit)
+
+        # Re-read from disk whenever the Raw Data section is expanded
+        def _on_raw_expand():
+            _p = getattr(self, '_attr_path', None)
+            if _p:
+                self._raw_meta_edit.setPlainText("Loading...")
+                try:
+                    _txt = attrs_mod.read_raw_embedded_text(_p)
+                except Exception:
+                    _txt = ""
+                self._raw_meta_edit.setPlainText(_txt or "(no embedded text)")
+        self._raw_meta_sec.set_expand_callback(_on_raw_expand)
+
+        # Apply show_raw_data config (hidden by default unless enabled in Settings > Canvas)
+        _show_dev = self.handler.app.config.get("show_raw_data", False)
+        self._raw_meta_sec.setVisible(_show_dev)
+        self._protected_check.setVisible(_show_dev)
 
         self._attr_path = None
         return panel
@@ -1349,7 +1235,9 @@ class PreviewWindow(QWidget):
         if horiz:
             return "►" if open_state else "◄"
         else:
-            return "▼" if open_state else "▲"
+            arrow = "▼" if open_state else "▲"
+            info = getattr(self, "_file_info_text", "")
+            return f"{arrow}  {info}" if info else arrow
 
     def _sync_toggle_strip(self):
         """Show the correct toggle strip and update btn_toggle_attrs reference."""
@@ -1357,12 +1245,16 @@ class PreviewWindow(QWidget):
         self._left_bar.setVisible(horiz)
         self._top_bar.setVisible(not horiz)
         is_open = self._attr_scroll.isVisible()
+        info = getattr(self, "_file_info_text", "")
         if horiz:
             self.btn_toggle_attrs = self._btn_toggle_left
             self._btn_toggle_left.setText(self._attr_arrow(is_open))
+            self._info_bar.setText(info)
+            self._info_bar.setVisible(bool(info))
         else:
             self.btn_toggle_attrs = self._btn_toggle_top
             self._btn_toggle_top.setText(self._attr_arrow(is_open))
+            self._info_bar.setVisible(False)
 
     def _is_horiz(self):
         return self._splitter.orientation() == Qt.Orientation.Horizontal
@@ -1383,6 +1275,8 @@ class PreviewWindow(QWidget):
                          getattr(self.handler.app, "current_project", None))
 
     def _on_splitter_moved(self):
+        # User is dragging — remove height cap so they can pull the boundary down freely
+        self.scroll_area.setMaximumHeight(16777215)
         sizes = self._splitter.sizes()
         bottom = sizes[1] if len(sizes) > 1 else 0
         if bottom > 36:
@@ -1447,6 +1341,15 @@ class PreviewWindow(QWidget):
             self._attr_panel_pending_path = None
             self._refresh_attrs(path)
 
+    def _update_title_with_info(self, path):
+        """Set window title to path + file info (dimensions, size, audio, etc.)."""
+        app = self.handler.app
+        rel_dir = app._mask_path(path)
+        name = os.path.basename(path)
+        base = f"{rel_dir}/{name}" if rel_dir and rel_dir != "." else name
+        info = getattr(self, "_file_info_text", "")
+        self.setWindowTitle(f"{base}    {info}" if info else base)
+
     def _refresh_attrs(self, path):
         if not self._attr_panel_built:
             self._attr_panel_pending_path = path
@@ -1465,6 +1368,32 @@ class PreviewWindow(QWidget):
             self._project_edit.blockSignals(False)
             self._seed_edit.blockSignals(False)
 
+    _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
+    _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
+
+    def _apply_file_visibility(self, path):
+        """Show/hide soft canvas sections based on __hidden_for__ rules and file type."""
+        ext = os.path.splitext(path)[1].lower() if path else ""
+        if ext in self._IMAGE_EXTS:
+            mode = "image"
+        elif ext in self._VIDEO_EXTS:
+            mode = "video"
+        else:
+            mode = "all"
+        # Tell the embedded canvas to apply visibility
+        cw = getattr(self, "_soft_canvas", None)
+        if cw:
+            cw._apply_mode(mode)
+        # Sync Canvas tab mode if Settings dialog is open
+        try:
+            sv = getattr(self.handler.app, "_settings_win", None)
+            if sv and sv.isVisible():
+                tab_cw = getattr(sv, "_canvas_widget", None)
+                if tab_cw:
+                    tab_cw._mode_cb.setCurrentText(mode.title() if mode != "all" else "All")
+        except Exception:
+            pass
+
     def _refresh_attrs_inner(self, path):
         app = self.handler.app
         # Auto-bake previous file when navigating to a different one
@@ -1472,7 +1401,11 @@ class PreviewWindow(QWidget):
             if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
                 self._bake_to_file(silent=True)
         self._attr_path = path
-        self._update_bake_btn("idle")
+        # Show pending if DB has data that may not be baked into the file yet;
+        # otherwise start idle and let edits drive the state.
+        _entry_pre = attrs_mod.get(self.handler.app.attrs_data, path) if path else {}
+        _has_bakeable = any(_entry_pre.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id"))
+        self._update_bake_btn("pending" if _has_bakeable else "idle")
         self._btn_detect_person.setText("Detect & Register")
         self._btn_detect_person.setStyleSheet(
             "background:#445566; color:#e0e0e0; border:1px solid #667788;"
@@ -1488,46 +1421,19 @@ class PreviewWindow(QWidget):
         entry = attrs_mod.get(self.handler.app.attrs_data, path)
         tags  = set(entry.get("tags", []))
 
-        for cb in self._attr_cbs.values():
-            cb.blockSignals(True)
         self._quality_combo.blockSignals(True)
         self._protected_check.blockSignals(True)
 
         qual = next((k for k in attrs_mod.QUALITY_TAGS if k in tags), "")
         self._quality_combo.setCurrentIndex(max(0, self._quality_combo.findData(qual)))
-        for key, cb in self._attr_cbs.items():
-            cb.setChecked(key in tags)
-        self._protected_check.setChecked(not bool(entry.get("editable", False)))
+        self._protected_check.setChecked(not bool(entry.get("editable", True)))
 
         self._quality_combo.blockSignals(False)
-        for cb in self._attr_cbs.values():
-            cb.blockSignals(False)
         self._protected_check.blockSignals(False)
 
-        # Populate matrix-style select combos
-        for _sk, _info in self._attr_select.items():
-            _scb = _info["combo"]
-            _sec_keys = {kv[0] for kv in _info["data"]}
-            _selected = next((t for t in tags if t in _sec_keys), "")
-            _scb.blockSignals(True)
-            _scb.setCurrentIndex(max(0, _scb.findData(_selected)))
-            _scb.blockSignals(False)
-
-        # Sync tag-button styles (signals were blocked during setChecked)
-        _BTN_ON  = ("QPushButton { background:#4a7a4e; color:#e8ffe8; border:1px solid #6aaa6e;"
-                    " padding:2px 6px; border-radius:3px; font-size:8pt; font-weight:bold; }"
-                    "QPushButton:hover { background:#5a8a5e; }")
-        _BTN_OFF = ("QPushButton { background:#333; color:#bbb; border:1px solid #555;"
-                    " padding:2px 6px; border-radius:3px; font-size:8pt; }"
-                    "QPushButton:hover { background:#444; }")
-        for cb in self._attr_cbs.values():
-            if isinstance(cb, QPushButton):
-                cb.setStyleSheet(_BTN_ON if cb.isChecked() else _BTN_OFF)
-
         # Lock/unlock all editable widgets based on editable state
-        _locked = not bool(entry.get("editable", False))
+        _locked = not bool(entry.get("editable", True))
         self._apply_protected_lock(_locked)
-        self._btn_auto_rename.setEnabled(not _locked)
 
 
 
@@ -1577,16 +1483,38 @@ class PreviewWindow(QWidget):
                     fe.setText(val)
                     # Sync combo boxes (if this field uses them)
                     self._set_field_combos(letter.lower(), val)
-        # J field: decode base-36 → yymmdd date string
+        # Auto-fill O/R/K from file metadata when not set in filename
+        _auto_detect_keys = {"o", "r", "k"}
+        _need_detect = False
+        if parsed:
+            _need_detect = any(not parsed.get(k) for k in _auto_detect_keys)
+        else:
+            _need_detect = True
+        if _need_detect:
+            _detected = attrs_mod.detect_file_attrs(path)
+            for _dk, _dv in _detected.items():
+                if _dk not in _auto_detect_keys:
+                    continue
+                _sec = _fts.get(_dk)
+                if _sec and not _sec.is_expanded():
+                    continue
+                if parsed and parsed.get(_dk):
+                    continue  # filename already has a value — keep it
+                fe = self._code_edits.get(_dk)
+                if fe is None:
+                    continue
+                fe.setText(_dv)
+                self._set_field_combos(_dk, _dv)
+
+        # J field: decode base-36 → date string; fall back to file date if not in filename
         fe_j = self._code_edits.get("j")
-        if fe_j and parsed:
-            j_val = parsed.get("j", "")
-            if j_val:
-                decoded = attrs_mod.julian_id_to_date(j_val)
-                fe_j.setText(decoded)
-                fe_j.setToolTip(f"Julian: {j_val} → {decoded[:2]}-{decoded[2:4]}-{decoded[4:]}")
-            else:
-                fe_j.setText("")
+        if fe_j:
+            j_val = parsed.get("j", "") if parsed else ""
+            if not j_val:
+                j_val = attrs_mod.julian_id_for_file(path)
+            decoded = attrs_mod.julian_id_to_date(j_val)
+            fe_j.setText(decoded)
+            fe_j.setToolTip(f"Julian ID: {j_val}")
 
         # Update decode label
         _dec = getattr(self, "_decode_field_fn", None)
@@ -1612,6 +1540,11 @@ class PreviewWindow(QWidget):
         self._seed_edit.setText(entry.get("seed", ""))
         self._seed_edit.blockSignals(False)
         _saved_pid = entry.get("person_id", "")
+        if not _saved_pid:
+            _stem_fb = os.path.splitext(os.path.basename(path))[0]
+            _parsed_fb = attrs_mod.parse_coded_filename(_stem_fb)
+            if _parsed_fb and _parsed_fb.get("persons"):
+                _saved_pid = _parsed_fb["persons"][0]
         self._person_id_combo.blockSignals(True)
         if _saved_pid:
             _idx = self._person_id_combo.findData(_saved_pid)
@@ -1619,20 +1552,66 @@ class PreviewWindow(QWidget):
                 self._person_id_combo.setCurrentIndex(_idx)
             else:
                 self._person_id_combo.setCurrentText(_saved_pid)
+        else:
+            self._person_id_combo.setCurrentIndex(0)
         self._person_id_combo.blockSignals(False)
-        for _sec_key, _te in self._text_edits.items():
-            _db_key = _TEXT_KEY_MAP.get(_sec_key, _sec_key)
-            _te.blockSignals(True)
-            _te.setPlainText(entry.get(_db_key, ""))
-            _te.blockSignals(False)
-            # Defer resize: document layout isn't computed until next event loop tick
-            QTimer.singleShot(0, lambda te=_te: _resize_textedit(te))
-
-        # Hide the hardcoded Note row when the project defines "note" as a text field
-        _note_covered = any(
-            _TEXT_KEY_MAP.get(k, k) == "note" for k in self._text_edits
+        # Load soft fields (taglist / matrix / text) into the canvas
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc:
+            # Pass raw metadata so canvas conditions can evaluate (e.g. hide Speech when no audio)
+            _raw_meta = {}
+            try:
+                _raw_meta = attrs_mod.extract_metadata(path) if path else {}
+            except Exception:
+                pass
+            # Merge filename-rule tags (e.g. -watermark → watermark boolean) into
+            # a display copy of the entry so the canvas reflects the filename in real time
+            _fn_rules = attrs_mod.load_filename_rules(
+                getattr(self.handler.app, "current_project", None))
+            if _fn_rules and path:
+                _fn_tags = attrs_mod.detect_tags_from_filename(path, _fn_rules)
+                if _fn_tags:
+                    entry = dict(entry)
+                    _merged = list(entry.get("tags", []))
+                    for _t in _fn_tags:
+                        if _t not in _merged:
+                            _merged.append(_t)
+                    entry["tags"] = _merged
+            # Auto-detect O/R/K from file dimensions/fps; inject into display entry
+            # if the entry has no tag matching any of those fields' options.
+            try:
+                _detected_ork = attrs_mod.detect_file_attrs(path)
+                if _detected_ork:
+                    _ork_option_keys = {}  # field_key → set of valid option tag-keys
+                    for _w in _sc.widgets:
+                        if getattr(_w, "key", None) in ("O", "R", "K"):
+                            _ork_option_keys[_w.key] = {k for k, _ in (_w.options or [])}
+                    _cur_tags = set(entry.get("tags", []))
+                    _extra_ork = []
+                    for _fk, _fv in [("O", _detected_ork.get("o")),
+                                      ("R", _detected_ork.get("r")),
+                                      ("K", _detected_ork.get("k"))]:
+                        if not _fv:
+                            continue
+                        _opts = _ork_option_keys.get(_fk, set())
+                        if _opts and not (_cur_tags & _opts):  # no existing tag for this field
+                            _extra_ork.append(_fv)
+                    if _extra_ork:
+                        entry = dict(entry)
+                        entry["tags"] = list(_cur_tags) + _extra_ork
+            except Exception:
+                pass
+            entry["_project"] = getattr(app, "current_project", None)
+            _sc.load_file(path, entry, raw_meta=_raw_meta)
+        # Hide the hardcoded Note row when the canvas has a "note" text panel
+        _canvas_has_note = _sc is not None and any(
+            getattr(w, "key", None) in ("note", "positive_prompt")
+            for w in getattr(_sc, "widgets", [])
         )
-        self._note_row_widget.setVisible(not _note_covered)
+        self._note_row_widget.setVisible(not _canvas_has_note)
+
+        # Apply __hidden_for__ visibility rules based on file type
+        self._apply_file_visibility(path)
 
         # Auto-read embedded file metadata if db has no prompt/seed/speech yet
         _needs_read = (not entry.get("prompt") and not entry.get("neg_prompt")
@@ -1645,20 +1624,21 @@ class PreviewWindow(QWidget):
                 def _apply(p=p, data=data):
                     if self._attr_path != p:
                         return
-                    _rev_map = {v: k for k, v in _TEXT_KEY_MAP.items()}
                     _changed = False
+                    _entry = attrs_mod.get(self.handler.app.attrs_data, p)
                     for _db_key in ("prompt", "neg_prompt", "speech"):
-                        if data.get(_db_key):
-                            _te = self._text_edits.get(_rev_map.get(_db_key, _db_key))
-                            if _te:
-                                _te.blockSignals(True)
-                                _te.setPlainText(data[_db_key])
-                                _te.blockSignals(False)
-                                QTimer.singleShot(0, lambda te=_te: _resize_textedit(te))
-                                _changed = True
-                    if data.get("seed"):
+                        if data.get(_db_key) and not _entry.get(_db_key):
+                            _entry[_db_key] = data[_db_key]
+                            _changed = True
+                    if data.get("seed") and not _entry.get("seed"):
                         self._seed_edit.setText(str(data["seed"]))
+                        _entry["seed"] = str(data["seed"])
                         _changed = True
+                    if _changed:
+                        _sc = getattr(self, "_soft_canvas", None)
+                        if _sc:
+                            _entry["_project"] = getattr(app, "current_project", None)
+                            _sc.load_file(p, _entry)
                     if _changed:
 # ────────── MODIFICATION START ──────────
                         # 1. Force the internal state to Editable (Unchecked)
@@ -1680,44 +1660,45 @@ class PreviewWindow(QWidget):
             threading.Thread(target=_auto_read, daemon=True).start()
 
 
-        # Info box — use cached meta only; background thread fills it in if missing
+        # Info — append to window title bar
         meta = entry.get("meta", {})
         if meta:
+            _key_order = ["Dimensions", "Ratio", "File size", "Duration", "FPS", "Audio"]
+            parts = [meta[k] for k in _key_order if k in meta]
+            self._file_info_text = "  ·  ".join(parts)
+        else:
+            self._file_info_text = ""
+        self._update_title_with_info(path)
 
+        # ── Raw Info box: actual embedded text from file ──────────────────────
+        self._raw_meta_edit.setPlainText("Loading...")
+        try:
+            _embedded = attrs_mod.read_raw_embedded_text(path)
+        except Exception:
+            _embedded = ""
+        self._raw_meta_edit.setPlainText(_embedded if _embedded else "(no embedded text)")
 
-
-
-            parts = [v for k, v in meta.items()
-                     if k in ("Dimensions", "Ratio", "File size", "FPS", "Duration", "Audio")]
-            if meta.get("Seed"):
-                parts.append(f"seed:{meta['Seed']}")
-            self._info_label.setText("  ·  ".join(parts))
-# --- NEW: Update Raw Metadata Text Box ---
-            try:
-                raw_text = json.dumps(meta, indent=4, ensure_ascii=False)
-                self._raw_meta_edit.setPlainText(raw_text)
-            except Exception:
-                self._raw_meta_edit.setPlainText(str(meta))
-            # -----------------------------------------
-
-
-
-            # Fill seed/prompt fields from meta if top-level attrs are empty
+        # Fill seed/prompt fields from meta if top-level attrs are empty
+        if meta:
             if not self._seed_edit.text() and meta.get("Seed"):
                 self._seed_edit.blockSignals(True)
                 self._seed_edit.setText(str(meta["Seed"]))
                 self._seed_edit.blockSignals(False)
-            _rev_map = {v: k for k, v in _TEXT_KEY_MAP.items()}
+        # Fill prompt/neg_prompt into canvas if attrs entry is empty
+        _sc_meta = getattr(self, "_soft_canvas", None)
+        if _sc_meta and meta:
+            _entry_meta = attrs_mod.get(self.handler.app.attrs_data, path)
+            _meta_updated = False
             for meta_key, db_key in (("Prompt", "prompt"), ("NegPrompt", "neg_prompt")):
-                if meta.get(meta_key):
-                    _sec_key = _rev_map.get(db_key)
-                    _te = self._text_edits.get(_sec_key) if _sec_key else None
-                    if _te and not _te.toPlainText():
-                        _te.blockSignals(True)
-                        _te.setPlainText(meta[meta_key])
-                        _te.blockSignals(False)
-        else:
-            self._info_label.setText("")
+                if meta.get(meta_key) and not _entry_meta.get(db_key):
+                    _entry_meta[db_key] = meta[meta_key]
+                    _meta_updated = True
+            if _meta_updated:
+                _entry_meta["_project"] = getattr(app, "current_project", None)
+                _sc_meta.load_file(path, _entry_meta)
+        if not meta:
+            self._file_info_text = ""
+            self._sync_toggle_strip()
 
         # Sync person_id: try one-way detection rules first, then coded filename parse
         if not entry.get("person_id"):
@@ -1746,12 +1727,8 @@ class PreviewWindow(QWidget):
                                    meta=entry.get("meta"),
                                    custom=entry.get("custom", ""),
                                    person_id=pid,
-# ────────── MODIFICATION START ──────────
                                    speech=entry.get("speech", ""),
-                                   # This was missing! Without it, set_file overwrites the state to Locked (False)
-                                   editable=entry.get("editable", True) 
-                                   # ─────────── MODIFICATION END ───────────   
-
+                                   editable=entry.get("editable", True)
                                    )
                 attrs_mod.save(app.current_project, app.attrs_data)
 
@@ -1804,12 +1781,6 @@ class PreviewWindow(QWidget):
                     if self._attr_path != p:
                         return
                     _app = self.handler.app
-                    _entry2 = attrs_mod.get(_app.attrs_data, p)
-                    for _sec_key, _widget in self._text_edits.items():
-                        _db_key = _TEXT_KEY_MAP.get(_sec_key, _sec_key)
-                        typed = _widget.toPlainText()
-                        if typed and not _entry2.get(_db_key):
-                            _entry2[_db_key] = typed
                     self._refresh_attrs(p)
                     # Update person combo if a match was found
                     if pid and hasattr(self, '_person_id_combo'):
@@ -1828,127 +1799,12 @@ class PreviewWindow(QWidget):
         base = attrs_mod._extract_filename_base(stem, rules)
         return base
 
-    def _on_auto_rename(self):
-        """Detect person ID + pose/shot, then rename file to canonical form."""
-        path = self._attr_path
-        if not path:
-            return
-        if not attrs_mod.is_editable(self.handler.app.attrs_data, path):
-            return
-        app = self.handler.app
-        self._btn_auto_rename.setEnabled(False)
-        self._btn_auto_rename.setText("…")
-
-        new_base = ""  # original name discarded — final name is just P000/P001 etc.
-
-        # Results stored here by background thread
-        _result = [None, None, None]  # [pid, shot_tag, pose_tag]
-        _done   = threading.Event()
-
-        def _run():
-            try:
-                _result[0] = attrs_mod.detect_or_assign_person_id(path, app.current_project)
-            except Exception:
-                pass
-            try:
-                _result[1], _result[2] = attrs_mod.detect_shot_and_pose(path)
-            except Exception:
-                pass
-            _done.set()
-
-        def _apply():
-            # Always restore button first
-            self._btn_auto_rename.setEnabled(True)
-            self._btn_auto_rename.setText("Change File Name")
-
-            pid, shot_tag, pose_tag = _result
-            pid = pid or "000"   # no face detected / video → P000
-
-            # Update person ID field
-            if hasattr(self, '_person_id_label'):
-                self._person_id_label.setText(pid)
-
-            # Build tags from current checkboxes + combos
-            tags = [k for k, cb in self._attr_cbs.items() if cb.isChecked()]
-            qual = self._quality_combo.currentData()
-            if qual: tags.append(qual)
-            for _attr in ('_hair_combo', '_camera_angle_combo', '_posture_combo',
-                          '_action_combo', '_eye_color_combo', '_skin_type_combo'):
-                _cb = getattr(self, _attr, None)
-                if _cb:
-                    _v = _cb.currentData()
-                    if _v: tags.append(_v)
-            if pose_tag and pose_tag not in tags: tags.append(pose_tag)
-            if shot_tag and shot_tag not in tags: tags.append(shot_tag)
-
-            # Build new filename
-            pose_suf = f"-{pose_tag}" if pose_tag else ""
-            wm_suf   = "-watermark" if "watermark" in tags else ""
-            fp       = attrs_mod.file_fingerprint(path) or ""
-            fp_suf   = f"-{fp}" if fp else ""
-            pid_str  = pid   # always set ("000" or "001" etc.)
-            j_code   = attrs_mod.julian_id_for_file(path)
-            _, ext   = os.path.splitext(path)
-            new_stem = f"P{pid_str}J{j_code}" + pose_suf + wm_suf + fp_suf
-            new_path = attrs_mod.unique_path(
-                os.path.join(os.path.dirname(path), new_stem + ext))
-
-            if new_path != path:
-                try:
-                    os.rename(path, new_path)
-                except Exception as e:
-                    from PyQt6.QtWidgets import QMessageBox
-                    QMessageBox.critical(self.handler.window, "Rename Error", str(e))
-                    return
-                attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
-                if app.data and "paths" in app.data and path in app.data["paths"]:
-                    idx2 = app.data["paths"].index(path)
-                    app.data["paths"][idx2] = new_path
-                    torch.save(app.data, f"features_{app.current_project}.pt")
-                if path in app.attrs_data:
-                    app.attrs_data[new_path] = app.attrs_data.pop(path)
-                row = app._current_row()
-                if row >= 0:
-                    app.table.item(row, 2).setText(os.path.basename(new_path))
-                    app.table.set_row_path(row, new_path)
-                self._attr_path = new_path
-                self.handler.current_path = new_path
-                self.handler.window.setWindowTitle(
-                    f"{app._mask_path(new_path)}/{os.path.basename(new_path)}")
-
-            entry = attrs_mod.get(app.attrs_data, new_path)
-            attrs_mod.set_file(app.attrs_data, new_path,
-                               tags=tags,
-                               note=entry.get("note", ""),
-                               confirmed=entry.get("confirmed", False),
-                               project=entry.get("project", ""),
-                               scene=entry.get("scene", ""),
-                               prompt=entry.get("prompt", ""),
-                               seed=entry.get("seed", ""),
-                               meta=entry.get("meta"),
-                               custom=entry.get("custom", ""),
-                               person_id=pid_str,
-                               editable=entry.get("editable", True))
-            attrs_mod.save(app.current_project, app.attrs_data)
-            rules = attrs_mod.load_filename_rules(getattr(self.handler.app, "current_project", None))
-            stem  = os.path.splitext(os.path.basename(new_path))[0]
-            self._name_edit.setText(attrs_mod._extract_filename_base(stem, rules))
-
-        def _poll():
-            if _done.is_set():
-                _apply()
-            else:
-                QTimer.singleShot(100, _poll)
-
-        threading.Thread(target=_run, daemon=True).start()
-        QTimer.singleShot(100, _poll)  # started from main thread — reliable
-
     def _refresh_person_id_combo(self, force=False):
         """Populate the person ID combo — text immediately, thumbnails async."""
         app = self.handler.app
         db = attrs_mod.load_faces_db(app.current_project)
         faces = db.get("faces", {})
-        registry = attrs_mod.load_person_registry()
+        registry = attrs_mod.load_person_registry(app.current_project)
 
         # Build a lightweight signature; skip full rebuild if nothing changed
         _sig = (tuple(sorted(faces.keys())), tuple(sorted(registry.items())))
@@ -2027,104 +1883,6 @@ class PreviewWindow(QWidget):
         import threading as _threading
         _threading.Thread(target=_load_thumbs_bg, daemon=True).start()
 
-    # ── Arrange mode ─────────────────────────────────────────────────────────
-
-    def _toggle_arrange_mode(self, on: bool):
-        """Show/hide drag handles on all reorderable sections."""
-        self._drag_sec = None
-        for sec in getattr(self, '_attr_sections', []):
-            sec._drag_handle.setVisible(on)
-            if on:
-                sec._drag_handle.installEventFilter(self)
-            else:
-                sec._drag_handle.removeEventFilter(self)
-
-    def _do_drag_move(self, global_y: int):
-        """Reorder sections live while the user drags a section header."""
-        sec = getattr(self, '_drag_sec', None)
-        if sec is None:
-            return
-        secs = self._attr_sections
-        cur_idx = secs.index(sec)
-        from PyQt6.QtCore import QPoint
-        local_y = self._sections_container.mapFromGlobal(QPoint(0, global_y)).y()
-        # Count how many other sections have their centre above local_y
-        new_idx = sum(
-            1 for s in secs
-            if s is not sec and s.geometry().center().y() < local_y
-        )
-        if new_idx == cur_idx:
-            return
-        secs.pop(cur_idx)
-        secs.insert(new_idx, sec)
-        sv = self._sections_vbox
-        for s in secs:
-            sv.removeWidget(s)
-        for s in secs:
-            sv.addWidget(s)
-
-    def _save_section_order(self):
-        """Persist current section order to config."""
-        self.handler.app.config["attr_section_order"] = [
-            s._title for s in self._attr_sections
-        ]
-        import aisearch_config as _cfg
-        _cfg.save_config(self.handler.app.config,
-                         getattr(self.handler.app, "current_project", None))
-
-    # ── Tag usage tracking ────────────────────────────────────────────────────
-
-    def _tag_usage_path(self):
-        proj = getattr(self.handler.app, "current_project", "default")
-        return f"tag_usage_{proj}.json"
-
-    def _load_tag_usage(self):
-        p = self._tag_usage_path()
-        try:
-            mtime = os.path.getmtime(p)
-            cache = getattr(self, "_tag_usage_cache", (None, None))
-            if cache[0] == mtime:
-                return cache[1]
-            with open(p, encoding="utf-8") as f:
-                data = json.load(f)
-            self._tag_usage_cache = (mtime, data)
-            return data
-        except Exception:
-            return {}
-
-    def _increment_tag_usage(self, key: str):
-        p = self._tag_usage_path()
-        usage = self._load_tag_usage()
-        usage[key] = usage.get(key, 0) + 1
-        try:
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(usage, f, ensure_ascii=False)
-        except Exception:
-            pass
-
-    def _rebuild_select_combo(self, sec_key):
-        """Re-sort a matrix-style QComboBox by freq or alpha, preserving current selection."""
-        info = self._attr_select.get(sec_key)
-        if not info:
-            return
-        cb   = info["combo"]
-        data = info["data"]
-        freq = info["freq"]
-        cur  = cb.currentData()
-        usage = self._load_tag_usage()
-        if freq:
-            sorted_data = sorted(data, key=lambda kv: (-usage.get(kv[0], 0), kv[1]))
-        else:
-            sorted_data = sorted(data, key=lambda kv: kv[1])
-        cb.blockSignals(True)
-        cb.clear()
-        cb.addItem("—", "")
-        for k, lbl in sorted_data:
-            cb.addItem(lbl, k)
-        idx = cb.findData(cur)
-        cb.setCurrentIndex(max(0, idx))
-        cb.blockSignals(False)
-
     # ── Person combo ─────────────────────────────────────────────────────────
 
     def _on_person_combo_changed(self, idx):
@@ -2139,7 +1897,7 @@ class PreviewWindow(QWidget):
             self._p_edits[0].blockSignals(True)
             self._p_edits[0].setText(fid)
             self._p_edits[0].blockSignals(False)
-        registry = attrs_mod.load_person_registry()
+        registry = attrs_mod.load_person_registry(self.handler.app.current_project)
         name = registry.get(fid, "")
         self._person_name_edit.setText(name)
         # Save immediately so person_id persists across restarts
@@ -2224,7 +1982,8 @@ class PreviewWindow(QWidget):
                                        seed=entry.get("seed", ""),
                                        meta=entry.get("meta"),
                                        custom=entry.get("custom", ""),
-                                       person_id=pid)
+                                       person_id=pid,
+                                       editable=entry.get("editable", True))
                     attrs_mod.save(app.current_project, app.attrs_data)
                     self._refresh_person_id_combo(force=True)
                     # Show name if registered
@@ -2293,7 +2052,8 @@ class PreviewWindow(QWidget):
                            seed=entry.get("seed", ""),
                            meta=entry.get("meta"),
                            custom=entry.get("custom", ""),
-                           person_id=new_pid)
+                           person_id=new_pid,
+                           editable=entry.get("editable", True))
         attrs_mod.save(app.current_project, app.attrs_data)
         name_label = attrs_mod.get_person_id_label(app.current_project, new_pid)
         self._person_name_edit.setText(name_label if name_label != new_pid else "")
@@ -2313,6 +2073,98 @@ class PreviewWindow(QWidget):
         name = self._person_name_edit.text().strip()
         attrs_mod.set_person_name(self.handler.app.current_project, pid, name)
 
+    def _wire_canvas_bool_flags(self):
+        """Connect soft canvas coded-boolean buttons to _on_bool_flag_toggled.
+        Handles both single-toggle (boolean) and True/False radio pairs.
+        Called after canvas creation and after each reload."""
+        _sc = getattr(self, '_soft_canvas', None)
+        if not _sc:
+            return
+        # Map option_key (lowercase label) → uppercase letter for digits=0 fields
+        _bool_opt_map = {lbl.lower(): letter
+                         for letter, lbl, digits in attrs_mod.CODED_FIELDS if digits == 0}
+        for w in _sc.widgets:
+            if w.style not in ("radio", "boolean"):
+                continue
+            _btns = getattr(w, '_btns', {})
+            # Find which coded boolean field this widget controls
+            field_letter = None
+            positive_key = None
+            for opt_key in _btns:
+                letter = _bool_opt_map.get(opt_key.lower())
+                if letter:
+                    field_letter = letter
+                    positive_key = opt_key
+                    break
+            if not field_letter:
+                continue
+            lk = field_letter.lower()
+            fe = self._code_edits.get(lk)
+            if fe is None:
+                continue
+            for opt_key, btn in _btns.items():
+                is_on = (opt_key == positive_key)   # True button → add flag; False btn → remove
+                def _make_handler(_fe=fe, _letter=field_letter, _is_on=is_on):
+                    def _handler(checked):
+                        if not checked:
+                            return   # act only when a button becomes active
+                        _fe.blockSignals(True)
+                        _fe.setChecked(_is_on)
+                        _fe.blockSignals(False)
+                        self._on_bool_flag_toggled(_letter)
+                    return _handler
+                btn.toggled.connect(_make_handler())
+
+    def _on_bool_flag_toggled(self, letter):
+        """Toggle a boolean coded flag (e.g. WM, ED) in the filename."""
+        path = self._attr_path
+        if not path:
+            return
+        if not attrs_mod.is_editable(self.handler.app.attrs_data, path):
+            return
+        stem, ext = os.path.splitext(os.path.basename(path))
+        parts = attrs_mod.parse_coded_filename(stem)
+        if parts is None:
+            # Not yet a coded file — trigger full normalize which builds coded filename from scratch
+            self._on_normalize_filename()
+            return
+        lk = letter.lower()
+        fe = self._code_edits.get(lk)
+        if fe is None:
+            return
+        parts[lk] = letter if fe.isChecked() else ""
+        _date_first = bool(parts.get("j")) and not parts.get("persons")
+        new_stem = attrs_mod.build_coded_filename(parts, date_first=_date_first)
+        if not new_stem or new_stem == stem:
+            return
+        _, _ext = os.path.splitext(path)
+        new_path = attrs_mod.unique_path(os.path.join(os.path.dirname(path), new_stem + _ext))
+        if new_path == path:
+            return
+        try:
+            os.rename(path, new_path)
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self.handler.window, "Rename Error", str(e))
+            return
+        app = self.handler.app
+        attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
+        if app.data and "paths" in app.data and path in app.data["paths"]:
+            idx = app.data["paths"].index(path)
+            app.data["paths"][idx] = new_path
+            import torch as _torch
+            _torch.save(app.data, os.path.join(attrs_mod.DATA_DIR,
+                                                f"features_{app.current_project}.pt"))
+        if path in app.attrs_data:
+            app.attrs_data[new_path] = app.attrs_data.pop(path)
+        row = app._current_row()
+        if row >= 0:
+            app.table.item(row, 2).setText(os.path.basename(new_path))
+            app.table.set_row_path(row, new_path)
+        self._attr_path = new_path
+        self.handler.current_path = new_path
+        self.handler.window._update_title_with_info(new_path)
+
     def _on_normalize_filename(self):
         """Rebuild filename from coded fields: P001P002B0a1O02I001.ext"""
         path = self._attr_path
@@ -2326,7 +2178,14 @@ class PreviewWindow(QWidget):
             return
         persons_with = [pwe.text().strip().lower() for pwe in self._pw_edits if pwe.text().strip()]
         parts = {"persons": persons, "persons_with": persons_with}
+        # Preserve J from existing coded filename; fall back to file creation time
+        _stem_now = os.path.splitext(os.path.basename(path))[0]
+        _parsed_now = attrs_mod.parse_coded_filename(_stem_now)
+        parts["j"] = (_parsed_now.get("j", "") if _parsed_now else "") or \
+                     attrs_mod.julian_id_for_file(path)
         for letter, _, digits in attrs_mod.CODED_FIELDS:
+            if letter == "J":
+                continue   # J already set above — skip display-decoded text
             fe = self._code_edits.get(letter.lower())
             if fe is None:
                 continue
@@ -2353,7 +2212,7 @@ class PreviewWindow(QWidget):
         if app.data and "paths" in app.data and path in app.data["paths"]:
             idx = app.data["paths"].index(path)
             app.data["paths"][idx] = new_path
-            torch.save(app.data, f"features_{app.current_project}.pt")
+            torch.save(app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{app.current_project}.pt"))
         if path in app.attrs_data:
             app.attrs_data[new_path] = app.attrs_data.pop(path)
         row = app._current_row()
@@ -2362,8 +2221,7 @@ class PreviewWindow(QWidget):
             app.table.set_row_path(row, new_path)
         self._attr_path = new_path
         self.handler.current_path = new_path
-        self.handler.window.setWindowTitle(
-            f"{app._mask_path(new_path)}/{os.path.basename(new_path)}")
+        self.handler.window._update_title_with_info(new_path)
         self._name_edit.setText(new_base)
         self._name_edit.setCursorPosition(len(new_base))
 
@@ -2396,7 +2254,7 @@ class PreviewWindow(QWidget):
         if app.data and "paths" in app.data and path in app.data["paths"]:
             idx = app.data["paths"].index(path)
             app.data["paths"][idx] = new_path
-            torch.save(app.data, f"features_{app.current_project}.pt")
+            torch.save(app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{app.current_project}.pt"))
         # Migrate attrs entry
         if path in app.attrs_data:
             app.attrs_data[new_path] = app.attrs_data.pop(path)
@@ -2408,8 +2266,7 @@ class PreviewWindow(QWidget):
         # Update handler state
         self._attr_path = new_path
         self.handler.current_path = new_path
-        self.handler.window.setWindowTitle(
-            f"{app._mask_path(new_path)}/{os.path.basename(new_path)}")
+        self.handler.window._update_title_with_info(new_path)
 
     def _on_pose_changed(self):
         path = self._attr_path
@@ -2427,7 +2284,7 @@ class PreviewWindow(QWidget):
             if app.data and "paths" in app.data and path in app.data["paths"]:
                 idx = app.data["paths"].index(path)
                 app.data["paths"][idx] = new_path
-                torch.save(app.data, f"features_{app.current_project}.pt")
+                torch.save(app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{app.current_project}.pt"))
             # Migrate attrs entry
             if path in app.attrs_data:
                 app.attrs_data[new_path] = app.attrs_data.pop(path)
@@ -2439,16 +2296,16 @@ class PreviewWindow(QWidget):
             # Update handler state
             self._attr_path = new_path
             self.handler.current_path = new_path
-            self.handler.window.setWindowTitle(
-                f"{app._mask_path(new_path)}/{os.path.basename(new_path)}")
+            self.handler.window._update_title_with_info(new_path)
         self._save_attrs()
 
     def _apply_protected_lock(self, locked):
         """Disable all attribute editing widgets when file is protected."""
         # Collect all editable widgets in the attr panel (except the lock checkbox itself)
         editables = []
-        editables += list(self._text_edits.values())
-        editables += list(self._attr_cbs.values())
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc:
+            editables.append(_sc)
         editables.append(self._quality_combo)
         editables.append(self._seed_edit)
         editables.append(self._project_edit)
@@ -2456,20 +2313,19 @@ class PreviewWindow(QWidget):
         editables.append(self._person_id_combo)
         editables.append(self._person_name_edit)
         editables.append(self._btn_detect_person)
-        editables.append(self._btn_bake_meta)
-        editables.append(self._btn_read_meta)
+
         for w in editables:
             w.setEnabled(not locked)
         for cb_list in getattr(self, '_code_combos', {}).values():
             for _, _, cb in cb_list:
                 cb.setEnabled(not locked)
-        self._btn_auto_rename.setEnabled(not locked)
+
 
 
 
 
         if locked:
-            self._protected_check.setText("🔒 Locked")
+            self._protected_check.setText("🔒 Locked")  # Design = unlocked
             self._protected_check.setStyleSheet(
                 "QPushButton { background: transparent; border: none; font-size: 18px; color: #ff6644; padding: 0 4px; }")
         else:
@@ -2483,23 +2339,58 @@ class PreviewWindow(QWidget):
             return
         self._update_bake_btn("pending")
         app = self.handler.app
-        tags = [k for k, cb in self._attr_cbs.items() if cb.isChecked()]
+        tags = []
         qual = self._quality_combo.currentData()
         if qual: tags.append(qual)
-        for _info in self._attr_select.values():
-            _v = _info["combo"].currentData()
-            if _v: tags.append(_v)
         entry = attrs_mod.get(app.attrs_data, path)
+        # Collect soft-field data from canvas (taglist toggles + text areas)
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc:
+            _extra_tags, _text_vals = _sc.collect_soft_data()
+            # "Our" tags = every tag key the canvas knows about (project-specific config)
+            # This is more accurate than attrs_mod.TAGS which uses the general config
+            from attr_viewer import _DEDICATED_FIELD_KEYS as _DFK
+            _our_tags = {w.key for w in _sc.widgets
+                         if w.style in ("taglist", "boolean", "matrix", "radio")}
+            _our_tags.update(attrs_mod.QUALITY_TAGS)
+            # Also include individual button keys from taglist/boolean/radio widgets
+            for w in _sc.widgets:
+                if w.style in ("taglist", "boolean", "radio"):
+                    _our_tags.update(getattr(w, "_btns", {}).keys())
+            # Strip keys from dedicated-field widgets (audio etc.) — not stored in tags
+            _dedicated_btn_keys = set()
+            for w in _sc.widgets:
+                if w.style == "radio" and w.key in _DFK:
+                    _dedicated_btn_keys.update(getattr(w, "_btns", {}).keys())
+            # Coded-boolean option keys (e.g. "watermark") — stored in filename, not tags.
+            # Also include complement keys from any radio widget that has a positive coded-bool btn.
+            _coded_bool_opts = {lbl.lower() for _, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+            for _cw in _sc.widgets:
+                if _cw.style == "radio":
+                    _wb = getattr(_cw, '_btns', {})
+                    if any(k.lower() in _coded_bool_opts for k in _wb):
+                        _coded_bool_opts.update(k.lower() for k in _wb)
+            # Preserve foreign tags we don't own, then add canvas tags
+            _preserved = [t for t in entry.get("tags", [])
+                          if t not in _our_tags and t not in _dedicated_btn_keys
+                          and t not in _coded_bool_opts]
+            tags.extend(_preserved)
+            # Canvas tags — but strip quality tags, dedicated-field values, coded booleans
+            tags.extend(t for t in _extra_tags
+                        if t not in attrs_mod.QUALITY_TAGS
+                        and t not in _dedicated_btn_keys
+                        and t not in _coded_bool_opts)
+            tags = list(dict.fromkeys(tags))  # remove duplicates, preserve order
+        else:
+            _text_vals = {}
         persons = [_norm_pid(pe.text().strip()) for pe in self._p_edits if pe.text().strip()]
         if not persons:
             _combo_fid = self._person_id_combo.currentData()
             if _combo_fid:
                 persons = [_norm_pid(_combo_fid)]
-        _text_vals = {_TEXT_KEY_MAP.get(k, k): te.toPlainText()
-                      for k, te in self._text_edits.items()}
         attrs_mod.set_file(app.attrs_data, path,
                            tags=tags,
-                           note=self._project_edit.text() if self._note_row_widget.isVisible() else entry.get("note", ""),
+                           note=self._project_edit.text() if self._note_row_widget.isVisible() else _text_vals.get("note", entry.get("note", "")),
                            confirmed=entry.get("confirmed", False),
                            project=entry.get("project", ""),
                            scene=entry.get("scene", ""),
@@ -2510,8 +2401,32 @@ class PreviewWindow(QWidget):
                            custom=entry.get("custom", ""),
                            person_id=persons[0] if persons else "",
                            speech=_text_vals.get("speech", ""),
+                           audio=_text_vals.get("audio", entry.get("audio", "")),
                            editable=not self._protected_check.isChecked())
         attrs_mod.save(app.current_project, app.attrs_data)
+        # Tag ↔ filename sync: apply two-way tag_group rules when auto_rename is on
+        if attrs_mod.load_filename_config(getattr(app, "current_project", None)).get("auto_rename", False):
+            new_path = attrs_mod.apply_tag_sync_rules(app.attrs_data, path, app.current_project)
+            if new_path != path:
+                attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
+                if app.data and "paths" in app.data and path in app.data["paths"]:
+                    app.data["paths"][app.data["paths"].index(path)] = new_path
+                self._attr_path = new_path
+                self.handler.current_path = new_path
+                row = app._current_row()
+                if row >= 0:
+                    app.table.set_row_path(row, new_path)
+                self.setWindowTitle(os.path.basename(new_path))
+                path = new_path
+        # Embed AItan{} block into the file itself (background, non-blocking)
+        _saved_entry = attrs_mod.get(app.attrs_data, path)
+        if os.path.exists(path):
+            import threading
+            def _embed_and_refresh(_p=path, _e=_saved_entry):
+                attrs_mod.embed_aitan_meta(_p, _e)
+                # Schedule UI refresh on main thread via signal
+                self._raw_refresh_signal.emit(_p)
+            threading.Thread(target=_embed_and_refresh, daemon=True).start()
         row = app._current_row()
         if row >= 0:
             app._refresh_attrs_indicator(row, path)
@@ -2521,48 +2436,6 @@ class PreviewWindow(QWidget):
         # Sync main window inline panel if visible
         if hasattr(app, '_inline_attr_path') and app._inline_attr_path == path:
             app._refresh_inline_attrs(path)
-
-    def _read_file_meta(self):
-        """Read embedded metadata from the physical file and populate the attr panel."""
-        path = self._attr_path
-        if not path or not os.path.exists(path): return
-        data = _read_embedded_meta(path)
-        if not data:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Read Metadata", "No embedded metadata found in file.")
-            return
-        # Populate fields (don't overwrite if already filled unless user confirms)
-        _rev_map = {v: k for k, v in _TEXT_KEY_MAP.items()}
-        for _db_key in ("prompt", "neg_prompt", "speech"):
-            if data.get(_db_key):
-                _te = self._text_edits.get(_rev_map.get(_db_key, _db_key))
-                if _te:
-                    _te.setPlainText(data[_db_key])
-        if data.get("seed"):
-            self._seed_edit.setText(str(data["seed"]))
-        if data.get("model"):
-            # Store in custom field via attrs
-            app = self.handler.app
-            entry = attrs_mod.get(app.attrs_data, path)
-            attrs_mod.set_file(app.attrs_data, path, custom=data["model"],
-                               **{k: entry.get(k, "") for k in
-                                  ("tags","note","confirmed","project","scene",
-                                   "prompt","neg_prompt","seed","speech","person_id")})
-
-# ────────── MODIFICATION START ──────────
-        # Imitate a physical mouse click!
-        # If the button is locked (Checked = True), unchecking it automatically
-        # fires the 'toggled' signals, perfectly triggering the UI unlock and database save.
-
-        self._protected_check.setChecked(False) 
-  
-            # If it was already unlocked, we still need to save the newly read text
-        self._save_attrs()
-        # ─────────── MODIFICATION END ───────────
-
-
-
-        self._save_attrs()
 
     def _update_bake_btn(self, state):
         """state: 'idle' | 'pending' | 'ok' | 'error'"""
@@ -2575,66 +2448,87 @@ class PreviewWindow(QWidget):
         }
         self._btn_bake_meta.setStyleSheet(_styles.get(state, _styles["idle"]))
 
+    def _on_raw_refresh(self, path):
+        """Called from main thread after background embed completes — refresh Raw Data display."""
+        _ed = getattr(self, '_raw_meta_edit', None)
+        if _ed is None:
+            return
+        # Only refresh if still viewing the same file
+        if getattr(self, '_attr_path', None) == path:
+            _ed.setPlainText(attrs_mod.read_raw_embedded_text(path) or "(no embedded text)")
+
     def _bake_to_file(self, silent=False):
-        """Embed current prompt/seed/model/speech into the physical file."""
+        """Embed all attrs (tags, prompt, seed, etc.) into the physical file as AItan{} block."""
         path = self._attr_path
         if not path or not os.path.exists(path): return
         app = self.handler.app
+        # Save current UI state to attrs_data first (picks up prompt, seed, person_id etc.)
+        if not silent:
+            self._save_attrs()
+            # Auto-rename if enabled and person_id is set
+            persons = [pe.text().strip() for pe in self._p_edits if pe.text().strip()]
+            pid = persons[0] if persons else ""
+            if pid and self._chk_auto_rename.isChecked():
+                new_path = attrs_mod.rename_with_person_id(
+                    app.attrs_data, path, pid,
+                    flush_stores=True,
+                    project=app.current_project,
+                    skip_uncoded=False)
+                if new_path != path:
+                    if (app.data and "paths" in app.data and path in app.data["paths"]):
+                        app.data["paths"][app.data["paths"].index(path)] = new_path
+                    for row in range(app.table.rowCount()):
+                        if app.table.get_row_path(row) == path:
+                            app.table.set_row_path(row, new_path)
+                            name_item = app.table.item(row, 2)
+                            if name_item:
+                                name_item.setText(os.path.basename(new_path))
+                            break
+                    self._attr_path = new_path
+                    self.handler.current_path = new_path
+                    path = new_path
+        # Embed synchronously so we can report success/error
         entry = attrs_mod.get(app.attrs_data, path)
-        _rev_map = {v: k for k, v in _TEXT_KEY_MAP.items()}
-        persons = [pe.text().strip() for pe in self._p_edits if pe.text().strip()]
-        data = {
-            "prompt":     (self._text_edits[_rev_map["prompt"]].toPlainText().strip()
-                           if _rev_map.get("prompt") in self._text_edits else ""),
-            "neg_prompt": (self._text_edits[_rev_map["neg_prompt"]].toPlainText().strip()
-                           if _rev_map.get("neg_prompt") in self._text_edits else ""),
-            "seed":       self._seed_edit.text().strip(),
-            "model":      entry.get("custom", ""),
-            "speech":     (self._text_edits[_rev_map["speech"]].toPlainText().strip()
-                           if _rev_map.get("speech") in self._text_edits else ""),
-            "person_id":  persons[0] if persons else "",
-        }
-        # Only bake if there's something worth writing
-        if not any(data.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id")):
-            self._update_bake_btn("idle")
-            return
-        ok, err = _bake_embedded_meta(path, data)
-        if ok:
-            if not silent:
-                self._save_attrs()   # persist person_id + other fields to JSON on manual bake
-                # Auto-rename if enabled and person_id is set
-                pid = data.get("person_id", "").strip()
-                if pid and self._chk_auto_rename.isChecked():
-                    new_path = attrs_mod.rename_with_person_id(
-                        app.attrs_data, path, pid,
-                        flush_stores=True,
-                        project=app.current_project,
-                        skip_uncoded=False)
-                    if new_path != path:
-                        # Update in-memory feature store
-                        if (app.data and "paths" in app.data
-                                and path in app.data["paths"]):
-                            idx2 = app.data["paths"].index(path)
-                            app.data["paths"][idx2] = new_path
-                        # Update main table row
-                        for row in range(app.table.rowCount()):
-                            if app.table.get_row_path(row) == path:
-                                app.table.set_row_path(row, new_path)
-                                name_item = app.table.item(row, 2)
-                                if name_item:
-                                    name_item.setText(os.path.basename(new_path))
-                                break
-                        # Update preview state
-                        self._attr_path = new_path
-                        self.handler.current_path = new_path
+        # Never bake an empty entry — it would write AItan{} and erase recovered filename data.
+        # If entry has no real data, skip (silent) or show what's already on disk (manual bake).
+        if not attrs_mod._has_real_data(entry):
+            if silent:
+                return
+            # Manual bake with nothing to write — just refresh the display from disk
             self._update_bake_btn("ok")
             self._bake_err_label.setText("")
             QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
+            self._raw_meta_edit.setPlainText(
+                attrs_mod.read_raw_embedded_text(path) or "(no embedded text)")
+            return
+        ok = attrs_mod.embed_aitan_meta(path, entry)
+        if not ok:
+            # Some containers cause ffmpeg to return non-zero even when metadata was written.
+            # Also guards against rare race conditions — verify by reading the block back.
+            ok = bool(attrs_mod._read_embedded_aitan_block(path))
+        if ok:
+            self._update_bake_btn("ok")
+            self._bake_err_label.setText("")
+            QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
+            _baked_path = getattr(self, '_attr_path', path)
+            self._raw_meta_edit.setPlainText(
+                attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)")
         else:
             if not silent:
                 self._update_bake_btn("error")
-                self._bake_err_label.setText(str(err))
-                QMessageBox.critical(self, "Bake Failed", str(err))
+                self._bake_err_label.setText("Bake failed — file type not supported or write error.")
+                QMessageBox.critical(self, "Bake Failed", "Could not embed AItan block into file.")
+
+    def set_mode_color(self, color: str):
+        """Update the bar background color to reflect the active mode."""
+        bar_ss = f"background-color: {color};"
+        btn_ss = "color: #fff; background-color: transparent; border: none; padding: 4px;"
+        self._top_bar.setStyleSheet(bar_ss)
+        self._left_bar.setStyleSheet(bar_ss)
+        for btn in (self._btn_toggle_top, self._btn_toggle_left,
+                    self._btn_back_top, self._btn_back_left,
+                    self.btn_orient, self._btn_orient_left):
+            btn.setStyleSheet(btn_ss)
 
     def closeEvent(self, event):
         import aisearch_config as _cfg_mod
@@ -2711,10 +2605,15 @@ class PreviewHandler:
         else:
             self.window.raise_()  # bring to front without stealing focus from main window
 
+        # Apply current mode color to the bar
+        _mode_colors = {"search": "#2a8ad4", "dup": "#9b6dff", "browse": "#3a8a3a"}
+        _cur_mode = self.app.config.get("last_mode", "search")
+        self.window.set_mode_color(_mode_colors.get(_cur_mode, "#1a1a1a"))
+
         is_video = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
-        rel_dir  = self.app._mask_path(path)
-        name     = os.path.basename(path)
-        self.window.setWindowTitle(f"{rel_dir}/{name}" if rel_dir and rel_dir != "." else name)
+        # Set initial title (info will be appended once _refresh_attrs completes)
+        self.window._file_info_text = ""
+        self.window._update_title_with_info(path)
 
         if is_video:
             self.window.label.setStyleSheet("background-color: black; border: 10px solid #00ff00;")
@@ -2728,9 +2627,12 @@ class PreviewHandler:
         # Build attr panel only once (on first window creation), AFTER render
         if _new_window:
             QTimer.singleShot(0, self.window._deferred_build_attr_panel)
-        # Deferred splitter fit: after layout settles, shrink image pane to
-        # the actual rendered label height (fixes triangle area on project switch / Load)
-        QTimer.singleShot(120, self._auto_fit_splitter)
+        # Note: _render() already calls setMaximumHeight(nh) synchronously,
+        # so no deferred _auto_fit_splitter needed here.
+
+    def _go_back_from_preview(self):
+        """Delegate back navigation to the main app."""
+        self.app._go_back()
 
     def _navigate(self, direction):
         row    = self.app._current_row()
@@ -2787,7 +2689,7 @@ class PreviewHandler:
             paths = self.app.data["paths"]
             if old_path in paths:
                 paths[paths.index(old_path)] = final_path
-                torch.save(self.app.data, f"features_{self.app.current_project}.pt")
+                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
 
         self.app._update_row(row, old_path, final_path, overwrite, dest_path)
         self.app.last_move_dir = target_dir
@@ -2851,7 +2753,7 @@ class PreviewHandler:
                 keep = [i for i in range(len(self.app.data["paths"])) if i != idx]
                 self.app.data["paths"]      = [self.app.data["paths"][i] for i in keep]
                 self.app.data["embeddings"] = self.app.data["embeddings"][keep]
-                torch.save(self.app.data, f"features_{self.app.current_project}.pt")
+                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
 
         if item_row is not None:
             self.app.table.removeRow(item_row)
@@ -2880,7 +2782,7 @@ class PreviewHandler:
         if emb is None: return
         self.app.data["paths"].append(candidate)
         self.app.data["embeddings"] = torch.cat([self.app.data["embeddings"], emb.unsqueeze(0)])
-        torch.save(self.app.data, f"features_{self.app.current_project}.pt")
+        torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
         self.app.table.setSortingEnabled(False)
         self.app._append_row("-", logic.get_sz_readable(candidate),
                               os.path.basename(candidate),
@@ -2965,8 +2867,7 @@ class PreviewHandler:
             self._render(self.current_path, is_vid, fast=False)
 
     def _auto_fit_splitter(self):
-        """Belt-and-suspenders: re-apply the image pane height cap after layout settles.
-        The primary fix is setMaximumHeight in _render(); this catches any edge cases."""
+        """Re-apply the image pane height cap after layout settles (e.g. attr panel toggle)."""
         if not self.window:
             return
         sp = self.window._splitter
@@ -2976,7 +2877,7 @@ class PreviewHandler:
         nh = self.window.label.height()
         if nh <= 0:
             return
-        self.window.scroll_area.setMaximumHeight(nh + 8)
+        self.window.scroll_area.setMaximumHeight(nh)
 
     def _update_splitter_orientation(self):
         pass  # orientation is set manually via the ⇔ button
@@ -3092,7 +2993,7 @@ class PreviewHandler:
             sp = self.window._splitter
             if (sp.orientation() == Qt.Orientation.Vertical
                     and self.window._attr_scroll.isVisible()):
-                self.window.scroll_area.setMaximumHeight(nh + 8)
+                self.window.scroll_area.setMaximumHeight(nh)
             else:
                 self.window.scroll_area.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
         except Exception as e:

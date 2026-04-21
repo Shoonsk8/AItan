@@ -9,7 +9,7 @@ from PyQt6.QtCore import QMimeData
 
 class _WsSec(QWidget):
     """Collapsible workspace section for the Attributes tab with Drag and Drop."""
-    def __init__(self, title: str, prefix: str = "", parent=None):
+    def __init__(self, title: str, prefix: str = "", parent=None, color: str = "#f0c040"):
         super().__init__(parent)
         self.prefix = prefix
         self.setAcceptDrops(True)
@@ -38,7 +38,7 @@ class _WsSec(QWidget):
         hdr_lay.addWidget(self._arrow)
 
         self._title_lbl = QLabel(title)
-        self._title_lbl.setStyleSheet("color:#f0c040; font-weight:bold; font-size:9pt;")
+        self._title_lbl.setStyleSheet(f"QLabel {{ color:{color}; font-weight:bold; font-size:9pt; }}")
         hdr_lay.addWidget(self._title_lbl, stretch=1)
 
         self._del_btn = QPushButton()

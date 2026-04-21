@@ -4,9 +4,10 @@ from PyQt6.QtWidgets import (QMenu, QDialog, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtGui import QPixmap
 from PIL import Image
 from aisearch_config import FolderPickerDialog
+import aisearch_attrs as _attrs_mod
 
 # Ver 1.65 - Enhanced Rename/Delete sync and UI masking
-VERSION = "1.95"
+VERSION = "1.96"
 
 
 def get_thumbnail_pixmap(path, size=(350, 350)):
@@ -122,6 +123,8 @@ def _ask_conflict_dialog(dest_path, parent_win=None, suggest_overwrite=False):
         dlg.accept()
 
     ow = QPushButton("Overwrite"); ow.clicked.connect(lambda: _set("overwrite"))
+    import aisearch_config as cfg
+    ow.setStyleSheet(cfg.btn_ss("btn_write", None))
     rn = QPushButton("Rename");    rn.clicked.connect(lambda: _set("rename"))
     ca = QPushButton("Cancel");    ca.clicked.connect(lambda: _set("cancel"))
     if suggest_overwrite:
@@ -179,7 +182,7 @@ def move_file_physically(old_path, query_path, data, project_name, mode="size_ch
             if old_path in data["paths"]:
                 idx = data["paths"].index(old_path)
                 data["paths"][idx] = final_path
-                torch.save(data, f"features_{project_name}.pt")
+                torch.save(data, os.path.join(_attrs_mod.DATA_DIR, f"features_{project_name}.pt"))
         return final_path, data, None
     except Exception as e:
         return None, data, str(e)
@@ -214,7 +217,7 @@ def execute_manual_move(old_path, target_dir, data, project_name, mode="size_che
             if old_path in data["paths"]:
                 idx = data["paths"].index(old_path)
                 data["paths"][idx] = final_path
-                torch.save(data, f"features_{project_name}.pt")
+                torch.save(data, os.path.join(_attrs_mod.DATA_DIR, f"features_{project_name}.pt"))
         return final_path, data, None
     except Exception as e:
         return None, data, str(e)
@@ -298,7 +301,7 @@ def select_and_move_file(parent_win, old_path, data, project_name, start_dir, mo
             if old_path in data["paths"]:
                 idx = data["paths"].index(old_path)
                 data["paths"][idx] = final_path
-                torch.save(data, f"features_{project_name}.pt")
+                torch.save(data, os.path.join(_attrs_mod.DATA_DIR, f"features_{project_name}.pt"))
         return final_path, data, None, target_dir
     except Exception as e:
         return None, data, str(e), target_dir

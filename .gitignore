@@ -11,7 +11,7 @@ feedback_*.pt
 filename_rules.json
 filename_rename_rules.json
 person_aliases.json
-person_registry.json
+person_registry*.json
 person_right_groups.json
 dups_*.json
 tag_usage_*.json

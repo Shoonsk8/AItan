@@ -2,18 +2,25 @@ import os, torch, shutil, cv2
 from PIL import Image
 from sentence_transformers import SentenceTransformer, util
 
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
 MODEL_NAME = 'clip-ViT-L-14'
 EMBEDDING_DIM = 768   # clip-ViT-L-14 output dimension
 EXT_IMG = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
 EXT_VID = ('.mp4', '.mkv', '.mov', '.avi', '.webm')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = SentenceTransformer(MODEL_NAME).to(device)
+try:
+    model = SentenceTransformer(MODEL_NAME).to(device)
+except torch.OutOfMemoryError:
+    print(f"[aisearch] CUDA OOM loading model — falling back to CPU")
+    device = "cpu"
+    model = SentenceTransformer(MODEL_NAME).to(device)
 
 
 def load_db_logic(name):
     """DBが存在するか確認し、読み込む"""
-    db_path = f"features_{name}.pt"
+    db_path = os.path.join(_DATA_DIR, f"features_{name}.pt")
     return (torch.load(db_path, map_location=device), db_path) if os.path.exists(db_path) else (None, None)
 
 def get_sz_readable(p):

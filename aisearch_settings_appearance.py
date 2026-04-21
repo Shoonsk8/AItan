@@ -161,6 +161,7 @@ class _AppearanceMixin:
         col_layout.addWidget(g_attrs)
 
         btn_reset = QPushButton("Reset All to Defaults")
+        btn_reset.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:4px 12px;"))
         btn_reset.clicked.connect(self._reset_colors)
         col_layout.addWidget(btn_reset)
         col_layout.addStretch()
@@ -245,6 +246,36 @@ class _AppearanceMixin:
             return row
 
         fl.addLayout(face_thumb_row())
+
+        fl.addWidget(_hsep())
+        fl.addWidget(QLabel("Button Colors:"))
+
+        colors = self.app.config.setdefault("colors", cfg.DEFAULT_COLORS)
+
+        def _btn_color_row(label, key):
+            row = QHBoxLayout()
+            btn = QPushButton()
+            btn.setFixedSize(48, 24)
+            btn.setStyleSheet(f"background-color:{colors.get(key, cfg.DEFAULT_COLORS[key])}; border:1px solid #666;")
+            def _pick(k=key, b=btn):
+                c = QColorDialog.getColor(QColor(colors.get(k, cfg.DEFAULT_COLORS[k])), self)
+                if c.isValid():
+                    colors[k] = c.name()
+                    b.setStyleSheet(f"background-color:{c.name()}; border:1px solid #666;")
+                    cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            btn.clicked.connect(_pick)
+            row.addWidget(QLabel(label)); row.addStretch(); row.addWidget(btn)
+            return row
+
+        for key, label in [
+            ("btn_add",     "Add"),
+            ("btn_remove",  "Remove"),
+            ("btn_write",   "Write / Save / Overwrite"),
+            ("btn_stop",    "Stop"),
+            ("btn_special", "Special  (Scan ALL, Reset defaults)"),
+        ]:
+            fl.addLayout(_btn_color_row(label, key))
+
         fl.addStretch()
         tabs.addTab(tab_fonts, "🖌 Appearance")
 

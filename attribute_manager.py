@@ -6,8 +6,9 @@ for attrs_tags.json (used by aisearch_attrs.py).
 import json, os
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_FILE  = os.path.join(_DIR, "attribute_workspace.json")
-TAG_GROUPS_FILE = os.path.join(_DIR, "attrs_tags.json")   # same as TAGS_FILE in attrs
+_DATA_DIR = os.path.join(_DIR, "data")
+WORKSPACE_FILE  = os.path.join(_DATA_DIR, "attribute_workspace.json")
+TAG_GROUPS_FILE = os.path.join(_DATA_DIR, "attrs_tags.json")   # same as TAGS_FILE in attrs
 
 # ---------------------------------------------------------------------------
 # Per-prefix field definitions
@@ -24,23 +25,27 @@ FIELD_DEFS = {
     "FA": ("2dig",  [("Direction 1st", "direction_1st",  "FA_Dir"),
                      ("Vertical 2nd",  "vertical_2nd",   "FA_Vert")]),
     "SK": ("1dig",  [("Skin Type",     "type_1st",       "SK_Type")]),
-    "B":  ("2dig",  [("Shape 1st",     "shape_1st",      "B_Shape"),
-                     ("Size 2nd",      "size_2nd",        "B_Size")]),
-    "WH": ("2dig",  [("Hip 1st",       "hip_1st",        "WH_Hip"),
-                     ("Waist 2nd",     "waist_2nd",       "WH_Waist")]),
     "PM": ("2dig",  [("Motion 1st",    "motion_1st",     "PM_Motion"),
                      ("Posture 2nd",   "posture_2nd",     "PM_Posture")]),
     "CS": ("3dig",  [("Lighting 1st",  "lighting_1st",   "CS_Light"),
                      ("Angle 2nd",     "angle_2nd",       "CS_Angle"),
                      ("Shot 3rd",      "shot_3rd",        "CS_Shot")]),
-    "BG": ("3dig",  [("Specific 1st",  "specific_1st",   None),
-                     ("Sub 2nd",       "sub_2nd",         None),
-                     ("Major 3rd",     "major_3rd",       "BG_Major")]),
     "X":  ("matrix",[("Expression",   "expression",      None)]),
-    "J":  ("id",    []),
-    "PI": ("id",    []),
-    "PW": ("id",    []),
-    "A":  ("id",    []),
+    "Watermark":       ("radio",   []),
+    "P":               ("id",      []),
+    "J":               ("id",      []),
+    "PI":              ("id",      []),
+    "PW":              ("id",      []),
+    "A":               ("id",      []),
+    "O":               ("taglist",  []),
+    "R":               ("taglist",  []),
+    "K":               ("taglist",  []),
+    "note":            ("text",    []),
+    "positive_prompt": ("text",    []),
+    "negative_prompt": ("text",    []),
+    "speech":          ("text",    []),
+    "audio":           ("taglist", []),
+    "Quality":         ("taglist", []),
 }
 
 # Style → zero-padding width
@@ -48,10 +53,10 @@ _STYLE_PAD = {"1dig": 1, "2dig": 2, "3dig": 3, "matrix": 2, "id": 3}
 
 
 class AttributeManager:
-    def __init__(self, filename=WORKSPACE_FILE):
+    def __init__(self, filename=None):
         self.filename = filename
         self.data: dict = {}
-        if os.path.exists(filename):
+        if filename and os.path.exists(filename):
             try:
                 with open(filename, encoding="utf-8") as f:
                     self.data = json.load(f)
@@ -89,10 +94,10 @@ class AttributeManager:
                 for r in range(16):
                     for c in range(16):
                         r_h, c_h = hex(r)[2:], hex(c)[2:]
-                        row_key = f"{prefix}{c_h}{r_h}"
+                        row_key = f"{prefix}{r_h}{c_h}"   # r_h = 1st digit (row/vertical)
                         val = data.get(row_key, {}).get("expression", "").strip()
                         if val:
-                            entries.append([f"{c_h}{r_h}", val])
+                            entries.append([f"{r_h}{c_h}", val])
                 tag_groups[f"{prefix}_Table"] = entries
                 continue
 
@@ -150,6 +155,30 @@ class AttributeManager:
                 for pair in tag_groups.get(tg_key, []):
                     ch, v = pair[0], pair[1]
                     if len(ch) != 1 or ch not in "0123456789abcdefghijklmnopqrstuvwxyz":
+                        continue
+                    row_key = f"{prefix}{'0' * (pad - 1)}{ch}"
+                    self.data.setdefault(row_key, {})[json_field] = v
+
+        # Import custom dig sections defined via __col_defs__ (not in FIELD_DEFS)
+        _custom_col_defs = tag_groups.get("__col_defs__", {})
+        if not isinstance(_custom_col_defs, dict):
+            return
+        _custom_styles = tag_groups.get("__section_styles__", {})
+        _B36 = set("0123456789abcdefghijklmnopqrstuvwxyz")
+        for prefix, col_defs in _custom_col_defs.items():
+            if prefix in FIELD_DEFS:
+                continue
+            style = _custom_styles.get(prefix, "2dig")
+            if style not in ("1dig", "2dig", "3dig"):
+                continue
+            pad = _STYLE_PAD.get(style, 2)
+            for col_def in col_defs:
+                if len(col_def) < 3 or not col_def[2]:
+                    continue
+                json_field, tg_key = col_def[1], col_def[2]
+                for pair in tag_groups.get(tg_key, []):
+                    ch, v = pair[0], pair[1]
+                    if len(ch) != 1 or ch not in _B36:
                         continue
                     row_key = f"{prefix}{'0' * (pad - 1)}{ch}"
                     self.data.setdefault(row_key, {})[json_field] = v

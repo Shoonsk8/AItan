@@ -1,11 +1,11 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QCheckBox, QComboBox,
-                              QMessageBox, QScrollArea, QListWidget, QListWidgetItem,
-                              QDialog, QFormLayout, QDialogButtonBox, QSplitter,
+                              QMessageBox, QScrollArea,
+                              QDialog, QFormLayout, QDialogButtonBox,
                               QApplication, QStyle)
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QDrag, QPixmap, QIcon
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QDrag
 from PyQt6.QtCore import QMimeData
 
 import aisearch_config as cfg
@@ -29,17 +29,15 @@ class _FilenameMixin:
         fn_l.setSpacing(8)
 
         # ── Project selector ──────────────────────────────────────────────────
-        import glob as _glob
         proj_bar = QHBoxLayout(); proj_bar.setSpacing(6)
         proj_bar.addWidget(QLabel("Rules Set:"))
         self._fn_proj_cb = QComboBox()
-        self._fn_proj_cb.setEditable(True)
+        self._fn_proj_cb.wheelEvent = lambda e: e.ignore()
         self._fn_proj_cb.setFixedWidth(140)
-        self._fn_proj_cb.setPlaceholderText("default")
         _fn_sets = ["default"] + sorted(
-            os.path.basename(p).replace("filename_rules_", "").replace(".json", "")
-            for p in _glob.glob(os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
-                                              "filename_rules_*.json"))
+            f.replace("features_", "").replace(".pt", "")
+            for f in os.listdir(_am.DATA_DIR)
+            if f.startswith("features_") and f.endswith(".pt")
         )
         for _s in _fn_sets:
             self._fn_proj_cb.addItem(_s)
@@ -47,22 +45,20 @@ class _FilenameMixin:
         _idx = self._fn_proj_cb.findText(_cur_proj)
         if _idx >= 0:
             self._fn_proj_cb.setCurrentIndex(_idx)
-        else:
-            self._fn_proj_cb.setCurrentText(_cur_proj)
         proj_bar.addWidget(self._fn_proj_cb)
 
         btn_fn_proj_load = QPushButton("Load")
-        btn_fn_proj_load.setStyleSheet("background:#333; color:white; padding:3px 8px;")
+        btn_fn_proj_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         proj_bar.addWidget(btn_fn_proj_load)
+
+        self._btn_fn_save = btn_fn_save_over = QPushButton("💾 Overwrite")
+        btn_fn_save_over.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
+        btn_fn_save_over.clicked.connect(self._save_fn_rules)
+        proj_bar.addWidget(btn_fn_save_over)
+        self._fn_editing_lbl = QLabel(f"Editing: {_cur_proj}")
+        self._fn_editing_lbl.setStyleSheet("color:#aaa; font-style:italic;")
+        proj_bar.addWidget(self._fn_editing_lbl)
         proj_bar.addStretch()
-
-        btn_fn_copy = QPushButton("Copy from Default")
-        btn_fn_copy.setStyleSheet("background:#2a3a2a; color:white; padding:3px 8px;")
-        proj_bar.addWidget(btn_fn_copy)
-
-        btn_fn_set_default = QPushButton("Set as Default")
-        btn_fn_set_default.setStyleSheet("background:#2a2a3a; color:white; padding:3px 8px;")
-        proj_bar.addWidget(btn_fn_set_default)
         fn_l.addLayout(proj_bar)
         fn_l.addWidget(_hsep())
 
@@ -74,18 +70,13 @@ class _FilenameMixin:
         fn_l.addWidget(self.check_auto_rename)
         fn_l.addWidget(_hsep())
 
-        # Splitter: rules (top) | person registry (bottom)
-        _fn_splitter = QSplitter(Qt.Orientation.Vertical)
-        _fn_splitter.setChildrenCollapsible(False)
-        fn_l.addWidget(_fn_splitter, stretch=1)
-
         # Container for rule segments — disabled when auto-rename is off
         _rules_container = QWidget()
         _rules_container.setEnabled(auto_rename_on)
         _rc_l = QVBoxLayout(_rules_container)
         _rc_l.setContentsMargins(0, 0, 0, 0)
         _rc_l.setSpacing(8)
-        _fn_splitter.addWidget(_rules_container)
+        fn_l.addWidget(_rules_container, stretch=1)
 
         def _fn_selected_proj():
             p = self._fn_proj_cb.currentText().strip()
@@ -108,147 +99,40 @@ class _FilenameMixin:
                 db_chk.blockSignals(False)
         self.check_auto_rename.toggled.connect(_on_auto_rename_toggled)
 
-        # ── Person Registry ───────────────────────────────────────────────────
-        _pr_pane = QWidget()
-        _pr_pane_l = QVBoxLayout(_pr_pane)
-        _pr_pane_l.setContentsMargins(0, 4, 0, 0)
-        _pr_pane_l.setSpacing(4)
-        _fn_splitter.addWidget(_pr_pane)
-        _fn_splitter.setSizes([400, 150])
-
-        lbl_pr = QLabel("Person Registry  (P field IDs)")
-        lbl_pr.setStyleSheet("font-weight: bold;")
-        _pr_pane_l.addWidget(lbl_pr)
-
-        pr_container = QWidget()
-        pr_l = QVBoxLayout(pr_container)
-        pr_l.setContentsMargins(0, 0, 0, 0)
-        pr_l.setSpacing(4)
-        _pr_pane_l.addWidget(pr_container, stretch=1)
-
-        # List widget showing existing entries with thumbnails
-        self._pr_list = QListWidget()
-        self._pr_list.setStyleSheet(
-            "background:#1e1e1e; color:#e0e0e0; border:1px solid #444;")
-        _tsz = getattr(self, 'app', None) and self.app.config.get("face_thumb_size", 96) or 96
-        self._pr_list.setIconSize(QSize(_tsz, _tsz))
-        self._pr_list.setSpacing(2)
-        pr_l.addWidget(self._pr_list)
-
-        def _pr_thumb(path):
-            """Return a 64×64 QIcon from image path, or blank icon."""
-            try:
-                if path and os.path.exists(path):
-                    px = QPixmap(path).scaled(
-                        _tsz, _tsz,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-                    return QIcon(px)
-            except Exception:
-                pass
-            return QIcon()
-
-        def _pr_populate():
-            self._pr_list.clear()
-            project = getattr(self, 'current_project', None)
-            db    = _am.load_faces_db(project) if project else {}
-            faces = db.get('faces', {})
-            reg   = _am.load_person_registry()
-            # Show all known IDs from registry + any in faces DB not yet named
-            all_ids = sorted(set(reg.keys()) | set(faces.keys()))
-            for pid in all_ids:
-                desc        = reg.get(pid, "— unnamed —")
-                source_path = faces.get(pid, {}).get('source_path', '')
-                label       = f"P{pid}  —  {desc}"
-                if source_path:
-                    label += f"\n{os.path.basename(source_path)}"
-                item = QListWidgetItem(_pr_thumb(source_path), label)
-                item.setData(Qt.ItemDataRole.UserRole, pid)
-                self._pr_list.addItem(item)
-        self._pr_populate = _pr_populate
-
-        _pr_populate()
-
-        # Click row → fill edit fields
-        def _pr_on_select(item):
-            pid = item.data(Qt.ItemDataRole.UserRole)
-            reg = _am.load_person_registry()
-            self._pr_id_edit.setText(pid)
-            self._pr_desc_edit.setText(reg.get(pid, ""))
-        self._pr_list.itemClicked.connect(_pr_on_select)
-
-        # Form row: ID + Description + Add/Update + Delete
-        pr_form = QHBoxLayout()
-        pr_form.setSpacing(6)
-
-        pr_form.addWidget(QLabel("ID:"))
-        self._pr_id_edit = QLineEdit()
-        self._pr_id_edit.setPlaceholderText("000")
-        self._pr_id_edit.setFixedWidth(50)
-        self._pr_id_edit.setMaxLength(3)
-        pr_form.addWidget(self._pr_id_edit)
-
-        pr_form.addWidget(QLabel("Description:"))
-        self._pr_desc_edit = QLineEdit()
-        self._pr_desc_edit.setPlaceholderText("e.g. No human/animal")
-        pr_form.addWidget(self._pr_desc_edit, stretch=1)
-
-        btn_pr_save = QPushButton("Add / Update")
-        btn_pr_save.setStyleSheet(
-            "background-color: #1e4a1e; color: white; font-weight: bold; padding: 3px 8px;")
-        pr_form.addWidget(btn_pr_save)
-
-        btn_pr_del = QPushButton("Delete")
-        btn_pr_del.setStyleSheet(
-            "background-color: #4a1e1e; color: white; padding: 3px 8px;")
-        pr_form.addWidget(btn_pr_del)
-
-        pr_l.addLayout(pr_form)
-
-        def _pr_add_update():
-            pid  = self._pr_id_edit.text().strip().zfill(3)[:3]
-            desc = self._pr_desc_edit.text().strip()
-            if not pid.isdigit() or not desc:
-                return
-            reg = _am.load_person_registry()
-            reg[pid] = desc
-            _am.save_person_registry(reg)
-            _pr_populate()
-            self._pr_id_edit.clear()
-            self._pr_desc_edit.clear()
-        btn_pr_save.clicked.connect(_pr_add_update)
-        self._pr_id_edit.returnPressed.connect(_pr_add_update)
-        self._pr_desc_edit.returnPressed.connect(_pr_add_update)
-
-        def _pr_delete():
-            pid = self._pr_id_edit.text().strip().zfill(3)[:3]
-            if pid == "000":
-                return   # reserved
-            reg = _am.load_person_registry()
-            reg.pop(pid, None)
-            _am.save_person_registry(reg)
-            _pr_populate()
-            self._pr_id_edit.clear()
-            self._pr_desc_edit.clear()
-        btn_pr_del.clicked.connect(_pr_delete)
-
         # ── Attribute helpers ─────────────────────────────────────────────────
-        _coded_prefixes = set(_FIELD_DEFS.keys())
+        _coded_prefixes = set(_FIELD_DEFS.keys()) | {l for l, _, _ in _am.CODED_FIELDS}
+
+        # Load project-specific tag groups so MDL, Audio, etc. appear with correct options
+        _proj      = getattr(self.app, 'current_project', None)
+        _tags_file = _am.tags_file_for_project(_proj)
+        _proj_tg   = _am._load_tag_groups(_tags_file)
+        _proj_sec_styles = {}
+        try:
+            import json as _json
+            with open(_tags_file, encoding="utf-8") as _f:
+                _proj_raw = _json.load(_f)
+            _proj_sec_styles = _proj_raw.get("__section_styles__", {})
+        except Exception:
+            pass
 
         # Tag groups that are user-facing (not coded-field sub-tables or internal keys)
-        _tag_groups_flat = [
-            grp for grp in _am.TAG_GROUPS
+        # Include both global and project-specific groups; allow matrix style too
+        _tag_like_styles = {"taglist", "boolean", "matrix", "radio"}
+        _tag_groups_flat = sorted(set(
+            grp for grp in list(_am.TAG_GROUPS) + list(_proj_tg)
             if not grp.startswith("__")
             and not any(grp == p or grp.startswith(f"{p}_") for p in _coded_prefixes)
-            and "_" not in grp
-        ]
+            and (grp in _proj_sec_styles and _proj_sec_styles[grp] in _tag_like_styles
+                 or _am.TAG_GROUPS.get(grp) is not None
+                 or _proj_tg.get(grp) is not None)
+        ))
 
         _ALL_FIELDS = [("P", "Person", 3)] + list(_am.CODED_FIELDS)
 
         _FIELD_TAG_GROUP = {
             "E": "E_Color", "HC": "HC_Color", "FA": "FA_Dir",
             "SK": "SK_Type", "B": "B_Size", "WH": "WH_Hip",
-            "PM": "PM_Motion", "CS": "CS_Shot", "BG": "BG_Major",
+            "PM": "PM_Motion", "CS": "CS_Shot", "BG": "Background",
             "O": "O_Preset", "R": "R_Preset", "K": "K_Preset",
         }
 
@@ -261,13 +145,18 @@ class _FilenameMixin:
         def _tag_options_for(key):
             if key.startswith("TAG:"):
                 grp = key[4:]
-                return [(f"{lbl}  ({k})", k) for k, lbl in _am.TAG_GROUPS.get(grp, [])]
+                opts = (_am.TAG_GROUPS.get(grp) or _proj_tg.get(grp)
+                        or _am.TAG_GROUPS.get(grp + "_Table") or _proj_tg.get(grp + "_Table")
+                        or [])
+                return [(f"{lbl}  ({k})", k) for k, lbl in opts]
             if key == "P":
-                reg = _am.load_person_registry()
+                _proj = getattr(self.app, 'current_project', None)
+                reg = _am.load_person_registry(_proj)
                 return [(f"{desc}  ({pid})", pid) for pid, desc in sorted(reg.items())]
             grp = _FIELD_TAG_GROUP.get(key, "")
             if grp:
-                return [(f"{lbl}  ({k})", k) for k, lbl in _am.TAG_GROUPS.get(grp, [])]
+                opts = _am.TAG_GROUPS.get(grp) or _proj_tg.get(grp) or []
+                return [(f"{lbl}  ({k})", k) for k, lbl in opts]
             return []
 
         def _build_rule_row(pattern, attr_key, value, one_way, extract=False):
@@ -316,6 +205,7 @@ class _FilenameMixin:
                 "background:#252525; color:#e0e0e0; border:1px solid #444; padding:1px 4px;")
 
             attr_cb = QComboBox()
+            attr_cb.wheelEvent = lambda e: e.ignore()
             attr_cb.setFixedWidth(180)
             attr_cb.setStyleSheet(
                 "background:#2a2a3a; color:#88aaee; border:1px solid #445; padding:1px 3px;")
@@ -323,8 +213,9 @@ class _FilenameMixin:
             # ── Coded Fields group ──
             attr_cb.addItem("── Coded Fields ──", "__hdr__")
             attr_cb.model().item(attr_cb.count() - 1).setEnabled(False)
-            for l, lb, _ in _ALL_FIELDS:
-                attr_cb.addItem(f"{l}  {lb}", l)
+            for l, lb, d in _ALL_FIELDS:
+                disp = lb if d == 0 else f"{l}  {lb}"
+                attr_cb.addItem(disp, l)
             # ── Tag Groups ──
             if _tag_groups_flat:
                 attr_cb.addItem("── Tag Groups ──", "__hdr__")
@@ -336,6 +227,7 @@ class _FilenameMixin:
             if idx >= 0: attr_cb.setCurrentIndex(idx)
 
             val_cb = QComboBox()
+            val_cb.wheelEvent = lambda e: e.ignore()
             val_cb.setEditable(True)
             val_cb.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
             val_cb.setStyleSheet(
@@ -355,7 +247,7 @@ class _FilenameMixin:
                     return
                 val_cb.setEnabled(True)
                 if key == "P":
-                    reg = _am.load_person_registry()
+                    reg = _am.load_person_registry(getattr(self.app, 'current_project', None))
                     val_cb.addItem("", "")
                     for pid, desc in sorted(reg.items()):
                         val_cb.addItem(f"{pid}  {desc}", pid)
@@ -380,6 +272,7 @@ class _FilenameMixin:
                 lambda _: _refresh_val(attr_cb.currentData() or "", ""))
 
             mode_cb = QComboBox()
+            mode_cb.wheelEvent = lambda e: e.ignore()
             mode_cb.setFixedWidth(115)
             mode_cb.setStyleSheet(
                 "background:#1a2a1a; color:#88dd88; border:1px solid #446644; padding:1px 3px;")
@@ -387,15 +280,8 @@ class _FilenameMixin:
             mode_cb.addItem("⇄ Sync", "sync")
             mode_cb.setCurrentIndex(0 if one_way else 1)
 
-            def _guard_sync(acb=attr_cb, mcb=mode_cb):
-                key = acb.currentData() or ""
-                if mcb.currentData() == "sync" and (
-                        key.startswith("TAG:") or _attr_is_boolean(key)):
-                    mcb.blockSignals(True)
-                    mcb.setCurrentIndex(0)
-                    mcb.blockSignals(False)
-            mode_cb.currentIndexChanged.connect(lambda _: _guard_sync())
-            attr_cb.currentIndexChanged.connect(lambda _: _guard_sync())
+            mode_cb.currentIndexChanged.connect(lambda _: None)
+            attr_cb.currentIndexChanged.connect(lambda _: None)
 
             btn_plus = QPushButton("+"); btn_plus.setFixedSize(22, 22)
             btn_plus.setToolTip("Add / update Person entry")
@@ -408,7 +294,8 @@ class _FilenameMixin:
                 if acb.currentData() != "P": return
                 raw = vcb.currentData() or vcb.currentText().strip()
                 pid = raw.zfill(3)[:3] if raw else "000"
-                reg = _am.load_person_registry()
+                _proj = getattr(self.app, 'current_project', None)
+                reg = _am.load_person_registry(_proj)
                 dlg = QDialog(self); dlg.setWindowTitle("Add / Update Person")
                 fl = QFormLayout(dlg); fl.setSpacing(8)
                 id_e  = QLineEdit(pid); id_e.setMaxLength(3)
@@ -422,9 +309,8 @@ class _FilenameMixin:
                 if not dlg.exec(): return
                 np_, nd = id_e.text().strip().zfill(3)[:3], desc_e.text().strip()
                 if not np_.isdigit() or not nd: return
-                reg[np_] = nd; _am.save_person_registry(reg)
+                reg[np_] = nd; _am.save_person_registry(reg, _proj)
                 _refresh_val("P", np_)
-                if hasattr(self, '_pr_populate'): self._pr_populate()
                 # Re-populate all P dropdowns in other rows
                 for pe, ac, vc, mc, _ in self._fn_rows:
                     if ac.currentData() == "P" and vc is not val_cb:
@@ -442,9 +328,10 @@ class _FilenameMixin:
             btn_del = QPushButton()
             btn_del.setIcon(QApplication.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
             btn_del.setFixedSize(26, 22)
+            _rc = cfg.btn_color("btn_remove", self.app.config)
             btn_del.setStyleSheet(
-                "QPushButton { background:#662222; border:1px solid #884444; border-radius:2px; }"
-                "QPushButton:hover { background:#882222; }")
+                f"QPushButton {{ background:{_rc}; border:1px solid #9a4040; border-radius:2px; }}"
+                "QPushButton:hover { background:#9a2020; }")
 
             row_l.addWidget(pat_e)
             row_l.addWidget(mode_cb)
@@ -513,8 +400,14 @@ class _FilenameMixin:
 
         fn_add_row = QHBoxLayout()
         btn_fn_add = QPushButton("+ Add Rule")
-        btn_fn_add.setStyleSheet("background:#333; color:white; padding:3px 10px;")
-        btn_fn_add.clicked.connect(lambda: _build_rule_row("", "E", "", True))
+        btn_fn_add.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
+        def _on_add_rule():
+            # If container is disabled (auto_rename off), enable it first
+            if not _rules_container.isEnabled():
+                self.check_auto_rename.setChecked(True)
+                _rules_container.setEnabled(True)
+            _build_rule_row("", "E", "", True)
+        btn_fn_add.clicked.connect(_on_add_rule)
         fn_add_row.addWidget(btn_fn_add)
 
         btn_auto = QPushButton("⚡ Auto-Assign")
@@ -522,7 +415,7 @@ class _FilenameMixin:
         btn_auto.setToolTip("Pick field letters and auto-generate all value rules")
         fn_add_row.addWidget(btn_auto)
         fn_add_row.addStretch()
-        _rc_l.addLayout(fn_add_row)
+        fn_l.addLayout(fn_add_row)  # outside _rules_container so always clickable
 
 
         def _auto_assign():
@@ -574,17 +467,10 @@ class _FilenameMixin:
 
         btn_auto.clicked.connect(_auto_assign)
 
-        fn_btn_row = QHBoxLayout()
-        btn_fn_save = QPushButton("💾 Save & Apply")
-        btn_fn_save.setStyleSheet(
-            "background-color: #1e6e64; color: white; font-weight: bold; padding: 4px 12px;")
-        btn_fn_save.clicked.connect(self._save_fn_rules)
-        fn_btn_row.addStretch()
-        fn_btn_row.addWidget(btn_fn_save)
-        _rc_l.addLayout(fn_btn_row)
-
         def _reload_fn_rules():
             """Clear and reload rule rows for the selected project."""
+            _loaded = self._fn_proj_cb.currentText().strip() or "default"
+            self._fn_editing_lbl.setText(f"Editing: {_loaded}")
             # Clear existing rows
             for _, _, _, _, rw in list(self._fn_rows):
                 rw.setParent(None); rw.deleteLater()
@@ -612,42 +498,11 @@ class _FilenameMixin:
                     _build_rule_row(
                         rule.get("pattern", ""), f"TAG:{rule['tag_group']}",
                         rule.get("value", ""), True)
-            # Add to combo if new
-            p_text = self._fn_proj_cb.currentText().strip()
-            if p_text and p_text != "default" and self._fn_proj_cb.findText(p_text) < 0:
-                self._fn_proj_cb.addItem(p_text)
-
         self._reload_fn_rules = _reload_fn_rules  # expose so set_project() can call it
         btn_fn_proj_load.clicked.connect(_reload_fn_rules)
 
-        def _fn_copy_from_default():
-            import shutil as _shutil
-            p = self._fn_proj_cb.currentText().strip()
-            if not p or p == "default": return
-            src = _am.FILENAME_RULES_FILE
-            dst = os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
-                               f"filename_rules_{p}.json")
-            if os.path.exists(src):
-                _shutil.copy2(src, dst)
-            if self._fn_proj_cb.findText(p) < 0:
-                self._fn_proj_cb.addItem(p)
-            _reload_fn_rules()
-        btn_fn_copy.clicked.connect(_fn_copy_from_default)
 
-        def _fn_set_as_default():
-            import shutil as _shutil
-            p = self._fn_proj_cb.currentText().strip()
-            if not p or p == "default": return
-            ans = QMessageBox.question(self, "Set as Default",
-                f"Overwrite default filename rules with '{p}'?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if ans != QMessageBox.StandardButton.Yes: return
-            src = os.path.join(os.path.dirname(_am.FILENAME_RULES_FILE),
-                               f"filename_rules_{p}.json")
-            if os.path.exists(src):
-                _shutil.copy2(src, _am.FILENAME_RULES_FILE)
-            QMessageBox.information(self, "Done", f"Default filename rules updated from '{p}'.")
-        btn_fn_set_default.clicked.connect(_fn_set_as_default)
+
 
         tabs.addTab(tab_fn, "📁 Filename Rules")
 
@@ -656,6 +511,24 @@ class _FilenameMixin:
     def _save_fn_rules(self):
         import aisearch_attrs as _am
         import re as _re
+        from PyQt6.QtWidgets import QCheckBox as _QCB
+
+        # Warning dialog (suppressed once user checks "don't show again")
+        if not getattr(self, '_fn_overwrite_skip_warn', False):
+            _p = getattr(self, '_fn_proj_cb', None)
+            _tgt = (_p.currentText().strip() or "default") if _p else "default"
+            _mb = QMessageBox(self)
+            _mb.setIcon(QMessageBox.Icon.Warning)
+            _mb.setWindowTitle("Overwrite")
+            _mb.setText(f"This will overwrite the filename rules for <b>'{_tgt}'</b>.<br>Continue?")
+            _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            _cb = _QCB("Don't show this warning again")
+            _mb.setCheckBox(_cb)
+            if _mb.exec() != QMessageBox.StandardButton.Yes:
+                return
+            if _cb.isChecked():
+                self._fn_overwrite_skip_warn = True
+
         rules = []
         for pat_e, attr_cb, val_cb, mode_cb, _ in self._fn_rows:
             pat      = pat_e.text().strip()
@@ -671,17 +544,22 @@ class _FilenameMixin:
                 rules.append({"field": attr_key, "digits": len(_extract_m.group(1)),
                                "extract": True})
             elif attr_key.startswith("TAG:"):
-                rules.append({"pattern": pat, "tag_group": attr_key[4:], "value": value})
+                rule = {"pattern": pat, "tag_group": attr_key[4:], "value": value}
+                if one_way:
+                    rule["one_way"] = True
+                rules.append(rule)
             else:
                 rule = {"pattern": pat, "field": attr_key, "value": value}
                 if one_way:
                     rule["one_way"] = True
                 rules.append(rule)
+        # Save to whichever project the combo currently shows
         p = getattr(self, '_fn_proj_cb', None)
-        proj = (None if (not p or not p.currentText().strip() or p.currentText().strip() == "default")
-                else p.currentText().strip())
+        _proj_name = (p.currentText().strip() or "default") if p else "default"
+        proj = None if _proj_name == "default" else _proj_name
         _am.save_filename_rules(rules, proj)
-        QMessageBox.information(self, "Saved", f"{len(rules)} rule(s) saved.")
+        if hasattr(self, '_btn_fn_save'):
+            self._flash_saved_btn(self._btn_fn_save)
 
     def _do_stop_rename(self):
         self._stop_rename = True
@@ -694,7 +572,7 @@ class _FilenameMixin:
 
         # Use current project's directories only
         project = getattr(getattr(self, 'app', None), 'current_project', None) or ""
-        feat_file = f"features_{project}.pt" if project else ""
+        feat_file = _os.path.join(_am.DATA_DIR, f"features_{project}.pt") if project else ""
         dirs = []
         if feat_file and _os.path.exists(feat_file):
             try:
@@ -748,12 +626,25 @@ class _FilenameMixin:
 
                         extracted = _am.parse_filename_rules(stem, rules)
                         parts = {"persons": [extracted.get("P", "000").zfill(3)]}
+                        fname_lower = _os.path.basename(p).lower()
                         for letter, _, digits in _am.CODED_FIELDS:
-                            if letter in ("P", "J", "W"):
+                            if letter in ("P", "J"):
                                 continue
+                            if digits == 0:
+                                continue  # boolean flags handled below
                             val = extracted.get(letter, "")
                             if val:
                                 parts[letter.lower()] = val
+                        # Boolean sync rules — check pattern in original filename
+                        for rule in rules:
+                            if not rule.get("field") or rule.get("one_way") or rule.get("extract"):
+                                continue
+                            if rule.get("value", "").strip():
+                                continue  # value-based rule, not boolean
+                            pat = rule.get("pattern", "").lower()
+                            fld = rule["field"].upper()
+                            if pat and pat in fname_lower:
+                                parts[fld.lower()] = fld  # truthy → flag included
                         # Auto-detect O, R, K from file
                         for dk, dv in _am.detect_file_attrs(p).items():
                             if dk not in parts:

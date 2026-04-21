@@ -6,8 +6,10 @@ VERSION = "1.0"
 BOOST_WEIGHT = 0.25   # how much feedback influences the final score
 QUERY_THRESHOLD = 0.5 # min similarity to consider a past query relevant
 
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
 def _path(project_name):
-    return f"feedback_{project_name}.pt"
+    return os.path.join(_DATA_DIR, f"feedback_{project_name}.pt")
 
 def load(project_name):
     p = _path(project_name)

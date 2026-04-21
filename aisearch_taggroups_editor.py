@@ -171,11 +171,8 @@ class TagGroupsEditor(QMainWindow):
 
         # ── Save button ──────────────────────────────────────────────────────
         save_btn = QPushButton("SAVE  (workspace + attrs_tags.json)")
-        save_btn.setStyleSheet(
-            "QPushButton { background:#4CAF50; color:white; "
-            "font-weight:bold; font-size:11pt; padding:8px; }"
-            "QPushButton:hover { background:#43A047; }"
-        )
+        import aisearch_config as cfg
+        save_btn.setStyleSheet(cfg.btn_ss("btn_write", None, "font-size:11pt; padding:8px;"))
         save_btn.clicked.connect(self._on_save)
         root.addWidget(save_btn)
 
@@ -329,10 +326,10 @@ class TagGroupsEditor(QMainWindow):
             gl.addWidget(row_lbl, r + 1, 0)
             for c in range(16):
                 c_h = hex(c)[2:]
-                json_key = f"{prefix}{c_h}{r_h}"
+                json_key = f"{prefix}{r_h}{c_h}"
                 stored = self._manager.data.get(json_key, {})
                 le = QLineEdit()
-                le.setFixedSize(QSize(64, 22))
+                le.setFixedSize(QSize(100, 22))
                 le.setStyleSheet(
                     "QLineEdit { background:#252525; color:#e0e0e0; "
                     "border:1px solid #333; padding:1px 2px; font-size:8pt; }"
@@ -340,7 +337,7 @@ class TagGroupsEditor(QMainWindow):
                 )
                 le.setText(stored.get("expression", ""))
                 gl.addWidget(le, r + 1, c + 1)
-                self._entries[json_key] = {"expression": le}
+                self._entries[json_key] = {"expression": le}  # key = prefix + r_h + c_h
 
         layout.addWidget(grid)
 

@@ -1,7 +1,9 @@
 import json, os, cv2, re, datetime, time as _time
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
-TAGS_FILE = os.path.join(_DIR, "attrs_tags.json")
+_DATA_DIR = os.path.join(_DIR, "data")
+DATA_DIR  = _DATA_DIR   # exported for use by other modules
+TAGS_FILE = os.path.join(_DATA_DIR, "attrs_tags.json")
 
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 def _to_b36(n, width=8):
@@ -57,6 +59,40 @@ def julian_id_to_date(jid):
     except Exception:
         return jid
 
+def date_str_to_julian_id(s):
+    """Convert a date/time string from raw metadata to an 8-char base-36 Julian ID.
+    Handles EXIF format '2024:03:15 10:30:45', ISO '2024-03-15 10:30:45',
+    date-only '2024-03-15', and Unix timestamp strings."""
+    s = str(s).strip()
+    # Ordered from most-specific to least — strptime requires exact full match per fmt
+    _fmts = [
+        "%Y:%m:%d %H:%M:%S",   # EXIF
+        "%Y-%m-%d %H:%M:%S",   # ISO
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",   # ISO 8601
+        "%Y-%m-%d",
+        "%Y:%m:%d",
+        "%Y/%m/%d",
+    ]
+    # Also try on just the first 19 / 10 chars in case there's a trailing timezone suffix
+    candidates = [s, s[:19], s[:10]]
+    for candidate in dict.fromkeys(candidates):  # deduplicate while preserving order
+        for fmt in _fmts:
+            try:
+                dt = datetime.datetime.strptime(candidate, fmt)
+                val = int(dt.strftime("%y%m%d%H%M%S"))
+                return _to_b36(val, width=8)
+            except Exception:
+                continue
+    # Try Unix timestamp
+    try:
+        dt = datetime.datetime.fromtimestamp(float(s))
+        val = int(dt.strftime("%y%m%d%H%M%S"))
+        return _to_b36(val, width=8)
+    except Exception:
+        pass
+    return ""
+
 def detect_file_attrs(path):
     """Auto-detect O (orientation), R (resolution), K (framerate) from a file.
     Returns dict with lowercase keys e.g. {'o': '09', 'r': 'a8', 'k': '30'}."""
@@ -86,11 +122,14 @@ def detect_file_attrs(path):
 
         # O — orientation / aspect ratio
         ratio = width / height
-        if   abs(ratio - 1.0) < 0.05:  result["o"] = "11"  # square
+        if   abs(ratio - 1.0) < 0.05:  result["o"] = "11"  # 1:1  square
+        elif ratio >= 2.2:              result["o"] = "f1"  # 21:9 ultra-wide
         elif ratio >= 1.7:              result["o"] = "09"  # 16:9 landscape
-        elif ratio > 1.0:               result["o"] = "43"  # 4:3 landscape
-        elif ratio <= 0.6:              result["o"] = "90"  # 9:16 portrait
-        else:                           result["o"] = "34"  # 3:4 portrait
+        elif ratio >= 1.4:              result["o"] = "32"  # 3:2  landscape (photo)
+        elif ratio > 1.05:              result["o"] = "43"  # 4:3  landscape
+        elif ratio > 0.72:              result["o"] = "34"  # 3:4  portrait
+        elif ratio > 0.58:              result["o"] = "23"  # 2:3  portrait (photo)
+        else:                           result["o"] = "90"  # 9:16 portrait
 
         # K — frame rate (video only; images have frame_count == 1)
         if frames > 1 and fps > 0:
@@ -104,24 +143,38 @@ def detect_file_attrs(path):
     return result
 
 def tags_file_for_project(project=None):
-    """Return the attrs_tags JSON path for a project (or global default)."""
+    """Return the attrs_tags JSON path for a project (falls back to global)."""
     if project and project != "default":
-        p = os.path.join(_DIR, f"attrs_tags_{project}.json")
+        p = os.path.join(_DATA_DIR, f"attrs_tags_{project}.json")
         if os.path.exists(p):
             return p
     return TAGS_FILE
 
-def workspace_file_for_project(project=None):
-    """Return the attribute_workspace JSON path for a project (or global default)."""
+def tags_save_path_for_project(project=None):
+    """Return the path to WRITE attrs_tags for a project (always project-specific)."""
     if project and project != "default":
-        return os.path.join(_DIR, f"attribute_workspace_{project}.json")
-    return os.path.join(_DIR, "attribute_workspace.json")
-FILENAME_RULES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filename_rules.json")
+        return os.path.join(_DATA_DIR, f"attrs_tags_{project}.json")
+    return TAGS_FILE
+
+def workspace_file_for_project(project=None):
+    """Return the attribute_workspace JSON path for a project (falls back to global)."""
+    if project and project != "default":
+        p = os.path.join(_DATA_DIR, f"attribute_workspace_{project}.json")
+        if os.path.exists(p):
+            return p
+    return os.path.join(_DATA_DIR, "attribute_workspace.json")
+
+def workspace_save_path_for_project(project=None):
+    """Return the path to WRITE workspace for a project (always project-specific)."""
+    if project and project != "default":
+        return os.path.join(_DATA_DIR, f"attribute_workspace_{project}.json")
+    return os.path.join(_DATA_DIR, "attribute_workspace.json")
+FILENAME_RULES_FILE  = os.path.join(_DATA_DIR, "filename_rules.json")
 
 def filename_rules_file_for_project(project=None):
     """Return the filename_rules JSON path for a project (or global default)."""
     if project and project != "default":
-        p = os.path.join(_DIR, f"filename_rules_{project}.json")
+        p = os.path.join(_DATA_DIR, f"filename_rules_{project}.json")
         if os.path.exists(p):
             return p
     return FILENAME_RULES_FILE
@@ -129,12 +182,107 @@ def filename_rules_file_for_project(project=None):
 def filename_rules_save_path_for_project(project=None):
     """Return the path to WRITE filename_rules for a project (always project-specific)."""
     if project and project != "default":
-        return os.path.join(_DIR, f"filename_rules_{project}.json")
+        return os.path.join(_DATA_DIR, f"filename_rules_{project}.json")
     return FILENAME_RULES_FILE
-RENAME_RULES_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filename_rename_rules.json")
-PERSON_REGISTRY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_registry.json")
-PERSON_ALIASES_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_aliases.json")
-PERSON_RIGHT_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_right_groups.json")
+RENAME_RULES_FILE    = os.path.join(_DATA_DIR, "filename_rename_rules.json")
+PERSON_REGISTRY_FILE = os.path.join(_DATA_DIR, "person_registry.json")
+META_MAP_RULES_FILE  = os.path.join(_DATA_DIR, "metadata_mapping_rules.json")
+
+def metadata_rules_file_for_project(project=None):
+    """Return the metadata_mapping_rules JSON path for a project (or global default)."""
+    if project and project != "default":
+        p = os.path.join(_DATA_DIR, f"metadata_mapping_rules_{project}.json")
+        if os.path.exists(p):
+            return p
+    return META_MAP_RULES_FILE
+
+def metadata_rules_save_path_for_project(project=None):
+    """Return the path to WRITE metadata_mapping_rules for a project."""
+    if project and project != "default":
+        return os.path.join(_DATA_DIR, f"metadata_mapping_rules_{project}.json")
+    return META_MAP_RULES_FILE
+
+def load_metadata_rules(project=None):
+    """Load metadata mapping rules for a project, merged with the default rules.
+    Default rules (metadata_mapping_rules.json) are always the base layer.
+    Project-specific rules are merged on top — same source key overrides the default."""
+    def _read(path):
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return []
+
+    defaults = _read(META_MAP_RULES_FILE)
+
+    if not project or project == "default":
+        return defaults
+
+    proj_rules = _read(metadata_rules_save_path_for_project(project))
+    if not proj_rules:
+        return defaults
+
+    # Merge: defaults first, project rules override by source key
+    merged = {r["source"]: r for r in defaults if r.get("source")}
+    for r in proj_rules:
+        if r.get("source"):
+            merged[r["source"]] = r
+    return list(merged.values())
+
+def save_metadata_rules(rules, project=None):
+    """Save metadata mapping rules list to disk."""
+    path = metadata_rules_save_path_for_project(project)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rules, f, indent=2)
+
+def apply_metadata_rules(raw_meta, rules):
+    """Apply mapping rules to a raw metadata dict.
+    Returns {target_id: value_str} for all rules whose source key exists.
+    target_id examples: 'prompt', 'neg_prompt', 'seed', 'note', 'speech',
+                        'model', 'code:O', 'code:R', 'code:K', etc.
+    If a rule has a 'value' key (preset hex code), that fixed value is used
+    instead of copying the raw metadata string.
+    For code:J targets, date strings are automatically converted to base-36 Julian IDs."""
+    result = {}
+    # Sentinel sources — no meta key needed, just signal which detection to run
+    _SENTINEL_SOURCES = {"Shot", "Pose",               # MediaPipe
+                         "HC", "FA", "SK", "E",         # CLIP face (uppercase)
+                         "B", "WH", "PM",               # CLIP body (uppercase)
+                         "CS", "BG",                    # CLIP scene (uppercase)
+                         "hc", "fa", "sk", "e",         # CLIP face (lowercase)
+                         "b", "wh", "pm",               # CLIP body (lowercase)
+                         "cs", "bg",                    # CLIP scene (lowercase)
+                         "Audio", "Resolution",           # file detection
+                         "Ratio", "FPS"}                 # file coded-field detection
+    for rule in rules:
+        src = rule.get("source", "")
+        tgt = rule.get("target", "")
+        if not src or not tgt:
+            continue
+        # Sentinel sources (MediaPipe detection) — always pass through
+        if src in _SENTINEL_SOURCES:
+            result[tgt] = src
+            continue
+        if src not in raw_meta:
+            continue
+        # Use the saved preset value if present, otherwise copy the raw value
+        val = rule.get("value", "") or str(raw_meta[src]).strip()
+        if val:
+            # Auto-convert date strings to Julian ID for the J coded field
+            if tgt == "code:J" and not rule.get("value"):
+                val = date_str_to_julian_id(val) or val
+            result[tgt] = val
+    return result
+
+def person_registry_file_for_project(project=None):
+    """Return the person_registry JSON path for a project (or global default)."""
+    if project and project != "default":
+        return os.path.join(_DATA_DIR, f"person_registry_{project}.json")
+    return PERSON_REGISTRY_FILE
+PERSON_ALIASES_FILE      = os.path.join(_DATA_DIR, "person_aliases.json")
+PERSON_RIGHT_GROUPS_FILE = os.path.join(_DATA_DIR, "person_right_groups.json")
 
 _DEFAULT_TAG_GROUPS = {
     # ── Eyes  E[additional][color]  ──────────────────────────────────────────
@@ -262,29 +410,11 @@ _DEFAULT_TAG_GROUPS = {
     ],
 
     # ── Background  BG[major][sub][specific]  ────────────────────────────────
-    # 3rd digit = major category
-    "BG_Major": [
+    "Background": [
         ["0", "Black BG"],     ["1", "White BG"],      ["2", "Green BG"],
         ["3", "Indoor"],       ["4", "Commercial Indoor"],
-        ["5", "Outdoor"],      ["6", "Nature"],        ["8", "Space"],
+        ["5", "Outdoor"],      ["6", "Nature"],         ["8", "Space"],
     ],
-    # 2nd digit = subcategory (context-dependent on major)
-    "BG_Sub_Indoor": [
-        ["0", "(none)"],   ["1", "Room"],       ["2", "Bathroom"],
-        ["3", "Bedroom"],  ["4", "Living Room"],
-    ],
-    "BG_Sub_Outdoor": [
-        ["0", "(none)"],        ["1", "Outside of House"], ["2", "Yard"],
-        ["3", "Street"],        ["4", "Buildings"],
-    ],
-    "BG_Sub_Nature": [
-        ["0", "Beach"],  ["1", "Ocean (no land)"], ["2", "Lake"],
-        ["3", "Mountain"],
-    ],
-    "BG_Sub_Space": [
-        ["0", "Stars only"],   ["1", "Moon surface"],
-    ],
-
     # ── Orientation  O[width][height]  ───────────────────────────────────────
     "O_Preset": [
         ["f1", "15:1 (ultra-wide)"], ["09", "16:9 (landscape)"],
@@ -303,11 +433,10 @@ _DEFAULT_TAG_GROUPS = {
         ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
     ],
 
-    # ── Misc tags (used by tag panel, not coded fields) ───────────────────────
-    "Misc":     [["watermark", "Watermark"]],
     "Quality":  [["crap", "Crap"], ["ok", "OK"], ["good", "Good"]],
-    "Audio":    [["no_sound", "No Sound"], ["sound", "Sound"], ["voice", "Voice"]],
-    "Source":   [["comfyui", "ComfyUI"], ["a1111", "A1111"], ["aix", "AIX / MetadataReader"], ["other_src", "Other"]],
+    "Audio":    [["no_sound", "No Sound"], ["aac", "AAC"], ["mp3", "MP3"],
+                 ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
+                 ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"], ["voice", "Voice"]],
     "Variant":  [
         ["origin", "Origin"], ["base", "Base"], ["expression", "Expression"],
         ["clothing", "Clothing"], ["body_parts", "Body Parts"],
@@ -317,23 +446,33 @@ _DEFAULT_TAG_GROUPS = {
 }
 
 def _load_tag_groups(tags_file=None):
-    merged = {grp: [tuple(pair) for pair in pairs]
-              for grp, pairs in _DEFAULT_TAG_GROUPS.items()}
     path = tags_file or TAGS_FILE
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
                 raw = json.load(f)
+            # If settings have been saved (file has __section_order__), the file is
+            # fully authoritative — don't seed from _DEFAULT_TAG_GROUPS at all.
+            # This prevents deleted groups (e.g. Quality) from resurrecting via defaults.
+            if "__section_order__" in raw:
+                merged = {}
+            else:
+                merged = {grp: [tuple(pair) for pair in pairs]
+                          for grp, pairs in _DEFAULT_TAG_GROUPS.items()}
             for grp, pairs in raw.items():
                 if grp.startswith("__"):
-                    merged[grp] = pairs  # metadata keys: pass through unchanged
-                elif isinstance(pairs, list):
-                    merged[grp] = [tuple(pair) for pair in pairs]
-                else:
                     merged[grp] = pairs
+                elif isinstance(pairs, list) and pairs:
+                    merged[grp] = [tuple(pair) for pair in pairs]
+                elif not isinstance(pairs, list):
+                    merged[grp] = pairs
+                # empty list → omit (explicit deletion or cleared group)
+            return merged
         except Exception:
             pass
-    return merged
+    # No file — use all defaults
+    return {grp: [tuple(pair) for pair in pairs]
+            for grp, pairs in _DEFAULT_TAG_GROUPS.items()}
 
 TAG_GROUPS = _load_tag_groups()
 TAGS = [item for key, group in TAG_GROUPS.items()
@@ -366,7 +505,6 @@ PM_MOTION_TAGS    = _tag_keys("PM_Motion")
 CS_SHOT_TAGS      = _tag_keys("CS_Shot")
 CS_ANGLE_TAGS     = _tag_keys("CS_Angle")
 CS_LIGHT_TAGS     = _tag_keys("CS_Light")
-BG_MAJOR_TAGS     = _tag_keys("BG_Major")
 # Legacy empty stubs — functionality moved to coded fields (CS, FA, PM, R)
 RESOLUTION_TAGS   = set()
 SHOT_TAGS         = set()
@@ -534,7 +672,9 @@ def face_angle_label(f_code):
         return entry[0], entry[1]
     return "", ""
 
-CODED_FIELDS = [
+# Default coded fields — used as fallback when attrs_tags.json has no __coded_fields__ key.
+# To change coded fields without editing Python: add "__coded_fields__" to data/attrs_tags.json.
+_DEFAULT_CODED_FIELDS = [
     # (letter, label, digits)
     # digits: 2 or 3 = hex digit count; 0 = boolean flag (letter only, no value)
     # Each digit position has independent meaning — see _DEFAULT_TAG_GROUPS for sub-tables
@@ -559,10 +699,31 @@ CODED_FIELDS = [
     ("O",   "Orientation",   2),   # f1=15:1  09=16:9  90=9:16  11=square
     ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
     ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
-    ("W",   "Watermark",     0),   # flag — W present = watermarked
+    ("WM",  "Watermark",     0),   # flag — WM present = watermarked
     ("ED",  "Editable",      0),   # flag — ED present = app may auto-rename this file
     ("J",   "Timestamp",     8),   # Timestamp: yymmddHHMMSS as 8 base-36 chars — always last
 ]
+
+def _load_coded_fields():
+    """Load CODED_FIELDS from data/attrs_tags.json __coded_fields__ key.
+    Falls back to _DEFAULT_CODED_FIELDS if not present or on error."""
+    try:
+        if os.path.exists(TAGS_FILE):
+            with open(TAGS_FILE, encoding="utf-8") as _f:
+                _raw = json.load(_f)
+            _cf = _raw.get("__coded_fields__")
+            if _cf and isinstance(_cf, list):
+                result = []
+                for item in _cf:
+                    if isinstance(item, (list, tuple)) and len(item) == 3:
+                        result.append((str(item[0]), str(item[1]), int(item[2])))
+                if result:
+                    return result
+    except Exception:
+        pass
+    return list(_DEFAULT_CODED_FIELDS)
+
+CODED_FIELDS = _load_coded_fields()
 
 # Person token pattern: P + (human 3-hex OR animal A+3-hex)  [not followed by W]
 _PERSON_PAT = r'P(?!W)(A[0-9a-f]{3}|[0-9a-f]{3})'
@@ -573,7 +734,8 @@ _PW_PAT = r'PW([0-9a-f]{3})'
 def _field_pat(letter, digits):
     if digits == 0:
         return rf'(?P<{letter.lower()}>{letter})?'      # flag: just the letter, no value
-    return rf'(?:{letter}(?P<{letter.lower()}>[0-9a-f]{{{digits}}}))?'
+    char_cls = "[0-9a-z]" if letter == "J" else "[0-9a-f]"   # J = base-36 timestamp
+    return rf'(?:{letter}(?P<{letter.lower()}>{char_cls}{{{digits}}}))?'
 
 _FIELD_RE = re.compile(
     r'^'
@@ -660,7 +822,7 @@ def build_coded_filename(parts, date_first=False):
 # ── Face identity database ───────────────────────────────────────────────────
 
 def faces_db_path(project):
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"faces_{project}.json")
+    return os.path.join(_DATA_DIR, f"faces_{project}.json")
 
 _faces_db_cache = {}  # project -> (mtime, db)
 
@@ -684,7 +846,7 @@ def save_faces_db(project, db):
     with open(faces_db_path(project), "w", encoding="utf-8") as f:
         json.dump(db, f, indent=2, ensure_ascii=False)
 
-def detect_or_assign_person_id(path, project, threshold=0.55, raise_errors=False):
+def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False):
     """Extract face embedding, match against project face DB, return hex ID.
     Each person ID stores multiple embeddings; comparison uses closest match
     across all samples so accuracy improves as more images are confirmed.
@@ -773,7 +935,7 @@ def detect_or_assign_person_id(path, project, threshold=0.55, raise_errors=False
         return None
 
 
-def match_person_id(path, project, threshold=0.55):
+def match_person_id(path, project, threshold=0.65):
     """Match face in image against known people — never assigns a new ID.
     Returns the best matching person ID string, or None if no confident match."""
     _is_video = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
@@ -948,11 +1110,11 @@ def reassign_person_id(old_id, new_id, project, attrs_data):
     save_right_groups([g for g in right_groups if g])
 
     # ── 6. Registry ────────────────────────────────────────────────────────
-    registry = load_person_registry()
+    registry = load_person_registry(project)
     old_name = registry.pop(old_id, "")
     if old_name and not registry.get(new_id):
         registry[new_id] = old_name
-    save_person_registry(registry)
+    save_person_registry(registry, project)
 
     return attrs_data
 
@@ -962,7 +1124,7 @@ def get_person_id_label(project, hex_id):
     Registry is the canonical source; falls back to faces DB name."""
     if not hex_id:
         return ""
-    registry = load_person_registry()
+    registry = load_person_registry(project)
     name = registry.get(hex_id, "")
     if not name:
         db = load_faces_db(project)
@@ -970,15 +1132,13 @@ def get_person_id_label(project, hex_id):
     return name or hex_id
 
 def set_person_name(project, hex_id, name):
-    """Attach a human-readable name to a person ID.
-    Writes to both person_registry (canonical) and faces DB (legacy compat)."""
-    # Registry — canonical, project-independent
-    registry = load_person_registry()
+    """Attach a human-readable name to a person ID per project."""
+    registry = load_person_registry(project)
     if name:
         registry[hex_id] = name
     elif hex_id in registry:
         del registry[hex_id]
-    save_person_registry(registry)
+    save_person_registry(registry, project)
     # Faces DB — keep in sync for any legacy readers
     db = load_faces_db(project)
     db.setdefault("faces", {}).setdefault(hex_id, {})["name"] = name
@@ -988,7 +1148,7 @@ def set_person_name(project, hex_id, name):
 # ── Attrs storage ─────────────────────────────────────────────────────────────
 
 def attrs_path(project):
-    return f"attrs_{project}.json"
+    return os.path.join(_DATA_DIR, f"attrs_{project}.json")
 
 def load(project):
     p = attrs_path(project)
@@ -1009,26 +1169,27 @@ def get(attrs_data, path):
 
 def set_file(attrs_data, path, tags, note="", confirmed=False, project="", scene="",
              prompt="", neg_prompt="", seed="", meta=None, custom="", person_id="",
-             speech="", editable=False):
+             speech="", audio="", editable=False):
     has_data = (tags or note or confirmed or project or scene or prompt or neg_prompt
-                or seed or meta or custom or person_id or speech or editable)
+                or seed or meta or custom or person_id or speech or audio or editable)
     if not has_data:
         attrs_data.pop(path, None)
     else:
-        entry = {
-            "tags":       tags,
-            "note":       note,
-            "confirmed":  confirmed,
-            "project":    project,
-            "scene":      scene,
-            "prompt":     prompt,
-            "neg_prompt": neg_prompt,
-            "seed":       seed,
-            "custom":     custom,
-            "person_id":  person_id,
-            "speech":     speech,
-            "editable":   editable,
-        }
+        # Merge into existing entry so unknown/extra fields are preserved
+        entry = dict(attrs_data.get(path, {}))
+        entry["tags"]       = list(dict.fromkeys(tags))  # deduplicate, preserve order
+        entry["note"]       = note
+        entry["confirmed"]  = confirmed
+        entry["project"]    = project
+        entry["scene"]      = scene
+        entry["prompt"]     = prompt
+        entry["neg_prompt"] = neg_prompt
+        entry["seed"]       = seed
+        entry["custom"]     = custom
+        entry["person_id"]  = person_id
+        entry["speech"]     = speech
+        entry["audio"]      = audio
+        entry["editable"]   = editable
         if meta:
             entry["meta"] = meta
         attrs_data[path] = entry
@@ -1062,6 +1223,294 @@ def file_fingerprint(path):
         return format(size_kb, 'x')   # e.g. 2048KB → '800', 8192KB → '2000'
     except Exception:
         return None
+
+_AITAN_PREFIX = "AItan"
+
+def _extract_aitan_block(text: str) -> dict | None:
+    """Parse AItan{...} from a metadata string. Returns dict or None."""
+    try:
+        idx = text.find(_AITAN_PREFIX + "{")
+        if idx == -1:
+            return None
+        start = idx + len(_AITAN_PREFIX)
+        # Find matching closing brace
+        depth, i = 0, start
+        while i < len(text):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return json.loads(text[start : i + 1])
+            i += 1
+    except Exception:
+        pass
+    return None
+
+def _build_aitan_block(entry: dict) -> str:
+    """Serialize attrs entry as AItan{...} string (excludes heavy/internal fields)."""
+    _SKIP = {"meta"}
+    slim = {k: v for k, v in entry.items() if k not in _SKIP and v not in (None, "", [], {})}
+    return _AITAN_PREFIX + json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
+
+def read_raw_embedded_text(path: str) -> str:
+    """Return all raw embedded metadata text from a file as a formatted string."""
+    ext = os.path.splitext(path)[1].lower()
+    parts = []
+    try:
+        if ext in (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv"):
+            import subprocess, json as _json
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_format", "-show_streams", path],
+                capture_output=True, text=True, timeout=10)
+            probe = _json.loads(result.stdout)
+            tags = probe.get("format", {}).get("tags", {})
+            for k, v in tags.items():
+                parts.append(f"[{k}]\n{v}")
+            for s in probe.get("streams", []):
+                s_tags = s.get("tags", {})
+                if s_tags:
+                    idx = s.get("index", "?")
+                    for k, v in s_tags.items():
+                        parts.append(f"[stream{idx}/{k}]\n{v}")
+        else:
+            from PIL import Image, ExifTags
+            with Image.open(path) as img:
+                info = img.info
+                # Text chunks / info dict
+                _skip_binary = ("exif", "icc_profile", "dpi", "jfif", "jfif_version",
+                                "jfif_density", "jfif_unit", "adobe", "photoshop")
+                for k, v in info.items():
+                    if k.lower() in _skip_binary or isinstance(v, (bytes, bytearray)):
+                        continue
+                    parts.append(f"[{k}]\n{v}")
+                # EXIF
+                exif_raw = img._getexif() if hasattr(img, "_getexif") else None
+                if not exif_raw and hasattr(img, "getexif"):
+                    exif_raw = dict(img.getexif())
+                if exif_raw:
+                    for tag_id, v in exif_raw.items():
+                        tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                        if isinstance(v, (bytes, bytearray)):
+                            try:
+                                import piexif.helper
+                                if tag_id == 0x9286:  # UserComment
+                                    v = piexif.helper.UserComment.load(v)
+                                else:
+                                    v = v.decode("utf-8", errors="replace")
+                            except Exception:
+                                v = repr(v)
+                        parts.append(f"[EXIF:{tag_name}]\n{v}")
+    except Exception as e:
+        parts.append(f"(error reading metadata: {e})")
+    return "\n\n".join(parts)
+
+def _has_real_data(entry: dict) -> bool:
+    """Return True if an attrs entry (or parsed AItan block) has meaningful data beyond defaults."""
+    if not entry:
+        return False
+    for k, v in entry.items():
+        if v in (None, "", [], {}):
+            continue
+        if k == "confirmed" and v is False:
+            continue
+        if k == "editable" and v is True:
+            continue
+        return True
+    return False
+
+
+def _read_embedded_aitan_block(path: str) -> dict | None:
+    """Return parsed AItan dict from file's embedded metadata, or None if absent/empty."""
+    _PREFIX = "AItan"
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in (".jpg", ".jpeg"):
+            import piexif, piexif.helper
+            from PIL import Image
+            with Image.open(path) as img:
+                raw_exif = img.info.get("exif", b"")
+            if not raw_exif:
+                return None
+            exif = piexif.load(raw_exif)
+            uc_raw = exif.get("Exif", {}).get(piexif.ExifIFD.UserComment, b"")
+            try:
+                uc = piexif.helper.UserComment.load(uc_raw)
+            except Exception:
+                uc = uc_raw.decode("utf-8", errors="replace") if uc_raw else ""
+            if uc.startswith(_PREFIX):
+                try:
+                    return json.loads(uc[len(_PREFIX):])
+                except Exception:
+                    return None
+        elif ext in (".png", ".webp"):
+            from PIL import Image
+            with Image.open(path) as img:
+                desc = img.info.get("Description", "") or img.info.get("description", "")
+            if desc.startswith(_PREFIX):
+                try:
+                    return json.loads(desc[len(_PREFIX):])
+                except Exception:
+                    return None
+        else:
+            raw = read_raw_embedded_text(path)
+            for line in raw.split("\n"):
+                line = line.strip()
+                if line.startswith(_PREFIX):
+                    try:
+                        return json.loads(line[len(_PREFIX):])
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return None
+
+
+def embed_aitan_meta(path: str, entry: dict, _raise: bool = False) -> bool:
+    """Write AItan{...} block into the file's comment/description metadata.
+    Video: uses ffmpeg comment tag (copy-only, no re-encode).
+    Image: writes PNG description or JPEG EXIF UserComment.
+    Returns True on success. If _raise=True, raises on failure instead."""
+    block = _build_aitan_block(entry)
+    ext = os.path.splitext(path)[1].lower()
+    _VID = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv"}
+    _IMG = {".jpg", ".jpeg", ".png", ".webp"}
+    if ext in _VID:
+        return _embed_aitan_video(path, block, _raise=_raise)
+    elif ext in _IMG:
+        return _embed_aitan_image(path, block, _raise=_raise)
+    return False
+
+def _embed_aitan_video(path: str, block: str, _raise: bool = False) -> bool:
+    import subprocess, tempfile, shutil, json as _json
+    # Detect actual container format (file may have wrong extension e.g. MP4 as .jpg)
+    try:
+        _probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
+            capture_output=True, text=True, timeout=10)
+        _fmt = _json.loads(_probe.stdout).get("format", {}).get("format_name", "")
+        _ext = ".mp4" if "mp4" in _fmt or "mov" in _fmt else \
+               ".mkv" if "matroska" in _fmt else \
+               ".webm" if "webm" in _fmt else \
+               os.path.splitext(path)[1]
+    except Exception:
+        _ext = os.path.splitext(path)[1]
+    # Use a unique tmp name so concurrent bake calls on the same file don't collide
+    import uuid as _uuid
+    tmp = os.path.join(os.path.dirname(path),
+                       "." + os.path.basename(path) + "." + _uuid.uuid4().hex[:8] + ".aitan_tmp" + _ext)
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", path,
+             "-metadata", f"comment={block}",
+             "-codec", "copy", tmp],
+            capture_output=True, timeout=30)
+        # Accept if tmp was written with reasonable size (>= 50% of original),
+        # even if ffmpeg returned non-zero (some containers produce warnings/non-fatal errors)
+        orig_size = os.path.getsize(path) if os.path.exists(path) else 0
+        tmp_size  = os.path.getsize(tmp)  if os.path.exists(tmp)  else 0
+        if tmp_size > 0 and (orig_size == 0 or tmp_size >= orig_size * 0.5):
+            shutil.move(tmp, path)
+            return True
+        err = result.stderr.decode(errors="replace").strip().splitlines()
+        reason = err[-1] if err else "ffmpeg failed"
+        if _raise:
+            raise RuntimeError(reason)
+    except RuntimeError:
+        raise
+    except Exception as e:
+        if _raise: raise
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+    return False
+
+def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
+    import shutil as _shutil, uuid as _uuid
+    ext = os.path.splitext(path)[1].lower()
+    tmp = os.path.join(os.path.dirname(path),
+                       "." + os.path.basename(path) + "." + _uuid.uuid4().hex[:8] + ".aitan_tmp" + ext)
+    try:
+        from PIL import Image, PngImagePlugin
+        try:
+            img_test = Image.open(path)
+            _img_fmt = img_test.format  # read format before verify() closes the object
+            img_test.verify()
+        except Exception:
+            # verify() failed — check if PIL can still open it as an image
+            try:
+                _img_fmt = Image.open(path).format
+                _is_img = _img_fmt in ("JPEG", "PNG", "WEBP", "BMP", "GIF", "TIFF")
+            except Exception:
+                _is_img = False
+            if not _is_img:
+                # Not an image at all (e.g. MP4 with .jpg extension) — try video path
+                return _embed_aitan_video(path, block, _raise=_raise)
+        with Image.open(path) as img:
+            if ext == ".png":
+                meta = PngImagePlugin.PngInfo()
+                meta.add_text("Description", block)
+                img.save(tmp, pnginfo=meta)
+            elif ext in (".jpg", ".jpeg"):
+                import piexif, piexif.helper
+                exif_dict = {}
+                try:
+                    if "exif" in img.info:
+                        exif_dict = piexif.load(img.info["exif"])
+                except Exception:
+                    pass
+                exif_dict.setdefault("Exif", {})
+                exif_dict["Exif"][piexif.ExifIFD.UserComment] = (
+                    piexif.helper.UserComment.dump(block, encoding="unicode"))
+                try:
+                    exif_bytes = piexif.dump(exif_dict)
+                except Exception:
+                    exif_dict = {"Exif": {piexif.ExifIFD.UserComment:
+                        piexif.helper.UserComment.dump(block, encoding="unicode")}}
+                    exif_bytes = piexif.dump(exif_dict)
+                # Write to temp file then use piexif.insert to inject EXIF in-place
+                _shutil.copy2(path, tmp)
+                try:
+                    piexif.insert(exif_bytes, tmp)
+                except Exception:
+                    # Fallback: file has .jpeg extension but may be PNG inside, or RGBA mode
+                    _fmt = img.format or ""
+                    if _fmt == "PNG" or img.mode in ("RGBA", "P", "LA"):
+                        _save_img = img if img.mode not in ("RGBA", "P", "LA") else img.convert("RGBA") if img.mode == "P" else img
+                        _pngmeta = PngImagePlugin.PngInfo()
+                        _pngmeta.add_text("Description", block)
+                        _save_img.save(tmp, format="PNG", pnginfo=_pngmeta)
+                    else:
+                        _save_img = img.convert("RGB") if img.mode != "RGB" else img
+                        _save_img.save(tmp, exif=exif_bytes, quality="keep")
+            elif ext == ".webp":
+                import piexif, piexif.helper
+                exif_data = img.info.get("exif", b"")
+                try:
+                    exif_dict = piexif.load(exif_data) if exif_data else {}
+                except Exception:
+                    exif_dict = {}
+                exif_dict.setdefault("Exif", {})
+                exif_dict["Exif"][piexif.ExifIFD.UserComment] = (
+                    piexif.helper.UserComment.dump(block, encoding="unicode"))
+                exif_bytes = piexif.dump(exif_dict)
+                lossless = img.info.get("lossless", False)
+                img.save(tmp, format="WEBP", exif=exif_bytes, lossless=lossless, quality=90)
+            else:
+                return False
+        # Atomically replace original only if temp file was written successfully
+        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+            _shutil.move(tmp, path)
+            return True
+    except Exception as e:
+        if _raise: raise
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+    return False
 
 def extract_metadata(path):
     """Return a dict of all extractable metadata for display."""
@@ -1134,9 +1583,13 @@ def _extract_video_meta(path, meta):
             if s.get("codec_type") == "audio":
                 meta["Audio"] = s.get("codec_name", "")
                 break
-        # ComfyUI workflow in format comment tag
-        comment = probe.get("format", {}).get("tags", {}).get("comment", "")
+        # AItan embedded data + ComfyUI workflow in format comment tag
+        fmt_tags = probe.get("format", {}).get("tags", {})
+        comment = fmt_tags.get("comment", "") or fmt_tags.get("description", "")
         if comment:
+            _aitan = _extract_aitan_block(comment)
+            if _aitan is not None:
+                meta["_aitan"] = _aitan
             try:
                 outer = _json.loads(comment)
                 workflow_str = outer.get("prompt") or outer.get("workflow")
@@ -1159,6 +1612,15 @@ def _extract_image_meta(path, meta):
             meta["Format"]     = img.format or os.path.splitext(path)[1].upper().lstrip(".")
             meta["Mode"]       = img.mode
             info = img.info
+
+            # AItan embedded block (PNG Description or JPEG UserComment)
+            for _field in ("Description", "UserComment", "Comment"):
+                _raw = info.get(_field, "")
+                if _raw and _AITAN_PREFIX in str(_raw):
+                    _aitan = _extract_aitan_block(str(_raw))
+                    if _aitan is not None:
+                        meta["_aitan"] = _aitan
+                    break
 
             # ComfyUI / A1111 generation params
             if "workflow" in info or "prompt" in info:
@@ -1316,30 +1778,32 @@ def save_filename_rules(rules, project=None):
     cfg["rules"] = rules
     save_filename_config(cfg, project)
 
-_person_registry_cache = (None, None)  # (mtime, data)
+_person_registry_cache = {}  # project_key → (mtime, data)
 
-def load_person_registry():
-    """Returns dict {id_str: description}, always includes 000."""
-    global _person_registry_cache
+def load_person_registry(project=None):
+    """Returns dict {id_str: description} for a project (or global default)."""
+    path = person_registry_file_for_project(project)
+    key  = project or ""
     defaults = {"000": "No human/animal"}
-    if os.path.exists(PERSON_REGISTRY_FILE):
+    if os.path.exists(path):
         try:
-            mtime = os.path.getmtime(PERSON_REGISTRY_FILE)
-            if _person_registry_cache[0] == mtime:
-                return _person_registry_cache[1]
-            with open(PERSON_REGISTRY_FILE, encoding="utf-8") as f:
+            mtime = os.path.getmtime(path)
+            cached = _person_registry_cache.get(key)
+            if cached and cached[0] == mtime:
+                return cached[1]
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             result = {**defaults, **data}
-            _person_registry_cache = (mtime, result)
+            _person_registry_cache[key] = (mtime, result)
             return result
         except Exception:
             pass
     return defaults
 
-def save_person_registry(data):
-    global _person_registry_cache
-    _person_registry_cache = (None, None)  # invalidate cache on write
-    with open(PERSON_REGISTRY_FILE, "w", encoding="utf-8") as f:
+def save_person_registry(data, project=None):
+    _person_registry_cache.pop(project or "", None)
+    path = person_registry_file_for_project(project)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True, ensure_ascii=False)
 
 
@@ -1471,14 +1935,15 @@ def detect_tags_from_filename(path, rules):
     """Return list of tag keys to add based on filename field rules.
     New format: {"pattern": "-0", "field": "P", "value": "001"}
     Old format (backward compat): {"pattern": "-front", "tags": ["front"]}
-    Uses boundary matching so e.g. '-right' won't match '-right34'."""
-    name = os.path.splitext(os.path.basename(path))[0].lower()
+    Pattern is a plain substring matched against the full basename (with extension),
+    so '-0.' matches 'photo-0.jpg' and '-0-' matches 'photo-0-extra.jpg'."""
+    name = os.path.basename(path).lower()
     tags = []
     for rule in rules:
         pattern = rule.get("pattern", "").lower()
         if not pattern:
             continue
-        if not re.search(re.escape(pattern) + r'(?=[-.]|$)', name):
+        if pattern not in name:
             continue
         if "tag_group" in rule:
             # Tag group rule: pattern in filename → add tag value to file's tags
@@ -1486,8 +1951,15 @@ def detect_tags_from_filename(path, rules):
             if val and val not in tags:
                 tags.append(val)
         elif "field" in rule:
-            # Coded-field format — handled by parse_filename_rules
-            pass
+            # Boolean coded field (digits=0) — add tag matching the field label
+            field = rule.get("field", "").upper()
+            for _l, _lb, _d in CODED_FIELDS:
+                if _l == field and _d == 0:
+                    tag_key = _lb.lower()   # e.g. "Watermark" → "watermark"
+                    if tag_key and tag_key not in tags:
+                        tags.append(tag_key)
+                    break
+            # Non-boolean coded fields are handled by parse_filename_rules
         else:
             # Legacy tag format
             for t in rule.get("tags", []):
@@ -1495,15 +1967,17 @@ def detect_tags_from_filename(path, rules):
                     tags.append(t)
     return tags
 
-def parse_filename_rules(stem, rules):
+def parse_filename_rules(stem, rules, basename=None):
     """Extract coded field values from a filename stem using rules.
     Returns dict of field→value, e.g. {"P": "001", "E": "0a"}.
     Supports:
       - Extract rule: {"field": "E", "extract": true, "digits": 2}
         → regex finds E followed by N hex digits in stem
-      - Value rule:   {"pattern": "-0", "field": "P", "value": "001"}
-        → exact pattern match sets fixed value"""
-    name = stem.lower()
+      - Value rule:   {"pattern": "-0.", "field": "P", "value": "001"}
+        → substring match against full basename (stem + extension) sets fixed value
+    basename: full filename including extension (used for pattern matching).
+              Falls back to stem if not provided."""
+    name = (basename or stem).lower()   # full name for pattern matching
     result = {}
     for rule in rules:
         if "field" not in rule:
@@ -1519,7 +1993,7 @@ def parse_filename_rules(stem, rules):
             pattern = rule.get("pattern", "").lower()
             if not pattern:
                 continue
-            if re.search(re.escape(pattern) + r'(?=[-.]|$)', name):
+            if pattern in name:
                 result[rule["field"]] = rule.get("value", "")
     return result
 
@@ -1752,10 +2226,12 @@ def _get_clip_label_cache():
         return None
 
 
-def auto_detect_clip_attrs(image_emb, existing_entry):
+def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None):
     """Use CLIP to auto-detect coded field values not already set.
     image_emb: 1-D tensor from logic.extract_feature().
     existing_entry: current attrs dict for the file (may be empty).
+    allowed_fields: optional set of lowercase field names to detect (e.g. {"hc","fa","sk"}).
+                    If None, all CLIP_AUTO_DETECT fields are run (legacy behaviour).
     Returns {field_lower: new_hex} for any fields that were updated."""
     try:
         from sentence_transformers import util as _stutil
@@ -1784,6 +2260,8 @@ def auto_detect_clip_attrs(image_emb, existing_entry):
 
     for i, spec in enumerate(CLIP_AUTO_DETECT):
         field       = spec["field"]
+        if allowed_fields is not None and field not in allowed_fields:
+            continue
         pos         = spec["pos"]
         zero_is_none = spec.get("zero_is_none", True)
         threshold   = spec.get("threshold", 0.20)
@@ -1859,8 +2337,7 @@ def flush_path_renames_to_stores(renames, project, update_clip_pt=True):
 
     # CLIP .pt — patch paths list in-place (fast: just string replacements, tensor unchanged)
     if update_clip_pt:
-        _base = os.path.dirname(os.path.abspath(__file__))
-        _pt_path = os.path.join(_base, f"features_{project}.pt")
+        _pt_path = os.path.join(_DATA_DIR, f"features_{project}.pt")
         if os.path.exists(_pt_path):
             try:
                 import torch as _torch
@@ -1900,8 +2377,10 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
         new_stem = f"P{pid}J{j_code}"
     else:
         current_persons = parts.get("persons", [])
-        if current_persons and current_persons[0] == pid:
+        if current_persons and current_persons[0] == pid and parts.get("j"):
             return path   # already correct — nothing to do
+        if not parts.get("j"):
+            parts["j"] = julian_id_for_file(path)  # stamp creation date if not already present
         parts["persons"] = [pid] + current_persons[1:]   # keep secondary persons
         new_stem = build_coded_filename(parts)
         if not new_stem:
@@ -2089,16 +2568,20 @@ def detect_resolution_tag(path):
         return None
 
 def detect_audio_tag(path):
-    """Return 'sound' or 'no_sound' for video files."""
-    if not path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+    """Return codec name (e.g. 'aac', 'mp3', 'opus') if file has audio, 'no_sound' if not, None on error."""
+    _VID = ('.mp4', '.mkv', '.mov', '.m4v', '.avi', '.webm', '.wmv')
+    if not path.lower().endswith(_VID):
         return None
     try:
-        import subprocess
+        import subprocess, json as _json
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a",
-             "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+             "-show_entries", "stream=codec_name", "-of", "json", path],
             capture_output=True, text=True, timeout=5)
-        return "sound" if result.stdout.strip() else "no_sound"
+        streams = _json.loads(result.stdout).get("streams", [])
+        if streams:
+            return (streams[0].get("codec_name") or "sound").lower()
+        return "no_sound"
     except Exception:
         return None
 
@@ -2306,6 +2789,129 @@ def _extract_a1111_prompt_seed(params):
         pass
     return prompt, seed
 
+def apply_boolean_sync_rules(attrs_data, path, project, orig_stem=None):
+    """For each non-one_way filename rule with a field and no value,
+    check if the pattern is in the filename and add/remove the flag letter from the
+    coded filename accordingly.  Returns the (possibly renamed) path.
+    orig_stem: original filename stem before any rename (used for pattern matching so
+               patterns are checked against the pre-rename name, not the coded result).
+    The rule itself is authoritative — no CODED_FIELDS lookup needed."""
+    rules = load_filename_rules(project)
+    if not rules:
+        return path
+
+    # Boolean sync rule: field set, no one_way, no extract, no value → flag sync
+    bool_sync = []
+    for r in rules:
+        if not r.get("field") or r.get("one_way") or r.get("extract"):
+            continue
+        if r.get("value", "").strip():          # has a value → not a boolean sync
+            continue
+        field = r["field"].upper()
+        bool_sync.append((r, field))
+
+    if not bool_sync:
+        return path
+
+    stem, ext = os.path.splitext(os.path.basename(path))
+    parts = parse_coded_filename(stem)
+    if parts is None:
+        return path  # not a coded file — skip
+
+    # Use original stem for pattern matching if provided (pre-rename filename may contain
+    # patterns that get stripped during coded rename, e.g. '-watermark')
+    check_name = (orig_stem or stem).lower()
+    changed = False
+    for rule, letter in bool_sync:
+        pattern = rule.get("pattern", "").lower()
+        if not pattern:
+            continue
+        lk = letter.lower()
+        currently_on = bool(parts.get(lk, ""))
+        should_be_on = pattern in check_name
+        if should_be_on and not currently_on:
+            parts[lk] = letter      # truthy → build_coded_filename appends the letter
+            changed = True
+        elif not should_be_on and currently_on:
+            parts[lk] = ""          # remove the flag
+            changed = True
+
+    if not changed:
+        return path
+
+    new_stem = build_coded_filename(parts)
+    if not new_stem or new_stem == stem:
+        return path
+
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    if new_path == path:
+        return path
+    try:
+        os.rename(path, new_path)
+    except Exception:
+        return path
+    if path in attrs_data:
+        attrs_data[new_path] = attrs_data.pop(path)
+    return new_path
+
+
+def apply_tag_sync_rules(attrs_data, path, project):
+    """Two-way sync: tag ↔ filename pattern for tag_group rules without one_way.
+    Rules sharing the same tag_group+value are treated as a group (alias patterns):
+      - tag set:   if ANY alias pattern is in filename → keep it, add none.
+                   if NO  alias pattern is in filename → append the first pattern.
+      - tag unset: remove ALL alias patterns from filename.
+    Returns the (possibly renamed) path."""
+    import re as _re
+    rules = load_filename_rules(project)
+    sync_rules = [r for r in rules
+                  if r.get("tag_group") and not r.get("one_way")
+                  and r.get("pattern") and r.get("value")]
+    if not sync_rules:
+        return path
+    stem, ext = os.path.splitext(os.path.basename(path))
+    entry_tags = set(get(attrs_data, path).get("tags", []))
+    new_stem = stem
+    changed = False
+
+    # Group rules by (tag_group, value) so alias patterns are handled together
+    from collections import defaultdict as _dd
+    groups = _dd(list)
+    for rule in sync_rules:
+        groups[(rule["tag_group"], rule["value"].strip())].append(rule["pattern"])
+
+    for (tag_group, tag_val), patterns in groups.items():
+        if not tag_val:
+            continue
+        tag_is_set = tag_val in entry_tags
+        if tag_is_set:
+            # Check if any alias pattern already present — if so, leave filename alone
+            any_present = any(p.lower() in new_stem.lower() for p in patterns)
+            if not any_present:
+                # Append the first (canonical) pattern
+                new_stem = new_stem + patterns[0]
+                changed = True
+        else:
+            # Remove all alias patterns that are present
+            for pattern in patterns:
+                if pattern.lower() in new_stem.lower():
+                    new_stem = _re.sub(_re.escape(pattern), "", new_stem, flags=_re.IGNORECASE)
+                    changed = True
+
+    if not changed or new_stem == stem:
+        return path
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    if new_path == path:
+        return path
+    try:
+        os.rename(path, new_path)
+    except Exception:
+        return path
+    if path in attrs_data:
+        attrs_data[new_path] = attrs_data.pop(path)
+    return new_path
+
+
 def auto_set_all(attrs_data, path, project):
     """Auto-detect and save: resolution, audio tag, AI source, prompt, seed, metadata."""
     entry        = get(attrs_data, path)
@@ -2313,23 +2919,10 @@ def auto_set_all(attrs_data, path, project):
     current_tags = list(entry.get("tags", []))
     changed      = False
 
-    # Resolution
-    if not any(t in RESOLUTION_TAGS for t in current_tags):
-        tag = detect_resolution_tag(path)
-        if tag:
-            current_tags = [t for t in current_tags if t not in RESOLUTION_TAGS] + [tag]
-            changed = True
-
-    # Audio tag for videos
-    if not any(t in AUDIO_TAGS for t in current_tags):
-        tag = detect_audio_tag(path)
-        if tag:
-            current_tags = [t for t in current_tags if t not in AUDIO_TAGS] + [tag]
-            changed = True
-
     # AI source + prompt + seed
-    prompt = entry.get("prompt", "")
-    seed   = entry.get("seed", "")
+    prompt     = entry.get("prompt", "")
+    neg_prompt = entry.get("neg_prompt", "")
+    seed       = entry.get("seed", "")
     if not any(t in SOURCE_TAGS for t in current_tags) or not prompt:
         src, new_prompt, new_seed = detect_ai_source(path)
         if src:
@@ -2346,20 +2939,28 @@ def auto_set_all(attrs_data, path, project):
     if meta != existing_meta:
         changed = True
 
-    # Sync meta fields → top-level attrs (only fill if not already set)
-    if not seed and meta.get("Seed"):
-        seed = meta["Seed"]
-        changed = True
-    prompt     = entry.get("prompt", "")
-    neg_prompt = entry.get("neg_prompt", "")
-    if not prompt and meta.get("Prompt"):
-        prompt = meta["Prompt"]
-        changed = True
-    if not neg_prompt and meta.get("NegPrompt"):
-        neg_prompt = meta["NegPrompt"]
-        changed = True
+    # Apply metadata mapping rules — custom text/tag/person_id mappings only
+    _TEXT_TARGETS = {"prompt", "neg_prompt", "seed", "note", "speech", "model"}
+    meta_rules = load_metadata_rules(project)
+    if meta_rules:
+        for tgt, val in apply_metadata_rules(meta, meta_rules).items():
+            if tgt.startswith("tag:") and val:
+                tag_key = tgt[4:]
+                if tag_key and tag_key not in current_tags:
+                    current_tags.append(tag_key)
+                    changed = True
+            elif tgt == "person_id":
+                if not entry.get("person_id"):
+                    entry["person_id"] = val; changed = True
+            elif tgt in _TEXT_TARGETS:
+                if tgt == "prompt"       and not prompt:     prompt     = val; changed = True
+                elif tgt == "neg_prompt" and not neg_prompt: neg_prompt = val; changed = True
+                elif tgt == "seed"       and not seed:       seed       = val; changed = True
+                elif tgt not in ("prompt", "neg_prompt", "seed"):
+                    if not entry.get(tgt):
+                        entry[tgt] = val; changed = True
 
-    # Shot type + pose direction (single MediaPipe pass, skip each if already set)
+    # Shot type + pose direction via MediaPipe — always-on
     needs_shot = not any(t in SHOT_TAGS for t in current_tags)
     needs_pose = not any(t in POSE_TAGS for t in current_tags)
     if needs_shot or needs_pose:
@@ -2371,6 +2972,31 @@ def auto_set_all(attrs_data, path, project):
             current_tags = [t for t in current_tags if t not in POSE_TAGS] + [pose_tag]
             changed = True
 
+    # Audio detection — always-on; stores codec in entry["audio"] field
+    if not entry.get("audio"):
+        audio_tag = detect_audio_tag(path)
+        if audio_tag:
+            if audio_tag not in AUDIO_TAGS:
+                audio_tag = "sound"
+            entry["audio"] = audio_tag
+            changed = True
+
+    # Resolution detection — always-on
+    if not any(t in RESOLUTION_TAGS for t in current_tags):
+        tag = detect_resolution_tag(path)
+        if tag:
+            current_tags = [t for t in current_tags if t not in RESOLUTION_TAGS] + [tag]
+            changed = True
+
+    # Ratio (O) / FPS (K) — always-on
+    _fa = detect_file_attrs(path)
+    if _fa.get("o") and not entry.get("cf_o"):
+        entry["cf_o"] = _fa["o"]
+        changed = True
+    if _fa.get("k") and not entry.get("cf_k"):
+        entry["cf_k"] = _fa["k"]
+        changed = True
+
     # Filename-based tags + enforce rules
     fn_rules = load_filename_rules(project)
     if fn_rules:
@@ -2378,14 +3004,12 @@ def auto_set_all(attrs_data, path, project):
             if t not in current_tags:
                 current_tags.append(t)
                 changed = True
-        # Detect coded-field values from two-way rules (store only, no rename)
-        two_way_rules = [r for r in fn_rules if r.get("field") and not r.get("one_way")]
-
-    # One-way coded-field detection (e.g. -0 → P 001, reads only, no rename)
-    one_way_rules = [r for r in fn_rules if r.get("field") and r.get("one_way")]
+    # One-way coded-field detection: explicit one_way rules + extract rules (Pfff etc.)
+    one_way_rules = [r for r in fn_rules if r.get("field") and (r.get("one_way") or r.get("extract"))]
     if one_way_rules:
-        stem_ow = os.path.splitext(os.path.basename(path))[0]
-        od = parse_filename_rules(stem_ow, one_way_rules)
+        _bn     = os.path.basename(path)
+        stem_ow = os.path.splitext(_bn)[0]
+        od = parse_filename_rules(stem_ow, one_way_rules, basename=_bn)
         if od:
             if "P" in od and od["P"] and not entry.get("person_id"):
                 person_id = od["P"]

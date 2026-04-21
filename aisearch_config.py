@@ -6,12 +6,13 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtCore import Qt
 
 _DIR        = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(_DIR, "aisearch_config.json")
+_DATA_DIR   = os.path.join(_DIR, "data")
+CONFIG_FILE = os.path.join(_DATA_DIR, "aisearch_config.json")
 
 def config_file_for_project(project=None):
     """Return config file path for a project, or global default."""
     if project and project != "default":
-        return os.path.join(_DIR, f"aisearch_config_{project}.json")
+        return os.path.join(_DATA_DIR, f"aisearch_config_{project}.json")
     return CONFIG_FILE
 
 DEFAULT_COLORS = {
@@ -21,7 +22,32 @@ DEFAULT_COLORS = {
     "score":      ["#005a5a", "#1e6e64", "#508c82", "#8cb9af"],
     "unmarked":   "#ff9944",
     "attr_label": "#f0c040",
+    # Button category colors
+    "btn_add":     "#1a5a9a",
+    "btn_remove":  "#7a2020",
+    "btn_write":   "#9a8a00",
+    "btn_stop":    "#cc2020",
+    "btn_special": "#c87000",
 }
+
+
+def btn_color(key, config=None):
+    """Return just the hex color string for a button category."""
+    colors = (config or {}).get("colors", {})
+    return colors.get(key, DEFAULT_COLORS.get(key, "#555555"))
+
+
+def btn_ss(key, config=None, extra="padding:3px 10px;"):
+    """Return a QPushButton stylesheet for a button category.
+
+    key: 'btn_add' | 'btn_remove' | 'btn_write' | 'btn_stop' | 'btn_special'
+    config: app.config dict (or None to use defaults)
+    extra: additional CSS appended after the base style
+    """
+    colors = (config or {}).get("colors", {})
+    color = colors.get(key, DEFAULT_COLORS.get(key, "#555555"))
+    base = f"background-color:{color}; color:white; font-weight:bold;"
+    return f"{base} {extra}".strip() if extra else base
 
 def load_config(project=None):
     """Load config for a project. Falls back to global default if no project config exists."""
