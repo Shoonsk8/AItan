@@ -53,6 +53,12 @@ class _AppearanceMixin:
             for _w in [getattr(self, "_canvas_widget", None), _sc]:
                 if _w and hasattr(_w, "refresh_language"):
                     _w.refresh_language()
+            # Refresh the main app window labels/buttons
+            if hasattr(self.app, "refresh_language"):
+                self.app.refresh_language()
+            # Refresh the preview window labels/buttons
+            if _pw and hasattr(_pw, "refresh_language"):
+                _pw.refresh_language()
             if hasattr(self, "rebuild_for_language"):
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(0, self.rebuild_for_language)

@@ -614,6 +614,68 @@ class AISearchApp(QMainWindow):
         if header and header.text() in ("Group", _t("Group / グループ")):
             self._recolor_dup_groups()
 
+    def refresh_language(self):
+        """Re-translate all main-window labels/buttons/tooltips after a language change."""
+        # Top bar
+        self.btn_settings.setText(_t("⚙ SETTINGS / ⚙ 設定"))
+        self.lbl_proj_hdr.setText(_t("PROJECT: / プロジェクト："))
+        # lbl_base_dir is rebuilt by _set_base_dir_label; just force a refresh by reading current label
+        _base = ""
+        if hasattr(self, '_base_dir_label_value'):
+            _base = self._base_dir_label_value
+        self.lbl_base_dir.setText(_t(f"Base: {_base} / ベース： {_base}") if _base else _t("Base:  / ベース： "))
+        # Mode buttons
+        self.btn_mode_search.setText(_t("🔍 Search / 🔍 検索"))
+        self.btn_mode_search.setToolTip(_t("Switch to Search mode / 検索モードに切り替え"))
+        self.btn_find_dups.setText(_t("♊ Duplicates / ♊ 重複"))
+        self.btn_find_dups.setToolTip(_t("Find duplicates (Shift+click to force rescan) / 重複を検索（Shift+クリックで強制再スキャン）"))
+        self.btn_browse.setText(_t("📂 Browse / 📂 閲覧"))
+        self.btn_browse.setToolTip(_t("Browse folder contents (ls mode) / フォルダ内容を閲覧（lsモード）"))
+        self._btn_back.setText(_t("⏮ Back / ⏮ 戻る"))
+        self._btn_back.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
+        # Dup controls
+        if hasattr(self, '_btn_dup_import'):
+            self._btn_dup_import.setText(_t("Import czkawka / czkawka取込"))
+            self._btn_dup_import.setToolTip(_t("Import duplicate results from czkawka (JSON format) / czkawka の重複結果を取り込み（JSON形式）"))
+            self._btn_dup_export.setText(_t("Export czkawka / czkawka書出"))
+            self._btn_dup_export.setToolTip(_t("Export current duplicate results as czkawka-compatible JSON / 現在の重複結果をczkawka互換JSONで書き出し"))
+        self.spin_threshold.setToolTip(_t("Higher = only near-exact duplicates\nLower = similar images too / 高い＝ほぼ完全一致のみ\n低い＝類似画像も含む"))
+        self.btn_hide_confirmed.setText(
+            _t("👁 Unhide confirmed / 👁 確認済を表示") if self.btn_hide_confirmed.isChecked()
+            else _t("👁 Hide confirmed / 👁 確認済を隠す"))
+        self.btn_hide_confirmed.setToolTip(_t("Hide files already confirmed as variants/different / バリアント・異なると確認済みのファイルを隠す"))
+        # Undo
+        self.btn_undo.setToolTip(
+            self._undo_stack[-1]["desc"] if self._undo_stack else _t("Nothing to undo / 元に戻す操作なし"))
+        # Inline attrs
+        if hasattr(self, '_inline_note'):
+            self._inline_note.setPlaceholderText(_t("Note… / ノート…"))
+        if hasattr(self, '_confirmed_cb'):
+            self._confirmed_cb.setToolTip(_t("Confirmed different / 異なると確認済み"))
+        # Table headers — depend on current mode
+        header_item = self.table.horizontalHeaderItem(0)
+        cur_text = header_item.text() if header_item else ""
+        if cur_text in ("Group", _t("Group / グループ")):
+            self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"),
+                                                   _t("Name / 名前"), _t("Path / パス")])
+        elif cur_text in ("#",):
+            self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"),
+                                                   _t("Name / 名前"), _t("Path / パス"),
+                                                   _t("Date / 日付")])
+        else:
+            self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"),
+                                                   _t("Name / 名前"), _t("Path / パス"),
+                                                   _t("Date / 日付")])
+        # Drop zone default text if it still shows a mode label
+        if hasattr(self, 'drop_zone'):
+            _dtxt = self.drop_zone.text()
+            if _dtxt in ("DUPLICATES\nFINDER", _t("DUPLICATES\nFINDER / 重複\n検索")):
+                self.drop_zone.setText(_t("DUPLICATES\nFINDER / 重複\n検索"))
+            elif _dtxt in ("DROP IMAGE", _t("DROP IMAGE / 画像をドロップ")):
+                self.drop_zone.setText(_t("DROP IMAGE / 画像をドロップ"))
+            elif _dtxt in ("drop image or video", _t("drop image or video / 画像・動画をドロップ")):
+                self.drop_zone.setText(_t("drop image or video / 画像・動画をドロップ"))
+
     def reload_fonts(self):
         # Table
         fs_table = self.config.get("table_font_size", 10)
@@ -1559,6 +1621,7 @@ class AISearchApp(QMainWindow):
                     pass
 
         label = ", ".join(self.base_dirs) if self.base_dirs else ""
+        self._base_dir_label_value = label
         self.lbl_base_dir.setText(_t(f"Base: {label} / ベース： {label}") if label else _t("Base:  / ベース： "))
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)

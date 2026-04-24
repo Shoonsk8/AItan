@@ -3441,6 +3441,72 @@ class PreviewWindow(QWidget):
                 self._bake_err_label.setText("Bake failed — file type not supported or write error.")
                 QMessageBox.critical(self, _t("Bake Failed / 書込失敗"), _t("Could not embed AItan block into file. / AItanブロックをファイルに埋め込めませんでした。"))
 
+    def refresh_language(self):
+        """Re-translate all preview-window labels/buttons/tooltips after a language change."""
+        # Nav buttons + tooltips
+        if hasattr(self, '_btn_back_left'):
+            self._btn_back_left.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
+        if hasattr(self, '_btn_orient_left'):
+            self._btn_orient_left.setToolTip(_t("Toggle attr pane side or below / 属性ペインを横/下に切替"))
+        if hasattr(self, '_btn_back_top'):
+            self._btn_back_top.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
+        if hasattr(self, 'btn_orient'):
+            self.btn_orient.setToolTip(_t("Toggle attr pane side or below / 属性ペインを横/下に切替"))
+        # Inline inputs
+        if hasattr(self, '_project_edit'):
+            self._project_edit.setPlaceholderText(_t("note… / ノート…"))
+        if hasattr(self, '_person_id_combo'):
+            self._person_id_combo.setPlaceholderText(_t("select or type ID… / IDを選択または入力…"))
+        if hasattr(self, '_person_name_edit'):
+            self._person_name_edit.setPlaceholderText(_t("name… / 名前…"))
+        # Person buttons
+        if hasattr(self, '_btn_match_person'):
+            self._btn_match_person.setText(_t("Match / 照合"))
+        if hasattr(self, '_btn_detect_person'):
+            _txt = self._btn_detect_person.text()
+            # Preserve Registered / Detect state label
+            if _txt in ("Registered", _t("Registered / 登録済")):
+                self._btn_detect_person.setText(_t("Registered / 登録済"))
+            elif _txt != "…":
+                self._btn_detect_person.setText(_t("Detect & Register / 検出＆登録"))
+        # Bake row
+        if hasattr(self, '_btn_bake_meta'):
+            self._btn_bake_meta.setText(_t("Bake to File / ファイルに書込"))
+            self._btn_bake_meta.setToolTip(_t(
+                "Embed prompt/seed/model from database into the physical file / データベースのプロンプト/シード/モデルを物理ファイルに埋め込む"))
+        if hasattr(self, '_chk_auto_bake'):
+            self._chk_auto_bake.setText(_t("Auto-bake / 自動書込"))
+            self._chk_auto_bake.setToolTip(_t("Automatically bake to file when navigating to next image / 次の画像へ移動時に自動でファイルに書き込み"))
+        if hasattr(self, '_btn_gather'):
+            self._btn_gather.setText(_t("⚑ Gather / ⚑ 集約"))
+            self._btn_gather.setToolTip(_t("Move any off-screen canvas tiles back into view / 画面外のキャンバスタイルを表示内に戻す"))
+        if hasattr(self, '_btn_apply_clip'):
+            self._btn_apply_clip.setText(_t("🔄 Refresh CLIP / 🔄 CLIP再検出"))
+            self._btn_apply_clip.setToolTip(_t("Clear all CLIP fields and re-detect from scratch / 全CLIPフィールドをクリアして最初から再検出"))
+        if hasattr(self, '_chk_auto_rename'):
+            self._chk_auto_rename.setText(_t("Auto-rename / 自動改名"))
+            self._chk_auto_rename.setToolTip(_t("Rename file to match person ID when baking / 書込時に人物IDに合わせてファイル名を変更"))
+        if hasattr(self, '_protected_check'):
+            self._protected_check.setText(_t("🔓 Editable / 🔓 編集可"))
+            self._protected_check.setToolTip(_t("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename / 🔓 編集可 — 自動改名される可能性あり\n🔒 ロック — 自動改名されません"))
+        # Raw Data section + Save Layout
+        if hasattr(self, '_raw_meta_sec'):
+            _raw_lbl = getattr(self._raw_meta_sec, '_title_lbl', None) or getattr(self._raw_meta_sec, '_lbl', None)
+            if _raw_lbl and hasattr(_raw_lbl, 'setText'):
+                _raw_lbl.setText(_t("Raw Data / 生データ"))
+        if hasattr(self, '_btn_save_layout'):
+            self._btn_save_layout.setText(_t("💾 Layout / 💾 レイアウト"))
+            self._btn_save_layout.setToolTip(_t("Save current canvas tile positions / 現在のキャンバスタイル位置を保存"))
+        if hasattr(self, '_raw_meta_edit'):
+            self._raw_meta_edit.setPlaceholderText(_t("No data. / データなし。"))
+        if hasattr(self, '_clip_inspect_edit'):
+            self._clip_inspect_edit.setPlaceholderText(_t("CLIP scores will appear here. / CLIPスコアがここに表示されます。"))
+        if hasattr(self, '_face_inspect_edit'):
+            self._face_inspect_edit.setPlaceholderText(_t("Face scores will appear here. / 顔スコアがここに表示されます。"))
+        if hasattr(self, '_btn_apply_face'):
+            self._btn_apply_face.setText(_t("Apply / 適用"))
+            self._btn_apply_face.setToolTip(_t("Apply detected person ID to this file / 検出された人物IDをこのファイルに適用"))
+
     def set_mode_color(self, color: str):
         """Update the bar background color to reflect the active mode."""
         bar_ss = f"background-color: {color};"
