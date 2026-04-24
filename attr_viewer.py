@@ -18,26 +18,26 @@ _UI_LANG = {"val": "en"}   # "en" or "ja"
 
 def _lang_label(text: str) -> str:
     """'English / 日本語' → return the half for the current language.
-    Splits at the RIGHTMOST ' / ' whose right side starts with a CJK
-    character. English-only labels with embedded '/' (e.g. 'Closed / No eyes')
-    and mixed cases like 'Closed / No eyes / 閉じている／目なし' both work:
-    the left half keeps its internal slash, the right half is the Japanese."""
+    Splits at the RIGHTMOST ' / ' whose right side CONTAINS a CJK character
+    (Hiragana, Katakana, or Kanji). English-only labels with embedded '/'
+    (e.g. 'Closed / No eyes') and mixed cases like 'Closed / No eyes / 閉じている／目なし'
+    both work; an emoji-prefixed right side like '🗄 データベース' also works
+    because we scan the whole right side for a CJK char, not just the first."""
     if " / " not in text:
         return text
-    def _starts_cjk(s):
-        s = s.lstrip()
-        if not s:
-            return False
-        c = s[0]
-        return ('぀' <= c <= 'ゟ') or ('゠' <= c <= 'ヿ') or ('一' <= c <= '鿿')
-    # Find all ' / ' split positions, prefer the RIGHTMOST that yields CJK-right
+    def _has_cjk(s):
+        for c in s:
+            if ('぀' <= c <= 'ゟ') or ('゠' <= c <= 'ヿ') or ('一' <= c <= '鿿'):
+                return True
+        return False
+    # Find all ' / ' split positions, prefer the RIGHTMOST that yields CJK-containing right
     idx = len(text)
     while True:
         idx = text.rfind(" / ", 0, idx)
         if idx == -1:
             return text
         right = text[idx + 3:]
-        if _starts_cjk(right):
+        if _has_cjk(right):
             left = text[:idx].strip()
             return left if _UI_LANG["val"] == "en" else right.strip()
 

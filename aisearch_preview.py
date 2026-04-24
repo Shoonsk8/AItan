@@ -1262,7 +1262,7 @@ class PreviewWindow(QWidget):
         _clip_col = QVBoxLayout()
         _clip_col.setSpacing(2)
         _clip_hdr = QHBoxLayout()
-        _clip_hdr.addWidget(QLabel(_t("CLIP: / CLIP：")))
+        _clip_hdr.addWidget(QLabel(_t("CLIP: / CLIPスコア：")))
         _clip_hdr.addStretch()
         _clip_col.addLayout(_clip_hdr)
         self._clip_inspect_edit = QTextEdit()
