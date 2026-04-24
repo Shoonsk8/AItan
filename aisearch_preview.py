@@ -1465,10 +1465,23 @@ class PreviewWindow(QWidget):
         finally:
             self._project_edit.blockSignals(False)
             self._seed_edit.blockSignals(False)
-        # Auto-run CLIP + face inspect based on clip_inspect_mode setting
+        # Auto-run CLIP + face inspect based on clip_inspect_mode setting.
+        # If every field CLIP/face can fill is already set, skip detection and
+        # show the debug boxes blank — no point re-running when results exist.
         _mode = self.handler.app.config.get("clip_inspect_mode", "never")
         if _mode == "always":
-            self._on_inspect()
+            _entry = attrs_mod.get(self.handler.app.attrs_data, path)
+            _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
+            _all_filled = (all(_entry.get(f) for f in _clip_fields)
+                           and _entry.get("person_id"))
+            if _all_filled:
+                # Clear the debug text boxes — no stale output from previous file
+                if getattr(self, "_clip_inspect_edit", None):
+                    self._clip_inspect_edit.setPlainText("")
+                if getattr(self, "_face_inspect_edit", None):
+                    self._face_inspect_edit.setPlainText("")
+            else:
+                self._on_inspect()
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
