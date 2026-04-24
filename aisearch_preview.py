@@ -3113,13 +3113,6 @@ class PreviewWindow(QWidget):
         path = self._attr_path
         if not path:
             return
-        # Safety: refuse to save when the canvas hasn't yet loaded data for
-        # the current _attr_path. Otherwise a background timer or signal can
-        # fire between 'self._attr_path = new_path' and 'canvas.load_file(new_path)',
-        # and we'd write the OLD file's widget text into the NEW file's entry.
-        _loaded = getattr(self, "_canvas_loaded_path", None)
-        if _loaded is not None and _loaded != path:
-            return
         self._update_bake_btn("pending")
         app = self.handler.app
         tags = []
