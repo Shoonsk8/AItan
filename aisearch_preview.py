@@ -2313,36 +2313,19 @@ class PreviewWindow(QWidget):
 
     def _on_x_code_changed(self, text):
         """Update the X hint label with expression name and description.
-        EXPRESSION_TABLE stores (en, jp) tuples; EXPRESSION_CATEGORIES stores
-        'English 日本語' space-joined. Pick the half matching the current UI language."""
-        from attr_viewer import _UI_LANG
-        _is_ja = _UI_LANG.get("val") == "ja"
-
-        def _split_cat(cat):
-            # "Neutral 無表情" → "Neutral" (en) / "無表情" (ja). Split at first CJK char.
-            for i, c in enumerate(cat):
-                if ('぀' <= c <= 'ゟ') or ('゠' <= c <= 'ヿ') or ('一' <= c <= '鿿'):
-                    return (cat[:i].strip(), cat[i:].strip())
-            return (cat, cat)
-
+        Always shows English + Japanese together (Expression is intentionally bilingual)."""
         code = text.strip().lower()
         if len(code) == 2:
             en, jp = attrs_mod.expression_label(code)
             if en:
-                cat_full = attrs_mod.expression_category(code)
-                cat_en, cat_ja = _split_cat(cat_full)
-                _name = jp if _is_ja else en
-                _cat  = cat_ja if _is_ja else cat_en
-                self._x_hint.setText(f"{_name}  —  {_cat}")
+                cat = attrs_mod.expression_category(code)
+                self._x_hint.setText(f"{en} {jp}  —  {cat}")
             else:
-                cat_full = attrs_mod.expression_category(code)
-                cat_en, cat_ja = _split_cat(cat_full)
-                self._x_hint.setText(cat_ja if _is_ja else cat_en)
+                self._x_hint.setText(attrs_mod.expression_category(code))
         elif len(code) == 1:
             try:
-                cat_full = attrs_mod.EXPRESSION_CATEGORIES.get(int(code, 16), "")
-                cat_en, cat_ja = _split_cat(cat_full)
-                self._x_hint.setText(cat_ja if _is_ja else cat_en)
+                cat = attrs_mod.EXPRESSION_CATEGORIES.get(int(code, 16), "")
+                self._x_hint.setText(cat)
             except Exception:
                 self._x_hint.setText("")
         else:
