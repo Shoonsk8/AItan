@@ -3153,29 +3153,19 @@ class PreviewWindow(QWidget):
                 _combo_fid = self._person_id_combo.currentData()
                 if _combo_fid:
                     persons = [_norm_pid(_combo_fid)]
-        # Prefer canvas widget value; fall back to stored entry value when the
-        # widget is empty AND the stored value is non-empty. This prevents an
-        # un-initialized or blanked widget from wiping real text on save.
-        def _pick_text(key):
-            v = _text_vals.get(key, None)
-            if v is None:
-                return entry.get(key, "")
-            return v if v else entry.get(key, "")
-        _note_text = (self._project_edit.text() if self._note_row_widget.isVisible()
-                      else _pick_text("note"))
         attrs_mod.set_file(app.attrs_data, path,
                            tags=tags,
-                           note=_note_text,
+                           note=self._project_edit.text() if self._note_row_widget.isVisible() else _text_vals.get("note", entry.get("note", "")),
                            confirmed=entry.get("confirmed", False),
                            project=entry.get("project", ""),
                            scene=entry.get("scene", ""),
-                           prompt=_pick_text("prompt"),
-                           neg_prompt=_pick_text("neg_prompt"),
+                           prompt=_text_vals.get("prompt", entry.get("prompt", "")),
+                           neg_prompt=_text_vals.get("neg_prompt", entry.get("neg_prompt", "")),
                            seed=self._seed_edit.text() or entry.get("seed", ""),
                            meta=entry.get("meta"),
                            custom=entry.get("custom", ""),
                            person_id=persons[0] if persons else "",
-                           speech=_pick_text("speech"),
+                           speech=_text_vals.get("speech", entry.get("speech", "")),
                            audio=_text_vals.get("audio", entry.get("audio", "")),
                            editable=not self._protected_check.isChecked())
         # Write canvas coded-field values (HC, E, FA, SK, etc.) back into attrs_data.

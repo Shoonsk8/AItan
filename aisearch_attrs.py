@@ -1247,18 +1247,30 @@ _TRANSIENT_ENTRY_KEYS = frozenset({
     "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE", "_project",
 })
 
+# Guards against concurrent save() calls from multiple background threads
+# (CLIP detect, face detect, auto-scan, etc.) racing with the user's
+# _save_attrs. Two threads calling json.dump on the same file at the same
+# time can produce a truncated/corrupt file.
+_SAVE_LOCK = _threading.Lock()
+
 def save(project, data):
     # Strip transient keys per-entry so disk JSON keeps only results, not
     # CLIP/FACE diagnostic dumps or runtime markers.
-    cleaned = {}
-    for path, entry in data.items():
-        if isinstance(entry, dict):
-            cleaned[path] = {k: v for k, v in entry.items()
-                             if k not in _TRANSIENT_ENTRY_KEYS}
-        else:
-            cleaned[path] = entry
-    with open(attrs_path(project), "w", encoding="utf-8") as f:
-        json.dump(cleaned, f, indent=2, ensure_ascii=False)
+    with _SAVE_LOCK:
+        cleaned = {}
+        for path, entry in data.items():
+            if isinstance(entry, dict):
+                cleaned[path] = {k: v for k, v in entry.items()
+                                 if k not in _TRANSIENT_ENTRY_KEYS}
+            else:
+                cleaned[path] = entry
+        # Atomic write: dump to temp file, then rename, so a crash or second
+        # writer can never observe a partially-written JSON.
+        p = attrs_path(project)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cleaned, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, p)
 
 def get(attrs_data, path):
     return attrs_data.get(path, {})
