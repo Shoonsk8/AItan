@@ -1240,9 +1240,25 @@ def load(project):
             pass
     return {}
 
+# Keys that live only in memory (diagnostic/score-text caches and runtime markers);
+# stripped at disk-write so attrs_*.json stays compact.
+_TRANSIENT_ENTRY_KEYS = frozenset({
+    "CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E",
+    "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE", "_project",
+})
+
 def save(project, data):
+    # Strip transient keys per-entry so disk JSON keeps only results, not
+    # CLIP/FACE diagnostic dumps or runtime markers.
+    cleaned = {}
+    for path, entry in data.items():
+        if isinstance(entry, dict):
+            cleaned[path] = {k: v for k, v in entry.items()
+                             if k not in _TRANSIENT_ENTRY_KEYS}
+        else:
+            cleaned[path] = entry
     with open(attrs_path(project), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(cleaned, f, indent=2, ensure_ascii=False)
 
 def get(attrs_data, path):
     return attrs_data.get(path, {})
