@@ -2353,7 +2353,8 @@ CLIP_AUTO_DETECT = [
         ("5", "bird's eye view shot directly from overhead above"),
     ]},
     # ── Lighting ─────────────────────────────────────────────────────────────
-    {"field": "cs", "pos": 1, "zero_is_none": True,  "threshold": 0.20, "options": [
+    {"field": "cs", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
+        ("0", "natural ambient light no artificial setup"),
         ("1", "bright sunny daylight outdoor lighting"),
         ("2", "warm golden sunset or sunrise lighting"),
         ("3", "clean professional studio lighting white background"),

@@ -1512,8 +1512,27 @@ class PreviewWindow(QWidget):
                 if not _bg_opts_check:
                     _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
                 def _field_filled(f):
-                    if _entry.get(f):
-                        return True
+                    # Fully filled = every CLIP position for this field has a
+                    # non-zero digit (or the position allows zero). If any
+                    # position is still zero and treats zero as "unset", the
+                    # field is partially empty and should NOT be skipped —
+                    # CLIP will fill the zero positions in merge mode.
+                    val = _entry.get(f, "")
+                    if val:
+                        any_position_empty = False
+                        for spec in attrs_mod.CLIP_AUTO_DETECT:
+                            if spec["field"] != f:
+                                continue
+                            pos = spec["pos"]
+                            zero_is_none = spec.get("zero_is_none", True)
+                            if pos > len(val):
+                                any_position_empty = True; break
+                            digit = val[-pos]
+                            if digit == "0" and zero_is_none:
+                                any_position_empty = True; break
+                        if not any_position_empty:
+                            return True
+                        return False
                     if f == "x" and (_tags_set_check & _x_opts_check):
                         return True
                     if f == "bg" and (_tags_set_check & _bg_opts_check):
@@ -1536,19 +1555,13 @@ class PreviewWindow(QWidget):
                             del _entry[_k]
                         self._update_canvas_text_widget(_k, "")
                 else:
-                    # Detect only empty fields; show "ignored" for filled ones.
-                    _skip = {f for f in _clip_fields if _entry.get(f)}
+                    # Skip only fields that are FULLY detected (every position
+                    # non-zero for zero_is_none specs). Partial fills like
+                    # HC="500" (color set, style+length empty) still get CLIP
+                    # to fill in the missing digits.
+                    _skip = {f for f in _clip_fields if _field_filled(f)}
                     if _entry.get("person_id"):
                         _skip.add("person_id")
-                    # Matrix fields (X, Background) store their selected code in
-                    # entry.tags. Reuse the opts sets computed above (from the
-                    # project's tags file, not the shared TAG_GROUPS default).
-                    _tags_set = set(_entry.get("tags", []))
-                    if _tags_set:
-                        if _tags_set & _x_opts_check:
-                            _skip.add("x")
-                        if _tags_set & _bg_opts_check:
-                            _skip.add("bg")
                     self._on_inspect(skip_fields=_skip)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
