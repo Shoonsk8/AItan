@@ -1319,6 +1319,7 @@ class PreviewWindow(QWidget):
         self._protected_check.setVisible(_show_dev)
 
         self._attr_path = None
+        self._canvas_loaded_path = None
         return panel
 
     def _attr_arrow(self, open_state):
@@ -1832,6 +1833,9 @@ class PreviewWindow(QWidget):
                 pass
             entry["_project"] = getattr(app, "current_project", None)
             _sc.load_file(path, entry, raw_meta=_raw_meta)
+            # Mark that the canvas now reflects THIS path. _save_attrs uses this
+            # to refuse writes when the widgets haven't been reloaded yet.
+            self._canvas_loaded_path = path
 
             # If key CLIP fields are absent, run detection in background and refresh canvas
             _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
@@ -2308,19 +2312,37 @@ class PreviewWindow(QWidget):
             cb.blockSignals(False)
 
     def _on_x_code_changed(self, text):
-        """Update the X hint label with expression name and description."""
+        """Update the X hint label with expression name and description.
+        EXPRESSION_TABLE stores (en, jp) tuples; EXPRESSION_CATEGORIES stores
+        'English 日本語' space-joined. Pick the half matching the current UI language."""
+        from attr_viewer import _UI_LANG
+        _is_ja = _UI_LANG.get("val") == "ja"
+
+        def _split_cat(cat):
+            # "Neutral 無表情" → "Neutral" (en) / "無表情" (ja). Split at first CJK char.
+            for i, c in enumerate(cat):
+                if ('぀' <= c <= 'ゟ') or ('゠' <= c <= 'ヿ') or ('一' <= c <= '鿿'):
+                    return (cat[:i].strip(), cat[i:].strip())
+            return (cat, cat)
+
         code = text.strip().lower()
         if len(code) == 2:
             en, jp = attrs_mod.expression_label(code)
             if en:
-                cat = attrs_mod.expression_category(code)
-                self._x_hint.setText(f"{en} {jp}  —  {cat}")
+                cat_full = attrs_mod.expression_category(code)
+                cat_en, cat_ja = _split_cat(cat_full)
+                _name = jp if _is_ja else en
+                _cat  = cat_ja if _is_ja else cat_en
+                self._x_hint.setText(f"{_name}  —  {_cat}")
             else:
-                self._x_hint.setText(attrs_mod.expression_category(code))
+                cat_full = attrs_mod.expression_category(code)
+                cat_en, cat_ja = _split_cat(cat_full)
+                self._x_hint.setText(cat_ja if _is_ja else cat_en)
         elif len(code) == 1:
             try:
-                cat = attrs_mod.EXPRESSION_CATEGORIES.get(int(code, 16), "")
-                self._x_hint.setText(cat)
+                cat_full = attrs_mod.EXPRESSION_CATEGORIES.get(int(code, 16), "")
+                cat_en, cat_ja = _split_cat(cat_full)
+                self._x_hint.setText(cat_ja if _is_ja else cat_en)
             except Exception:
                 self._x_hint.setText("")
         else:
@@ -2911,6 +2933,7 @@ class PreviewWindow(QWidget):
             app.table.item(row, 2).setText(os.path.basename(new_path))
             app.table.set_row_path(row, new_path)
         self._attr_path = new_path
+        if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_path
         self.handler.current_path = new_path
         self.handler.window._update_title_with_info(new_path)
 
@@ -2970,6 +2993,7 @@ class PreviewWindow(QWidget):
             app.table.item(row, 2).setText(os.path.basename(new_path))
             app.table.set_row_path(row, new_path)
         self._attr_path = new_path
+        if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_path
         self.handler.current_path = new_path
         self.handler.window._update_title_with_info(new_path)
         self._name_edit.setText(new_base)
@@ -3015,6 +3039,7 @@ class PreviewWindow(QWidget):
             app.table.set_row_path(row, new_path)
         # Update handler state
         self._attr_path = new_path
+        if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_path
         self.handler.current_path = new_path
         self.handler.window._update_title_with_info(new_path)
 
@@ -3045,6 +3070,7 @@ class PreviewWindow(QWidget):
                 app.table.set_row_path(row, new_path)
             # Update handler state
             self._attr_path = new_path
+            if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_path
             self.handler.current_path = new_path
             self.handler.window._update_title_with_info(new_path)
         self._save_attrs()
@@ -3086,6 +3112,13 @@ class PreviewWindow(QWidget):
     def _save_attrs(self):
         path = self._attr_path
         if not path:
+            return
+        # Safety: refuse to save when the canvas hasn't yet loaded data for
+        # the current _attr_path. Otherwise a background timer or signal can
+        # fire between 'self._attr_path = new_path' and 'canvas.load_file(new_path)',
+        # and we'd write the OLD file's widget text into the NEW file's entry.
+        _loaded = getattr(self, "_canvas_loaded_path", None)
+        if _loaded is not None and _loaded != path:
             return
         self._update_bake_btn("pending")
         app = self.handler.app
@@ -3204,6 +3237,7 @@ class PreviewWindow(QWidget):
                 if app.data and "paths" in app.data and path in app.data["paths"]:
                     app.data["paths"][app.data["paths"].index(path)] = new_path
                 self._attr_path = new_path
+                if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_path
                 self.handler.current_path = new_path
                 row = app._current_row()
                 if row >= 0:
@@ -3277,6 +3311,7 @@ class PreviewWindow(QWidget):
                                 name_item.setText(os.path.basename(new_p))
                             break
                     self._attr_path = new_p
+                    if self._canvas_loaded_path is not None: self._canvas_loaded_path = new_p
                     self.handler.current_path = new_p
 
                 # Coded combo values (O/R/K) — apply to filename on bake
