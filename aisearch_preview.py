@@ -1489,10 +1489,28 @@ class PreviewWindow(QWidget):
             _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
-                # (for matrix fields like X, Background).
+                # (for matrix fields like X, Background). Read X_Table /
+                # Background_Table from the project's tags file directly,
+                # because attrs_mod.TAG_GROUPS can still be the default config
+                # for this process (not project-specific).
                 _tags_set_check = set(_entry.get("tags", []))
-                _x_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
-                _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
+                _proj_cfg = {}
+                try:
+                    import json as _json
+                    _tf = attrs_mod.tags_file_for_project(
+                        getattr(self.handler.app, "current_project", None))
+                    with open(_tf, encoding="utf-8") as _fh:
+                        _proj_cfg = _json.load(_fh)
+                except Exception:
+                    pass
+                _x_opts_check = {r[0] for r in _proj_cfg.get("X_Table", [])
+                                 if isinstance(r, (list, tuple)) and r}
+                _bg_opts_check = {r[0] for r in _proj_cfg.get("Background_Table", [])
+                                  if isinstance(r, (list, tuple)) and r}
+                if not _x_opts_check:
+                    _x_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
+                if not _bg_opts_check:
+                    _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
                 def _field_filled(f):
                     if _entry.get(f):
                         return True
@@ -1523,14 +1541,13 @@ class PreviewWindow(QWidget):
                     if _entry.get("person_id"):
                         _skip.add("person_id")
                     # Matrix fields (X, Background) store their selected code in
-                    # entry.tags, not entry.x / entry.bg. Detect those too.
+                    # entry.tags. Reuse the opts sets computed above (from the
+                    # project's tags file, not the shared TAG_GROUPS default).
                     _tags_set = set(_entry.get("tags", []))
                     if _tags_set:
-                        _x_opts = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
-                        if _tags_set & _x_opts:
+                        if _tags_set & _x_opts_check:
                             _skip.add("x")
-                        _bg_opts = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
-                        if _tags_set & _bg_opts:
+                        if _tags_set & _bg_opts_check:
                             _skip.add("bg")
                     self._on_inspect(skip_fields=_skip)
             else:  # _mode == "always"
