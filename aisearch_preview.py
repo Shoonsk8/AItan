@@ -1489,7 +1489,11 @@ class PreviewWindow(QWidget):
                         del _entry[_k]
                     self._update_canvas_text_widget(_k, "")
             else:
-                self._on_inspect()
+                # Pass the set of already-filled fields so _on_inspect marks
+                # their CLIP_* tiles as "(ignored — already set)" instead of
+                # dumping scores. Only empty fields get real detection output.
+                _skip = {f for f in _clip_fields if _entry.get(f)}
+                self._on_inspect(skip_fields=_skip)
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
@@ -2398,10 +2402,15 @@ class PreviewWindow(QWidget):
         name_label = attrs_mod.get_person_id_label(app.current_project, new_pid)
         self._person_name_edit.setText(name_label if name_label != new_pid else "")
 
-    def _on_inspect(self, overwrite=False):
+    def _on_inspect(self, overwrite=False, skip_fields=None):
         """Run CLIP + face detection and write raw scores into the inspect text box.
         overwrite=True: clear all CLIP fields and re-detect from scratch (Refresh mode).
-        overwrite=False: only fill empty fields, never touch manual input."""
+        overwrite=False: only fill empty fields, never touch manual input.
+        skip_fields: set of lowercase field names (e.g. {'hc','fa'}) whose
+                      result is already set in the entry. Those fields get
+                      '(ignored — already set)' in their canvas debug tile
+                      instead of full score dumps, and are not re-computed
+                      into the entry."""
         # Guard: skip if a previous inspect is still running (rapid navigation)
         if getattr(self, '_inspect_running', False):
             return
@@ -2447,16 +2456,24 @@ class PreviewWindow(QWidget):
                             mark = "*" if code == winner else " "
                             clip_txt.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
                         clip_txt.append("")
-                        # Per-field accumulation
+                        # Per-field accumulation — mark as "ignored" if result
+                        # field is already set, so we don't show verbose scores
+                        # that the user will override anyway.
                         _fk = sp["field"].upper()
+                        _f_lc = sp["field"].lower()
                         if _fk in _CLIP_CANVAS_FIELDS:
-                            _flines = clip_field_txt.setdefault(_fk, [])
-                            _flines.append(f"pos={sp['pos']}  thr={sp['threshold']:.2f}")
-                            _flines.append(f"  -> {winner or '—'}  {win_label}")
-                            for code, lbl, score in sp["options"][:6]:
-                                mark = "*" if code == winner else " "
-                                _flines.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
-                            _flines.append("")
+                            if skip_fields and _f_lc in skip_fields:
+                                # Only set the ignored message once per field
+                                if _fk not in clip_field_txt:
+                                    clip_field_txt[_fk] = ["(ignored — already set)"]
+                            else:
+                                _flines = clip_field_txt.setdefault(_fk, [])
+                                _flines.append(f"pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                                _flines.append(f"  -> {winner or '—'}  {win_label}")
+                                for code, lbl, score in sp["options"][:6]:
+                                    mark = "*" if code == winner else " "
+                                    _flines.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
+                                _flines.append("")
                 else:
                     clip_txt.append("(could not extract embedding)")
             except Exception as e:
