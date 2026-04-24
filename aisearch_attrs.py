@@ -368,16 +368,17 @@ _DEFAULT_TAG_GROUPS = {
     ],
 
     # ── Posture+Motion  PM[posture][motion]  ─────────────────────────────────
-    # 2nd digit = posture
+    # 2nd digit = posture. Code 0 is the "Standing" default (default_is_zero).
     "PM_Posture": [
-        ["0", "(none)"],      ["1", "Standing"],    ["2", "Sitting"],
-        ["3", "Kneeling"],    ["4", "Lying"],       ["5", "Leaning"],
-        ["6", "Crouching"],   ["7", "Handstand"],
+        ["0", "Standing"],                ["1", "Standing in style"],
+        ["2", "Sitting"],                 ["3", "Kneeling"],
+        ["4", "Lying"],                   ["5", "Leaning"],
+        ["6", "Crouching"],               ["7", "Handstand"],
     ],
-    # 1st digit = motion
+    # 1st digit = motion. Code 0 is the "Still" default (default_is_zero).
     "PM_Motion": [
-        ["0", "Basic"],       ["1", "Still"],       ["2", "Walking"],
-        ["3", "Running"],     ["4", "Dancing"],     ["5", "Looking at Camera"],
+        ["0", "Still"],       ["2", "Walking"],     ["3", "Running"],
+        ["4", "Dancing"],     ["5", "Looking at Camera"],
         ["6", "Talking"],     ["7", "Gesturing"],   ["8", "Fighting"],
     ],
 
@@ -394,9 +395,9 @@ _DEFAULT_TAG_GROUPS = {
         ["0", "Eye Level"],    ["1", "Low Angle"],     ["2", "High Angle"],
         ["3", "Over-Shoulder"],["4", "Dutch Angle"],   ["5", "Bird's Eye"],
     ],
-    # 1st digit = lighting
+    # 1st digit = lighting. Code 0 is the "Natural" default (default_is_zero).
     "CS_Light": [
-        ["0", "(none)"],       ["1", "Sunshine"],      ["2", "Sunset"],
+        ["0", "Natural"],      ["1", "Sunshine"],      ["2", "Sunset"],
         ["3", "Studio"],       ["4", "Cinematic"],     ["5", "Anime"],
         ["6", "Night"],
     ],
