@@ -1867,9 +1867,11 @@ class PreviewWindow(QWidget):
             # to refuse writes when the widgets haven't been reloaded yet.
             self._canvas_loaded_path = path
 
-            # If key CLIP fields are absent, run detection in background and refresh canvas
+            # If key CLIP fields are absent, run detection in background and refresh canvas.
+            # Skip entirely in "No inspection" mode — the user chose never to run AI.
             _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
-            if not any(entry.get(f) for f in _clip_fields):
+            _inspect_mode = self.handler.app.config.get("clip_inspect_mode", "never")
+            if _inspect_mode != "never" and not any(entry.get(f) for f in _clip_fields):
                 import threading as _thr
                 QMetaObject.invokeMethod(
                     self, "_set_detect_status",
@@ -3259,23 +3261,23 @@ class PreviewWindow(QWidget):
         attrs_mod.save(app.current_project, app.attrs_data)
 
         # Teach the AI from user edits — record (embedding, saved-entry) as
-        # a correction example whenever the user changed a coded field. The
-        # embedding is looked up in the feature DB (no fresh encoding, so this
-        # is cheap). add_correction dedups by path so re-edits replace.
+        # a correction example whenever the user changed a coded field.
+        # Skipped in "No inspection" mode (user chose: no AI activity at all).
         try:
-            _saved = attrs_mod.get(app.attrs_data, path)
-            _has_coded = any(_saved.get(f) for f in
-                             ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x"))
-            if _has_coded:
-                _data = getattr(app, "data", None)
-                _emb = None
-                if _data and "paths" in _data and path in _data["paths"]:
-                    _idx = _data["paths"].index(path)
-                    _emb = _data["embeddings"][_idx]
-                if _emb is not None:
-                    attrs_mod.add_correction(
-                        getattr(app, "current_project", None),
-                        path, _emb, _saved)
+            if app.config.get("clip_inspect_mode", "never") != "never":
+                _saved = attrs_mod.get(app.attrs_data, path)
+                _has_coded = any(_saved.get(f) for f in
+                                 ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x"))
+                if _has_coded:
+                    _data = getattr(app, "data", None)
+                    _emb = None
+                    if _data and "paths" in _data and path in _data["paths"]:
+                        _idx = _data["paths"].index(path)
+                        _emb = _data["embeddings"][_idx]
+                    if _emb is not None:
+                        attrs_mod.add_correction(
+                            getattr(app, "current_project", None),
+                            path, _emb, _saved)
         except Exception:
             pass
         # One-way filename tag_group rules: apply detect rules to existing files
