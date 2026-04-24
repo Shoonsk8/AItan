@@ -1475,11 +1475,19 @@ class PreviewWindow(QWidget):
             _all_filled = (all(_entry.get(f) for f in _clip_fields)
                            and _entry.get("person_id"))
             if _all_filled:
-                # Clear the debug text boxes — no stale output from previous file
+                # Clear the two inspect debug text boxes
                 if getattr(self, "_clip_inspect_edit", None):
                     self._clip_inspect_edit.setPlainText("")
                 if getattr(self, "_face_inspect_edit", None):
                     self._face_inspect_edit.setPlainText("")
+                # Also clear the canvas debug tiles so stale score text from an
+                # earlier detection on this (or another) file doesn't linger.
+                _CF_KEYS = ("CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
+                            "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE")
+                for _k in _CF_KEYS:
+                    if _k in _entry:
+                        del _entry[_k]
+                    self._update_canvas_text_widget(_k, "")
             else:
                 self._on_inspect()
 
