@@ -3407,7 +3407,7 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
     return attrs_data, changed
 
 
-def auto_set_all(attrs_data, path, project):
+def auto_set_all(attrs_data, path, project, skip_heavy=False):
     """Auto-detect and save: resolution, audio tag, AI source, prompt, seed, metadata."""
     entry        = get(attrs_data, path)
     was_editable = entry.get("editable", False)   # only rename files the app has previously touched
@@ -3479,20 +3479,24 @@ def auto_set_all(attrs_data, path, project):
         "SAws":   "a",   # Wide Shot
         "SAews":  "b",   # Extreme Wide Shot
     }
-    _needs_fa = not get_coded_field(entry, "fa")
-    _needs_cs = not get_coded_field(entry, "cs")
-    if _needs_fa or _needs_cs:
-        shot_tag, pose_tag = detect_shot_and_pose(path)
-        if _needs_fa and pose_tag:
-            fa_dir = _POSE_TO_FA_DIR.get(pose_tag)
-            if fa_dir:
-                entry["fa"] = fa_dir   # single digit: Dir set, Vert defaults to none
-                changed = True
-        if _needs_cs and shot_tag:
-            cs_shot = _SHOT_TO_CS_SHOT.get(shot_tag)
-            if cs_shot:
-                entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
-                changed = True
+    # MediaPipe pose/shot detection — slow; skipped when called from watch
+    # scan (skip_heavy=True) so the preview pops up fast and the user sees
+    # the detection happen live via _on_inspect.
+    if not skip_heavy:
+        _needs_fa = not get_coded_field(entry, "fa")
+        _needs_cs = not get_coded_field(entry, "cs")
+        if _needs_fa or _needs_cs:
+            shot_tag, pose_tag = detect_shot_and_pose(path)
+            if _needs_fa and pose_tag:
+                fa_dir = _POSE_TO_FA_DIR.get(pose_tag)
+                if fa_dir:
+                    entry["fa"] = fa_dir   # single digit: Dir set, Vert defaults to none
+                    changed = True
+            if _needs_cs and shot_tag:
+                cs_shot = _SHOT_TO_CS_SHOT.get(shot_tag)
+                if cs_shot:
+                    entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
+                    changed = True
 
     # Audio detection — always-on; stores codec in entry["audio"] field
     if not entry.get("audio"):

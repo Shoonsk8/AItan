@@ -1816,8 +1816,11 @@ class AISearchApp(QMainWindow):
                 [self.data["embeddings"], emb.unsqueeze(0)])
             added += 1
             try:
+                # skip_heavy=True → no MediaPipe pose/shot detection on watch.
+                # Those fire inside the preview via _on_inspect so the user sees
+                # the detection happen instead of finding pre-filled fields.
                 self.attrs_data = attrs_mod.auto_set_all(
-                    self.attrs_data, path, self.current_project)
+                    self.attrs_data, path, self.current_project, skip_heavy=True)
             except Exception:
                 pass
             # CLIP auto-detect and face detection are deliberately NOT run here.
