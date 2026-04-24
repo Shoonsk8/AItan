@@ -2800,16 +2800,16 @@ def flush_path_renames_to_stores(renames, project, update_clip_pt=True):
 
 
 def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None,
-                          skip_uncoded=True):
+                          skip_uncoded=False):
     """Update the person ID in the file's coded filename stem and rename it on disk.
     Preserves all other coded fields (O, R, J, etc.).
     flush_stores=True (default): immediately update faces/dups stores (single rename).
     flush_stores=False: skip store flush — caller must call flush_path_renames_to_stores
                         with the collected renames dict after the batch is done.
-    skip_uncoded=True (default): do NOT rename files that are not already in coded
-                        filename format — protects regular photos/videos from being
-                        silently renamed when auto_rename is off.
-                        Pass skip_uncoded=False only when auto_rename is explicitly on.
+    skip_uncoded=False (default): rename even files whose current name isn't in
+                        coded format — they'll be given a minimal coded stem like
+                        'P{pid}J{julian}'. Pass True only if a specific caller
+                        wants to leave uncoded files untouched.
     Returns the new path (same as path if no rename was needed or rename failed)."""
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
