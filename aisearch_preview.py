@@ -2455,16 +2455,26 @@ class PreviewWindow(QWidget):
                     emb = _lg.extract_feature(path)
                 if emb is not None:
                     _clip_specs = attrs_mod.inspect_clip_scores(emb)
+                    _shown_skip_label = set()   # don't repeat "ignored" per spec position
                     for sp in _clip_specs:
-                        winner = sp["winner"]
-                        label_map = {code: lbl for code, lbl, _ in sp["options"]}
-                        win_label = label_map.get(winner, "—") if winner else "below threshold"
-                        clip_txt.append(f"{sp['field']} pos={sp['pos']}  thr={sp['threshold']:.2f}")
-                        clip_txt.append(f"  -> {winner or '—'}  {win_label}")
-                        for code, lbl, score in sp["options"][:6]:
-                            mark = "*" if code == winner else " "
-                            clip_txt.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
-                        clip_txt.append("")
+                        _f_lc_top = sp["field"].lower()
+                        # Summary debug box: collapse skipped fields into a one-line
+                        # "(ignored — already set)" instead of dumping full scores.
+                        if skip_fields and _f_lc_top in skip_fields:
+                            if _f_lc_top not in _shown_skip_label:
+                                clip_txt.append(f"{sp['field'].upper()}  (ignored — already set)")
+                                clip_txt.append("")
+                                _shown_skip_label.add(_f_lc_top)
+                        else:
+                            winner = sp["winner"]
+                            label_map = {code: lbl for code, lbl, _ in sp["options"]}
+                            win_label = label_map.get(winner, "—") if winner else "below threshold"
+                            clip_txt.append(f"{sp['field']} pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                            clip_txt.append(f"  -> {winner or '—'}  {win_label}")
+                            for code, lbl, score in sp["options"][:6]:
+                                mark = "*" if code == winner else " "
+                                clip_txt.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
+                            clip_txt.append("")
                         # Per-field accumulation — mark as "ignored" if result
                         # field is already set, so we don't show verbose scores
                         # that the user will override anyway.
