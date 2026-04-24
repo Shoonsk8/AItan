@@ -5,6 +5,7 @@ from PyQt6.QtGui import QPixmap
 from PIL import Image
 from aisearch_config import FolderPickerDialog
 import aisearch_attrs as _attrs_mod
+from attr_viewer import _lang_label as _t
 
 # Ver 1.65 - Enhanced Rename/Delete sync and UI masking
 VERSION = "1.961"
@@ -58,13 +59,13 @@ def open_external_viewer(path, keep_open=True):
 
 def create_context_menu(parent_widget, app_instance):
     menu = QMenu(parent_widget)
-    menu.addAction("📂 Open Folder", app_instance.open_folder)
-    menu.addAction("📝 Rename (F2)",        lambda: app_instance.rename_file(from_menu=True))
-    menu.addAction("📦 Move to... (M)",     app_instance.move_to_folder_manually)
+    menu.addAction(_t("📂 Open Folder / 📂 フォルダを開く"), app_instance.open_folder)
+    menu.addAction(_t("📝 Rename (F2) / 📝 改名 (F2)"),        lambda: app_instance.rename_file(from_menu=True))
+    menu.addAction(_t("📦 Move to... (M) / 📦 移動... (M)"),     app_instance.move_to_folder_manually)
     menu.addSeparator()
-    menu.addAction("🏷 Attributes...",      app_instance.edit_attrs)
+    menu.addAction(_t("🏷 Attributes... / 🏷 属性..."),      app_instance.edit_attrs)
     menu.addSeparator()
-    menu.addAction("🗑️ Delete",             app_instance.delete_file)
+    menu.addAction(_t("🗑️ Delete / 🗑️ 削除"),             app_instance.delete_file)
     return menu
 
 
@@ -102,13 +103,13 @@ def resolve_conflict(dest_path, mode, parent_win=None):
 def _ask_conflict_dialog(dest_path, parent_win=None, suggest_overwrite=False):
     result = ["cancel"]
     dlg = QDialog(parent_win)
-    dlg.setWindowTitle("File Conflict")
+    dlg.setWindowTitle(_t("File Conflict / ファイル競合"))
     dlg.setFixedSize(340, 160)
     layout = QVBoxLayout(dlg)
     name = os.path.basename(dest_path)
-    hint = " (same size)" if suggest_overwrite else " (different size)"
-    layout.addWidget(QLabel(f'"{name}" already exists{hint}.\nWhat do you want to do?'))
-    dont_ask = QCheckBox("Do not show again")
+    hint = _t(" (same size) / （同じサイズ）") if suggest_overwrite else _t(" (different size) / （サイズ違い）")
+    layout.addWidget(QLabel(_t(f'"{name}" already exists{hint}.\nWhat do you want to do? / "{name}" は既に存在します{hint}。\nどうしますか？')))
+    dont_ask = QCheckBox(_t("Do not show again / 次回から表示しない"))
     layout.addWidget(dont_ask)
     bf = QHBoxLayout()
 
@@ -122,11 +123,11 @@ def _ask_conflict_dialog(dest_path, parent_win=None, suggest_overwrite=False):
             _cfg.save_config(cfg)
         dlg.accept()
 
-    ow = QPushButton("Overwrite"); ow.clicked.connect(lambda: _set("overwrite"))
+    ow = QPushButton(_t("Overwrite / 上書き")); ow.clicked.connect(lambda: _set("overwrite"))
     import aisearch_config as cfg
     ow.setStyleSheet(cfg.btn_ss("btn_write", None))
-    rn = QPushButton("Rename");    rn.clicked.connect(lambda: _set("rename"))
-    ca = QPushButton("Cancel");    ca.clicked.connect(lambda: _set("cancel"))
+    rn = QPushButton(_t("Rename / 改名"));    rn.clicked.connect(lambda: _set("rename"))
+    ca = QPushButton(_t("Cancel / キャンセル"));    ca.clicked.connect(lambda: _set("cancel"))
     if suggest_overwrite:
         ow.setDefault(True)
     else:

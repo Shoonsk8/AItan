@@ -12,6 +12,7 @@ from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor,
 
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
+from attr_viewer import _lang_label as _t
 
 VERSION = "1.961"
 
@@ -453,7 +454,7 @@ class PreviewWindow(QWidget):
         _lbar_layout.addStretch()
         self._btn_back_left = QPushButton("⏮")
         self._btn_back_left.setFlat(True)
-        self._btn_back_left.setToolTip("Go back to previously viewed file")
+        self._btn_back_left.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
         self._btn_back_left.setStyleSheet(
             "color: #aaa; background-color: #1a1a1a; border: none; padding: 4px;")
         self._btn_back_left.setFixedSize(26, 26)
@@ -461,7 +462,7 @@ class PreviewWindow(QWidget):
         _lbar_layout.addWidget(self._btn_back_left)
         self._btn_orient_left = QPushButton("⇕")
         self._btn_orient_left.setFlat(True)
-        self._btn_orient_left.setToolTip("Toggle attr pane side / below")
+        self._btn_orient_left.setToolTip(_t("Toggle attr pane side or below / 属性ペインを横/下に切替"))
         self._btn_orient_left.setStyleSheet(
             "color: #888; background-color: #1a1a1a; border: none; padding: 4px;")
         self._btn_orient_left.setFixedSize(26, 26)
@@ -494,7 +495,7 @@ class PreviewWindow(QWidget):
         _tbar_layout.addWidget(self._btn_toggle_top)
         self._btn_back_top = QPushButton("⏮")
         self._btn_back_top.setFlat(True)
-        self._btn_back_top.setToolTip("Go back to previously viewed file")
+        self._btn_back_top.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
         self._btn_back_top.setStyleSheet(
             "color: #aaa; background-color: #1a1a1a; border: none; padding: 4px;")
         self._btn_back_top.setFixedSize(26, 26)
@@ -502,7 +503,7 @@ class PreviewWindow(QWidget):
         _tbar_layout.addWidget(self._btn_back_top)
         self.btn_orient = QPushButton("⇔")
         self.btn_orient.setFlat(True)
-        self.btn_orient.setToolTip("Toggle attr pane side / below")
+        self.btn_orient.setToolTip(_t("Toggle attr pane side or below / 属性ペインを横/下に切替"))
         self.btn_orient.setStyleSheet(
             "color: #888; background-color: #1a1a1a; border: none; padding: 4px;")
         self.btn_orient.setFixedSize(26, 26)
@@ -696,11 +697,11 @@ class PreviewWindow(QWidget):
         self._note_row_widget = QWidget()
         r_title = QHBoxLayout(self._note_row_widget)
         r_title.setContentsMargins(0, 0, 0, 0)
-        lp = QLabel("Note:")
+        lp = QLabel(_t("Note: / ノート："))
         lp.setStyleSheet("color: #aaa;")
         r_title.addWidget(lp)
         self._project_edit = QLineEdit()
-        self._project_edit.setPlaceholderText("note…")
+        self._project_edit.setPlaceholderText(_t("note… / ノート…"))
         self._project_edit.setStyleSheet(
             "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
         self._project_edit.editingFinished.connect(self._save_attrs)
@@ -718,7 +719,7 @@ class PreviewWindow(QWidget):
         self._id_edits   = {}   # section_key → QLineEdit for id-style fields
         rA = QHBoxLayout(); rA.setSpacing(4)
 
-        lp_id = QLabel("Person:"); lp_id.setStyleSheet("color:#aaa;")
+        lp_id = QLabel(_t("Person: / 人物：")); lp_id.setStyleSheet("color:#aaa;")
         rA.addWidget(lp_id)
 
         # Editable combo — shows registered IDs, user can type a new one
@@ -727,7 +728,7 @@ class PreviewWindow(QWidget):
         self._person_id_combo.setEditable(True)
         self._person_id_combo.setMinimumWidth(140)
         self._person_id_combo.setStyleSheet(_field_ss)
-        self._person_id_combo.setPlaceholderText("select or type ID…")
+        self._person_id_combo.setPlaceholderText(_t("select or type ID… / IDを選択または入力…"))
         self._person_id_combo.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._person_id_combo.setMaxVisibleItems(20)
         self._person_id_combo.currentIndexChanged.connect(self._on_person_combo_changed)
@@ -735,16 +736,16 @@ class PreviewWindow(QWidget):
         self._person_id_label = self._person_id_combo   # backward-compat alias
 
         self._person_name_edit = QLineEdit()
-        self._person_name_edit.setPlaceholderText("name…")
+        self._person_name_edit.setPlaceholderText(_t("name… / 名前…"))
         self._person_name_edit.setStyleSheet(_field_ss)
         self._person_name_edit.editingFinished.connect(self._on_person_name_changed)
         rA.addWidget(self._person_name_edit, stretch=1)
 
-        self._btn_match_person = QPushButton("Match")
+        self._btn_match_person = QPushButton(_t("Match / 照合"))
         self._btn_match_person.setVisible(False)  # disabled — not working
         self._btn_match_person.clicked.connect(self._on_match_person)
 
-        self._btn_detect_person = QPushButton("Register")
+        self._btn_detect_person = QPushButton(_t("Register / 登録"))
         self._btn_detect_person.setVisible(False)  # disabled — not working
         self._btn_detect_person.clicked.connect(self._on_detect_person)
 
@@ -886,8 +887,8 @@ class PreviewWindow(QWidget):
                 fe2.setStyleSheet(
                     "background:#1a1a1a; color:#888888; border:1px solid #333;"
                     " font-family:monospace; padding:1px 3px;")
-                fe2.setPlaceholderText("auto")
-                fe2.setToolTip("Julian date — set automatically, not editable")
+                fe2.setPlaceholderText(_t("auto / 自動"))
+                fe2.setToolTip(_t("Julian date — set automatically, not editable / ユリウス日 — 自動設定（編集不可）"))
                 self._code_edits[letter.lower()] = fe2
                 vb.addWidget(fe2)
                 sec_layout.addWidget(box)
@@ -938,8 +939,8 @@ class PreviewWindow(QWidget):
                 fe.setStyleSheet(
                     "background:#1a1a1a; color:#888888; border:1px solid #333;"
                     " font-family:monospace; padding:1px 3px;")
-                fe.setPlaceholderText("auto")
-                fe.setToolTip("Julian date — set automatically")
+                fe.setPlaceholderText(_t("auto / 自動"))
+                fe.setToolTip(_t("Julian date — set automatically / ユリウス日 — 自動設定"))
                 self._code_edits["j"] = fe
                 vb.addWidget(fe)
                 sec_layout.addWidget(box)
@@ -1155,17 +1156,17 @@ class PreviewWindow(QWidget):
 
         # Bake row: always visible
         r_bake = QHBoxLayout()
-        self._btn_bake_meta = QPushButton("Bake to File")
-        self._btn_bake_meta.setToolTip(
-            "Embed prompt/seed/model from database into the physical file")
+        self._btn_bake_meta = QPushButton(_t("Bake to File / ファイルに書込"))
+        self._btn_bake_meta.setToolTip(_t(
+            "Embed prompt/seed/model from database into the physical file / データベースのプロンプト/シード/モデルを物理ファイルに埋め込む"))
         self._btn_bake_meta.setStyleSheet(
             "background:#3a3a4a; color:#e0e0e0; border:1px solid #556655; padding:2px 6px;")
         self._btn_bake_meta.clicked.connect(self._bake_to_file)
         r_bake.addWidget(self._btn_bake_meta)
         self._bake_btn_state = "idle"   # idle | pending | ok | error
         from PyQt6.QtWidgets import QCheckBox as _QCB2
-        self._chk_auto_bake = _QCB2("Auto-bake")
-        self._chk_auto_bake.setToolTip("Automatically bake to file when navigating to next image")
+        self._chk_auto_bake = _QCB2(_t("Auto-bake / 自動書込"))
+        self._chk_auto_bake.setToolTip(_t("Automatically bake to file when navigating to next image / 次の画像へ移動時に自動でファイルに書き込み"))
         self._chk_auto_bake.setChecked(self.handler.app.config.get("auto_bake", False))
         def _on_ab_toggle(v):
             self.handler.app.config["auto_bake"] = v
@@ -1174,24 +1175,24 @@ class PreviewWindow(QWidget):
                              getattr(self.handler.app, "current_project", None))
         self._chk_auto_bake.toggled.connect(_on_ab_toggle)
         r_bake.addWidget(self._chk_auto_bake)
-        self._btn_gather = QPushButton("⚑ Gather")
-        self._btn_gather.setToolTip("Move any off-screen canvas tiles back into view")
+        self._btn_gather = QPushButton(_t("⚑ Gather / ⚑ 集約"))
+        self._btn_gather.setToolTip(_t("Move any off-screen canvas tiles back into view / 画面外のキャンバスタイルを表示内に戻す"))
         self._btn_gather.setStyleSheet(
             "QPushButton { background:#2a2a2a; color:#ccaa66; border:1px solid #554433; padding:2px 6px; }"
             "QPushButton:hover { background:#3a3a2a; color:#eedd88; }")
         self._btn_gather.clicked.connect(
             lambda: getattr(self._soft_canvas, "_gather_lost", lambda: None)())
         r_bake.addWidget(self._btn_gather)
-        self._btn_apply_clip = QPushButton("🔄 Refresh CLIP")
-        self._btn_apply_clip.setToolTip("Clear all CLIP fields and re-detect from scratch")
+        self._btn_apply_clip = QPushButton(_t("🔄 Refresh CLIP / 🔄 CLIP再検出"))
+        self._btn_apply_clip.setToolTip(_t("Clear all CLIP fields and re-detect from scratch / 全CLIPフィールドをクリアして最初から再検出"))
         self._btn_apply_clip.setStyleSheet(
             "QPushButton { background:#2a2a3a; color:#88aacc; border:1px solid #446; padding:2px 6px; }"
             "QPushButton:hover { background:#3a3a5a; color:#aaccee; }")
         self._btn_apply_clip.clicked.connect(lambda: self._on_inspect(overwrite=True))
         r_bake.addWidget(self._btn_apply_clip)
         from PyQt6.QtWidgets import QCheckBox as _QCB
-        self._chk_auto_rename = _QCB("Auto-rename")
-        self._chk_auto_rename.setToolTip("Rename file to match person ID when baking")
+        self._chk_auto_rename = _QCB(_t("Auto-rename / 自動改名"))
+        self._chk_auto_rename.setToolTip(_t("Rename file to match person ID when baking / 書込時に人物IDに合わせてファイル名を変更"))
         self._chk_auto_rename.setChecked(
             attrs_mod.load_filename_config(getattr(self.handler.app, "current_project", None)).get("auto_rename", False))
         def _on_ar_toggle(v):
@@ -1211,9 +1212,9 @@ class PreviewWindow(QWidget):
                     sv.check_auto_rename.blockSignals(False)
         self._chk_auto_rename.toggled.connect(_on_ar_toggle)
         r_bake.addWidget(self._chk_auto_rename)
-        self._protected_check = QPushButton("🔓 Editable")
+        self._protected_check = QPushButton(_t("🔓 Editable / 🔓 編集可"))
         self._protected_check.setCheckable(True)
-        self._protected_check.setToolTip("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename")
+        self._protected_check.setToolTip(_t("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename / 🔓 編集可 — 自動改名される可能性あり\n🔒 ロック — 自動改名されません"))
         self._protected_check.setStyleSheet(
             "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
         self._protected_check.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1227,7 +1228,7 @@ class PreviewWindow(QWidget):
         vbox.addLayout(r_bake)
 
         # ── Raw Data section (collapsed by default) ───────────────────────
-        self._raw_meta_sec = _AttrSection("Raw Data")
+        self._raw_meta_sec = _AttrSection(_t("Raw Data / 生データ"))
         vbox.addWidget(self._raw_meta_sec)
         # Place the soft canvas toolbar inline in the section header
         _toolbar = getattr(self._soft_canvas, "_toolbar_widget", None)
@@ -1235,8 +1236,8 @@ class PreviewWindow(QWidget):
             _toolbar.setParent(self._raw_meta_sec)
             _toolbar.setVisible(True)
             self._raw_meta_sec._hdr_lay.addWidget(_toolbar, stretch=1)
-        self._btn_save_layout = QPushButton("💾 Layout")
-        self._btn_save_layout.setToolTip("Save current canvas tile positions")
+        self._btn_save_layout = QPushButton(_t("💾 Layout / 💾 レイアウト"))
+        self._btn_save_layout.setToolTip(_t("Save current canvas tile positions / 現在のキャンバスタイル位置を保存"))
         self._btn_save_layout.setStyleSheet(
             "QPushButton { background:#2a3a2a; color:#88cc88; border:1px solid #446644; padding:2px 6px; }"
             "QPushButton:hover { background:#3a4a3a; color:#aaeebb; }")
@@ -1251,7 +1252,7 @@ class PreviewWindow(QWidget):
         self._raw_meta_edit.setStyleSheet(
             "background-color: #1a1a1a; color: #ccc; border: 1px solid #333; "
             "font-family: monospace; font-size: 8pt;")
-        self._raw_meta_edit.setPlaceholderText("No data.")
+        self._raw_meta_edit.setPlaceholderText(_t("No data. / データなし。"))
         _raw_lay.addWidget(self._raw_meta_edit)
 
         # ── CLIP + Face side by side (CLIP 2/3, Face 1/3) ────────────────
@@ -1261,7 +1262,7 @@ class PreviewWindow(QWidget):
         _clip_col = QVBoxLayout()
         _clip_col.setSpacing(2)
         _clip_hdr = QHBoxLayout()
-        _clip_hdr.addWidget(QLabel("CLIP:"))
+        _clip_hdr.addWidget(QLabel(_t("CLIP: / CLIP：")))
         _clip_hdr.addStretch()
         _clip_col.addLayout(_clip_hdr)
         self._clip_inspect_edit = QTextEdit()
@@ -1269,20 +1270,20 @@ class PreviewWindow(QWidget):
         self._clip_inspect_edit.setStyleSheet(
             "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
             "font-family: monospace; font-size: 8pt;")
-        self._clip_inspect_edit.setPlaceholderText("CLIP scores will appear here.")
+        self._clip_inspect_edit.setPlaceholderText(_t("CLIP scores will appear here. / CLIPスコアがここに表示されます。"))
         _clip_col.addWidget(self._clip_inspect_edit)
         _inspect_row.addLayout(_clip_col, stretch=2)
 
         _face_col = QVBoxLayout()
         _face_col.setSpacing(2)
         _face_hdr = QHBoxLayout()
-        _face_hdr.addWidget(QLabel("Face:"))
-        self._btn_apply_face = QPushButton("Apply")
+        _face_hdr.addWidget(QLabel(_t("Face: / 顔：")))
+        self._btn_apply_face = QPushButton(_t("Apply / 適用"))
         self._btn_apply_face.setEnabled(False)
         self._btn_apply_face.setFixedHeight(18)
         self._btn_apply_face.setStyleSheet(
             "background:#2a4a2a; color:#88cc88; border:1px solid #466; padding:0 6px; font-size:8pt;")
-        self._btn_apply_face.setToolTip("Apply detected person ID to this file")
+        self._btn_apply_face.setToolTip(_t("Apply detected person ID to this file / 検出された人物IDをこのファイルに適用"))
         self._btn_apply_face.clicked.connect(self._apply_detected_face)
         _face_hdr.addWidget(self._btn_apply_face)
         _face_hdr.addStretch()
@@ -1293,7 +1294,7 @@ class PreviewWindow(QWidget):
         self._face_inspect_edit.setStyleSheet(
             "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
             "font-family: monospace; font-size: 8pt;")
-        self._face_inspect_edit.setPlaceholderText("Face scores will appear here.")
+        self._face_inspect_edit.setPlaceholderText(_t("Face scores will appear here. / 顔スコアがここに表示されます。"))
         _face_col.addWidget(self._face_inspect_edit)
         _inspect_row.addLayout(_face_col, stretch=1)
 
@@ -1303,12 +1304,12 @@ class PreviewWindow(QWidget):
         def _on_raw_expand():
             _p = getattr(self, '_attr_path', None)
             if _p:
-                self._raw_meta_edit.setPlainText("Loading...")
+                self._raw_meta_edit.setPlainText(_t("Loading... / 読み込み中..."))
                 try:
                     _txt = attrs_mod.read_raw_embedded_text(_p)
                 except Exception:
                     _txt = ""
-                self._raw_meta_edit.setPlainText(_txt or "(no embedded text)")
+                self._raw_meta_edit.setPlainText(_txt or _t("(no embedded text) / （埋め込みテキストなし）"))
                 self._on_inspect()
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
 
@@ -1588,7 +1589,7 @@ class PreviewWindow(QWidget):
             _entry_pre = attrs_mod.get(self.handler.app.attrs_data, path) if path else {}
             _has_bakeable = any(_entry_pre.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id"))
             self._update_bake_btn("pending" if _has_bakeable else "idle")
-        self._btn_detect_person.setText("Detect & Register")
+        self._btn_detect_person.setText(_t("Detect & Register / 検出＆登録"))
         self._btn_detect_person.setStyleSheet(
             "background:#445566; color:#e0e0e0; border:1px solid #667788;"
             " padding:3px 10px; font-weight:bold;")
@@ -1839,7 +1840,7 @@ class PreviewWindow(QWidget):
                 QMetaObject.invokeMethod(
                     self, "_set_detect_status",
                     Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, "Detecting CLIP & face…"))
+                    Q_ARG(str, _t("Detecting CLIP & face… / CLIPと顔を検出中…")))
                 def _run_clip(_path=path, _entry=dict(entry)):
                     try:
                         import aisearch_logic as _lg
@@ -2265,12 +2266,12 @@ class PreviewWindow(QWidget):
             def _apply():
                 self._btn_detect_person.setEnabled(True)
                 if pid:
-                    self._btn_detect_person.setText("Registered")
+                    self._btn_detect_person.setText(_t("Registered / 登録済"))
                     self._btn_detect_person.setStyleSheet(
                         "background:#2a6a2a; color:#aaffaa; border:1px solid #44aa44;"
                         " padding:3px 10px; font-weight:bold;")
                 else:
-                    self._btn_detect_person.setText("Detect & Register")
+                    self._btn_detect_person.setText(_t("Detect & Register / 検出＆登録"))
                 if pid:
                     self._person_id_combo.setCurrentText(pid)
                     entry = attrs_mod.get(app.attrs_data, path)
@@ -2537,7 +2538,7 @@ class PreviewWindow(QWidget):
                 if fi.get("error"):
                     face_txt.append(f"ERROR: {fi['error']}")
                 else:
-                    face_txt.append(f"Faces found: {fi['num_faces']}")
+                    face_txt.append(_t(f"Faces found: {fi['num_faces']} / 検出顔数: {fi['num_faces']}"))
                     face_txt.append(f"Stored: {'P' + _stored_pid if _stored_pid else '—'}")
                     if fi["face_found"]:
                         registry = attrs_mod.load_person_registry(app.current_project)
@@ -2750,7 +2751,7 @@ class PreviewWindow(QWidget):
         QMetaObject.invokeMethod(
             self, "_set_detect_status",
             Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, "Detecting face…"))
+            Q_ARG(str, _t("Detecting face… / 顔を検出中…")))
 
         def _run(_path=path):
             try:
@@ -2784,7 +2785,7 @@ class PreviewWindow(QWidget):
         _det_btn = getattr(_p_widget, "_detect_btn", None) if _p_widget else None
         if _det_btn:
             _det_btn.setEnabled(True)
-            _det_btn.setText("Detect")
+            _det_btn.setText(_t("Detect / 検出"))
         # Reload P box value
         path = getattr(self, "_attr_path", None)
         if path and _p_widget:
@@ -2893,7 +2894,7 @@ class PreviewWindow(QWidget):
             os.rename(path, new_path)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.handler.window, "Rename Error", str(e))
+            QMessageBox.critical(self.handler.window, _t("Rename Error / 改名エラー"), str(e))
             return
         app = self.handler.app
         attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
@@ -2954,7 +2955,7 @@ class PreviewWindow(QWidget):
             os.rename(path, new_path)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.handler.window, "Rename Error", str(e))
+            QMessageBox.critical(self.handler.window, _t("Rename Error / 改名エラー"), str(e))
             return
         # Update all stores
         attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
@@ -2994,7 +2995,7 @@ class PreviewWindow(QWidget):
             os.rename(path, new_path)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Rename Error", str(e))
+            QMessageBox.critical(self, _t("Rename Error / 改名エラー"), str(e))
             self._name_edit.setText(old_stem)
             return
         app = self.handler.app
@@ -3428,7 +3429,7 @@ class PreviewWindow(QWidget):
             if not silent:
                 self._update_bake_btn("error")
                 self._bake_err_label.setText("Bake failed — file type not supported or write error.")
-                QMessageBox.critical(self, "Bake Failed", "Could not embed AItan block into file.")
+                QMessageBox.critical(self, _t("Bake Failed / 書込失敗"), _t("Could not embed AItan block into file. / AItanブロックをファイルに埋め込めませんでした。"))
 
     def set_mode_color(self, color: str):
         """Update the bar background color to reflect the active mode."""
@@ -3575,7 +3576,7 @@ class PreviewHandler:
             shutil.copy2(src, os.path.join(target_dir, os.path.basename(src)))
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.window, "Copy Error", str(e))
+            QMessageBox.critical(self.window, _t("Copy Error / コピーエラー"), str(e))
 
     def _move_file(self):
         import aisearch_config as cfg_mod
@@ -3592,7 +3593,7 @@ class PreviewHandler:
             shutil.move(old_path, final_path)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.window, "Move Error", str(e)); return
+            QMessageBox.critical(self.window, _t("Move Error / 移動エラー"), str(e)); return
 
         attrs_mod.update_path_in_all_stores(old_path, final_path, self.app.current_project)
         if self.app.data and "paths" in self.app.data:
@@ -3655,7 +3656,7 @@ class PreviewHandler:
             if os.path.exists(path): os.remove(path)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.window, "Delete Error", str(e)); return
+            QMessageBox.critical(self.window, _t("Delete Error / 削除エラー"), str(e)); return
 
         if self.app.data and "paths" in self.app.data:
             norm = os.path.normpath(path)

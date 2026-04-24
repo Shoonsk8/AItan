@@ -20,6 +20,7 @@ import aisearch_config as cfg
 import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
+from attr_viewer import _lang_label as _t
 
 VERSION = "1.97"
 
@@ -78,7 +79,7 @@ def _url_drop_handler(event, callback):
 
 class DropZoneLabel(QLabel):
     def __init__(self, parent=None):
-        super().__init__("DROP IMAGE", parent)
+        super().__init__(_t("DROP IMAGE / 画像をドロップ"), parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._drop_callback = None
@@ -118,7 +119,9 @@ class DropZoneFrame(QFrame):
 class FileTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(0, 5, parent)
-        self.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+        self.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"),
+                                         _t("Name / 名前"), _t("Path / パス"),
+                                         _t("Date / 日付")])
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -396,7 +399,7 @@ class AISearchApp(QMainWindow):
                 Qt.TransformationMode.SmoothTransformation)
             self._lbl_logo.setPixmap(_px)
 
-        self.lbl_proj_hdr = QLabel("PROJECT:")
+        self.lbl_proj_hdr = QLabel(_t("PROJECT: / プロジェクト："))
         self.lbl_proj_hdr.setStyleSheet("color: #00ff00; font-weight: bold;")
         info_layout.addWidget(self.lbl_proj_hdr)
 
@@ -405,7 +408,7 @@ class AISearchApp(QMainWindow):
         self.lbl_project.setStyleSheet(f"font-size: {pfs}pt; font-weight: bold;")
         info_layout.addWidget(self.lbl_project)
 
-        self.lbl_base_dir = QLabel("Base: ")
+        self.lbl_base_dir = QLabel(_t("Base:  / ベース： "))
         info_layout.addWidget(self.lbl_base_dir)
 
         # Mode buttons (vertical) + dup controls (right)
@@ -424,23 +427,23 @@ class AISearchApp(QMainWindow):
 
         mode_col = QVBoxLayout()
         mode_col.setSpacing(4)
-        self.btn_mode_search = QPushButton("🔍 Search")
-        self.btn_mode_search.setToolTip("Switch to Search mode")
+        self.btn_mode_search = QPushButton(_t("🔍 Search / 🔍 検索"))
+        self.btn_mode_search.setToolTip(_t("Switch to Search mode / 検索モードに切り替え"))
         self.btn_mode_search.clicked.connect(self._enter_search_mode)
         mode_col.addWidget(self.btn_mode_search)
 
-        self.btn_find_dups = QPushButton("♊ Duplicates")
-        self.btn_find_dups.setToolTip("Find duplicates (Shift+click to force rescan)")
+        self.btn_find_dups = QPushButton(_t("♊ Duplicates / ♊ 重複"))
+        self.btn_find_dups.setToolTip(_t("Find duplicates (Shift+click to force rescan) / 重複を検索（Shift+クリックで強制再スキャン）"))
         self.btn_find_dups.clicked.connect(self._find_duplicates)
         mode_col.addWidget(self.btn_find_dups)
 
-        self.btn_browse = QPushButton("📂 Browse")
-        self.btn_browse.setToolTip("Browse folder contents (ls mode)")
+        self.btn_browse = QPushButton(_t("📂 Browse / 📂 閲覧"))
+        self.btn_browse.setToolTip(_t("Browse folder contents (ls mode) / フォルダ内容を閲覧（lsモード）"))
         self.btn_browse.clicked.connect(lambda: self._enter_browse_mode())
         mode_col.addWidget(self.btn_browse)
 
-        self._btn_back = QPushButton("⏮ Back")
-        self._btn_back.setToolTip("Go back to previously viewed file")
+        self._btn_back = QPushButton(_t("⏮ Back / ⏮ 戻る"))
+        self._btn_back.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
         self._btn_back.setStyleSheet(
             "QPushButton { background-color: #4a4a6a; color: white; font-weight: bold; "
             "padding: 6px 10px; border: 2px solid #6a6a9a; }"
@@ -460,13 +463,13 @@ class AISearchApp(QMainWindow):
 
         # Row 1: czkawka buttons (hidden by default, shown via Settings)
         dup_row1 = QHBoxLayout()
-        self._btn_dup_import = QPushButton("Import czkawka")
-        self._btn_dup_import.setToolTip("Import duplicate results from czkawka (JSON format)")
+        self._btn_dup_import = QPushButton(_t("Import czkawka / czkawka取込"))
+        self._btn_dup_import.setToolTip(_t("Import duplicate results from czkawka (JSON format) / czkawka の重複結果を取り込み（JSON形式）"))
         self._btn_dup_import.clicked.connect(self._import_dup_json)
         self._btn_dup_import.setVisible(self.config.get("show_czkawka_buttons", False))
         dup_row1.addWidget(self._btn_dup_import)
-        self._btn_dup_export = QPushButton("Export czkawka")
-        self._btn_dup_export.setToolTip("Export current duplicate results as czkawka-compatible JSON")
+        self._btn_dup_export = QPushButton(_t("Export czkawka / czkawka書出"))
+        self._btn_dup_export.setToolTip(_t("Export current duplicate results as czkawka-compatible JSON / 現在の重複結果をczkawka互換JSONで書き出し"))
         self._btn_dup_export.clicked.connect(self._export_dup_json)
         self._btn_dup_export.setVisible(self.config.get("show_czkawka_buttons", False))
         dup_row1.addWidget(self._btn_dup_export)
@@ -475,14 +478,14 @@ class AISearchApp(QMainWindow):
 
         # Row 2: Threshold | status
         dup_row2 = QHBoxLayout()
-        dup_row2.addWidget(QLabel("Threshold:"))
+        dup_row2.addWidget(QLabel(_t("Threshold: / 閾値：")))
         self.spin_threshold = QSpinBox()
         self.spin_threshold.wheelEvent = lambda e: e.ignore()
         self.spin_threshold.setRange(70, 100)
         self.spin_threshold.setValue(self.config.get("dup_threshold", 95))
         self.spin_threshold.setSuffix("%")
         self.spin_threshold.setFixedWidth(70)
-        self.spin_threshold.setToolTip("Higher = only near-exact duplicates\nLower = similar images too")
+        self.spin_threshold.setToolTip(_t("Higher = only near-exact duplicates\nLower = similar images too / 高い＝ほぼ完全一致のみ\n低い＝類似画像も含む"))
         self.spin_threshold.valueChanged.connect(self._on_threshold_changed)
         self._dup_result_threshold = None
         self._dup_result_summary   = ""
@@ -496,8 +499,8 @@ class AISearchApp(QMainWindow):
 
         # Row 3: Scan | Hide confirmed
         dup_row3 = QHBoxLayout()
-        btn_scan = QPushButton("⟳ Scan")
-        btn_scan.setToolTip("Force rescan (clear cache)")
+        btn_scan = QPushButton(_t("⟳ Scan / ⟳ スキャン"))
+        btn_scan.setToolTip(_t("Force rescan (clear cache) / 強制再スキャン（キャッシュ消去）"))
         btn_scan.clicked.connect(self._force_rescan)
         btn_scan.setStyleSheet(
             "QPushButton { background-color: #6f42c1; color: white; font-weight: bold; "
@@ -505,13 +508,13 @@ class AISearchApp(QMainWindow):
             "QPushButton:hover { background-color: #9b6dff; border-color: white; }"
             "QPushButton:pressed { background-color: #4a2a8a; }")
         dup_row3.addWidget(btn_scan)
-        self.btn_hide_confirmed = QPushButton("👁 Hide confirmed")
+        self.btn_hide_confirmed = QPushButton(_t("👁 Hide confirmed / 👁 確認済を隠す"))
         self.btn_hide_confirmed.setCheckable(True)
-        self.btn_hide_confirmed.setToolTip("Hide files already confirmed as variants/different")
+        self.btn_hide_confirmed.setToolTip(_t("Hide files already confirmed as variants/different / バリアント・異なると確認済みのファイルを隠す"))
         self.btn_hide_confirmed.toggled.connect(self._apply_confirmed_filter)
         self.btn_hide_confirmed.toggled.connect(
             lambda checked: self.btn_hide_confirmed.setText(
-                "👁 Unhide confirmed" if checked else "👁 Hide confirmed"))
+                _t("👁 Unhide confirmed / 👁 確認済を表示") if checked else _t("👁 Hide confirmed / 👁 確認済を隠す")))
         dup_row3.addWidget(self.btn_hide_confirmed)
         dup_row3.addStretch()
         dup_controls.addLayout(dup_row3)
@@ -539,16 +542,16 @@ class AISearchApp(QMainWindow):
         info_layout.addWidget(self.search_progress)
 
         undo_row = QHBoxLayout()
-        self.btn_undo = QPushButton("↩ Undo")
+        self.btn_undo = QPushButton(_t("↩ Undo / ↩ 元に戻す"))
         self.btn_undo.setEnabled(False)
-        self.btn_undo.setToolTip("Nothing to undo")
+        self.btn_undo.setToolTip(_t("Nothing to undo / 元に戻す操作なし"))
         self.btn_undo.clicked.connect(self._undo_last)
         self.btn_undo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.btn_undo.customContextMenuRequested.connect(lambda _: self._show_undo_history())
         undo_row.addWidget(self.btn_undo)
         btn_undo_hist = QPushButton("🕘")
         btn_undo_hist.setFixedWidth(30)
-        btn_undo_hist.setToolTip("View undo history (Ctrl+Shift+Z)")
+        btn_undo_hist.setToolTip(_t("View undo history (Ctrl+Shift+Z) / 履歴を表示（Ctrl+Shift+Z）"))
         btn_undo_hist.clicked.connect(self._show_undo_history)
         undo_row.addWidget(btn_undo_hist)
         undo_row.addStretch()
@@ -608,7 +611,7 @@ class AISearchApp(QMainWindow):
     def reload_colors(self):
         self._apply_colors()
         header = self.table.horizontalHeaderItem(0)
-        if header and header.text() == "Group":
+        if header and header.text() in ("Group", _t("Group / グループ")):
             self._recolor_dup_groups()
 
     def reload_fonts(self):
@@ -784,7 +787,7 @@ class AISearchApp(QMainWindow):
 
         # Note field (top)
         self._inline_note = QLineEdit()
-        self._inline_note.setPlaceholderText("Note…")
+        self._inline_note.setPlaceholderText(_t("Note… / ノート…"))
         self._inline_note.setStyleSheet(
             "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
         self._inline_note.editingFinished.connect(self._save_inline_attrs)
@@ -796,7 +799,7 @@ class AISearchApp(QMainWindow):
         self._res_combo = None
         _qual_pairs = attrs_mod.TAG_GROUPS.get("Quality", [])
         if _qual_pairs:
-            lq = QLabel("Q:"); lq.setStyleSheet("color: #aaa;"); r1.addWidget(lq)
+            lq = QLabel(_t("Q: / 品質：")); lq.setStyleSheet("color: #aaa;"); r1.addWidget(lq)
             self._quality_combo = QComboBox()
             self._quality_combo.wheelEvent = lambda e: e.ignore()
             self._quality_combo.addItem("—", "")
@@ -807,7 +810,7 @@ class AISearchApp(QMainWindow):
             r1.addWidget(self._quality_combo)
         _res_pairs = attrs_mod.TAG_GROUPS.get("Resolution", [])
         if _res_pairs:
-            lr = QLabel("Res:"); lr.setStyleSheet("color: #aaa;"); r1.addWidget(lr)
+            lr = QLabel(_t("Res: / 解像：")); lr.setStyleSheet("color: #aaa;"); r1.addWidget(lr)
             self._res_combo = QComboBox()
             self._res_combo.wheelEvent = lambda e: e.ignore()
             self._res_combo.addItem("—", "")
@@ -818,7 +821,7 @@ class AISearchApp(QMainWindow):
             r1.addWidget(self._res_combo)
         r1.addStretch()
         self._confirmed_cb = QCheckBox("≠")
-        self._confirmed_cb.setToolTip("Confirmed different")
+        self._confirmed_cb.setToolTip(_t("Confirmed different / 異なると確認済み"))
         self._confirmed_cb.setStyleSheet("color: #e0e0e0;")
         self._confirmed_cb.toggled.connect(self._save_inline_attrs)
         r1.addWidget(self._confirmed_cb)
@@ -845,7 +848,7 @@ class AISearchApp(QMainWindow):
         _audio_pairs = attrs_mod.TAG_GROUPS.get("Audio", [])
         if _audio_pairs:
             r3 = QHBoxLayout()
-            la = QLabel("Audio:")
+            la = QLabel(_t("Audio: / 音声："))
             la.setStyleSheet("color: #aaa;")
             r3.addWidget(la)
             self._audio_combo = QComboBox()
@@ -1028,7 +1031,7 @@ class AISearchApp(QMainWindow):
     def _update_undo_btn(self):
         has = bool(self._undo_stack)
         self.btn_undo.setEnabled(has)
-        self.btn_undo.setToolTip(self._undo_stack[-1]["desc"] if has else "Nothing to undo")
+        self.btn_undo.setToolTip(self._undo_stack[-1]["desc"] if has else _t("Nothing to undo / 元に戻す操作なし"))
 
     def _undo_last(self):
         if not self._undo_stack:
@@ -1042,11 +1045,11 @@ class AISearchApp(QMainWindow):
 
     def _show_undo_history(self):
         if not self._undo_stack:
-            QMessageBox.information(self, "Undo History", "Nothing to undo.")
+            QMessageBox.information(self, _t("Undo History / 履歴"), _t("Nothing to undo. / 元に戻す操作はありません。"))
             return
         from PyQt6.QtWidgets import QDialog, QListWidget, QVBoxLayout, QHBoxLayout, QPushButton
         dlg = QDialog(self)
-        dlg.setWindowTitle("Undo History")
+        dlg.setWindowTitle(_t("Undo History / 履歴"))
         dlg.resize(480, 300)
         layout = QVBoxLayout(dlg)
         lw = QListWidget()
@@ -1055,8 +1058,8 @@ class AISearchApp(QMainWindow):
             lw.addItem(action["desc"])
         layout.addWidget(lw)
         row_btns = QHBoxLayout()
-        btn_undo_to = QPushButton("Undo to selected")
-        btn_cancel  = QPushButton("Cancel")
+        btn_undo_to = QPushButton(_t("Undo to selected / 選択まで戻す"))
+        btn_cancel  = QPushButton(_t("Cancel / キャンセル"))
         row_btns.addWidget(btn_undo_to); row_btns.addWidget(btn_cancel)
         layout.addLayout(row_btns)
         btn_cancel.clicked.connect(dlg.reject)
@@ -1079,12 +1082,12 @@ class AISearchApp(QMainWindow):
     def _undo_move(self, action):
         old_path, new_path = action["old_path"], action["new_path"]
         if not os.path.exists(new_path):
-            QMessageBox.warning(self, "Undo", f"Cannot undo move: file not found at\n{new_path}")
+            QMessageBox.warning(self, _t("Undo / 元に戻す"), _t(f"Cannot undo move: file not found at\n{new_path} / 元に戻せません：ファイルが見つかりません\n{new_path}"))
             return
         try:
             shutil.move(new_path, old_path)
         except Exception as e:
-            QMessageBox.critical(self, "Undo Error", str(e)); return
+            QMessageBox.critical(self, _t("Undo Error / 元に戻すエラー"), str(e)); return
         if self.data and "paths" in self.data:
             for i, p in enumerate(self.data["paths"]):
                 if os.path.normpath(p) == os.path.normpath(new_path):
@@ -1103,7 +1106,7 @@ class AISearchApp(QMainWindow):
         orig_path, trash_path = action["orig_path"], action["trash_path"]
         success, err = front_page.restore_from_trash(trash_path, orig_path)
         if not success:
-            QMessageBox.critical(self, "Undo Error", f"Could not restore:\n{err}"); return
+            QMessageBox.critical(self, _t("Undo Error / 元に戻すエラー"), _t(f"Could not restore:\n{err} / 復元できません：\n{err}")); return
         if self.data is not None and "paths" in self.data:
             emb = action.get("emb")
             if emb is not None:
@@ -1154,7 +1157,7 @@ class AISearchApp(QMainWindow):
         from PyQt6.QtWidgets import QGroupBox, QRadioButton, QScrollArea, QButtonGroup
         win = QWidget(None)
         win.setWindowFlag(Qt.WindowType.Window)
-        win.setWindowTitle("Attributes")
+        win.setWindowTitle(_t("Attributes / 属性"))
         win.resize(340, 580)
         win._aw_path = None
 
@@ -1173,28 +1176,28 @@ class AISearchApp(QMainWindow):
         win._aw_g_aud = None
 
         # Usage
-        g_meta = QGroupBox("Usage"); lm = QVBoxLayout(g_meta)
-        lm.addWidget(QLabel("Title:"))
+        g_meta = QGroupBox(_t("Usage / 用途")); lm = QVBoxLayout(g_meta)
+        lm.addWidget(QLabel(_t("Title: / タイトル：")))
         win._aw_proj_edit = QLineEdit(); lm.addWidget(win._aw_proj_edit)
-        win._aw_scene_lbl = QLabel("Scene:"); lm.addWidget(win._aw_scene_lbl)
+        win._aw_scene_lbl = QLabel(_t("Scene: / シーン：")); lm.addWidget(win._aw_scene_lbl)
         win._aw_scene_edit = QLineEdit(); lm.addWidget(win._aw_scene_edit)
         layout.addWidget(g_meta)
 
         # Note
-        g_note = QGroupBox("Note"); ln = QVBoxLayout(g_note)
+        g_note = QGroupBox(_t("Note / ノート")); ln = QVBoxLayout(g_note)
         win._aw_note_edit = QTextEdit(); win._aw_note_edit.setFixedHeight(55); ln.addWidget(win._aw_note_edit)
         layout.addWidget(g_note)
 
         # Confirmed
-        win._aw_confirmed_cb = QCheckBox("Confirmed different (hide from dup results)")
+        win._aw_confirmed_cb = QCheckBox(_t("Confirmed different (hide from dup results) / 異なると確認済み（重複結果から非表示）"))
         layout.addWidget(win._aw_confirmed_cb)
 
         # Buttons
         btn_row = QHBoxLayout()
-        btn_save  = QPushButton("Save")
+        btn_save  = QPushButton(_t("Save / 保存"))
         btn_save.setStyleSheet(cfg.btn_ss("btn_write", self.config))
-        btn_clear = QPushButton("Clear")
-        btn_close = QPushButton("Close"); btn_close.clicked.connect(win.close)
+        btn_clear = QPushButton(_t("Clear / クリア"))
+        btn_close = QPushButton(_t("Close / 閉じる")); btn_close.clicked.connect(win.close)
 
         def _save():
             path = win._aw_path
@@ -1243,7 +1246,7 @@ class AISearchApp(QMainWindow):
         win = self._attr_win
         if win is None: return
         win._aw_path = path
-        win.setWindowTitle(f"Attributes — {os.path.basename(path)}")
+        win.setWindowTitle(_t(f"Attributes — {os.path.basename(path)} / 属性 — {os.path.basename(path)}"))
 
         entry    = attrs_mod.get(self.attrs_data, path)
         cur_tags = set(entry.get("tags", []))
@@ -1556,7 +1559,7 @@ class AISearchApp(QMainWindow):
                     pass
 
         label = ", ".join(self.base_dirs) if self.base_dirs else ""
-        self.lbl_base_dir.setText(f"Base: {label}" if label else "Base: ")
+        self.lbl_base_dir.setText(_t(f"Base: {label} / ベース： {label}") if label else _t("Base:  / ベース： "))
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.table.setSortingEnabled(True)
@@ -1935,7 +1938,7 @@ class AISearchApp(QMainWindow):
             with open(path, encoding="utf-8") as f:
                 raw = json.load(f)
         except Exception as e:
-            QMessageBox.warning(self, "Import Error", str(e))
+            QMessageBox.warning(self, _t("Import Error / 取込エラー"), str(e))
             return
 
         groups_data = []
@@ -1952,12 +1955,12 @@ class AISearchApp(QMainWindow):
                         groups_data.append(bucket)
 
         if not groups_data:
-            QMessageBox.information(self, "Import", "No valid duplicate groups found.")
+            QMessageBox.information(self, _t("Import / 取込"), _t("No valid duplicate groups found. / 有効な重複グループが見つかりませんでした。"))
             return
 
-        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
         self.drop_zone.setPixmap(QPixmap())
-        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self.drop_zone.setText(_t("DUPLICATES\nFINDER / 重複\n検索"))
         self._collapsed_groups.clear()
         self._display_dup_from_data(groups_data)
         self._dup_display_data = groups_data
@@ -1970,7 +1973,7 @@ class AISearchApp(QMainWindow):
     def _export_dup_json(self):
         """Export current dup results as czkawka-format JSON. Not exposed in UI but callable."""
         if not self._dup_display_data:
-            QMessageBox.information(self, "Export", "No duplicate results to export.")
+            QMessageBox.information(self, _t("Export / 書出"), _t("No duplicate results to export. / 書き出す重複結果がありません。"))
             return
         from PyQt6.QtWidgets import QFileDialog
         import hashlib
@@ -2011,21 +2014,21 @@ class AISearchApp(QMainWindow):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(out, f, ensure_ascii=False, indent=2)
             total = sum(len(g) for groups in out.values() for g in groups)
-            QMessageBox.information(self, "Export",
-                f"Exported {len(out)} size buckets, {total} files\n→ {path}")
+            QMessageBox.information(self, _t("Export / 書出"),
+                _t(f"Exported {len(out)} size buckets, {total} files\n→ {path} / {len(out)} サイズバケット、{total} ファイルを書き出しました\n→ {path}"))
         except Exception as e:
-            QMessageBox.warning(self, "Export Error", str(e))
+            QMessageBox.warning(self, _t("Export Error / 書出エラー"), str(e))
 
     def _find_duplicates_by_hash(self):
         """100% mode: full disk hash scan of all files in base_dirs — like Czkawka."""
         if not self.base_dirs:
-            QMessageBox.information(self, "Find Duplicates", "No base directory set.")
+            QMessageBox.information(self, _t("Find Duplicates / 重複検索"), _t("No base directory set. / ベースディレクトリが設定されていません。"))
             return
         import hashlib
         from collections import defaultdict
 
         self.btn_find_dups.setEnabled(False)
-        self.btn_find_dups.setText("Hashing...")
+        self.btn_find_dups.setText(_t("Hashing... / ハッシュ計算中..."))
         self._dup_result_summary = ""
         self.lbl_dup_status.setText("")
         self._dup_queue = queue.Queue()
@@ -2109,7 +2112,7 @@ class AISearchApp(QMainWindow):
         if os.path.exists(self._dup_file_path()):
             self._load_dup_results(update_spinner=False)
         else:
-            self.lbl_dup_status.setText("Press ⟳ Scan to find duplicates.")
+            self.lbl_dup_status.setText(_t("Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
 
     def _run_dup_scan(self):
         """Actually run the duplicate scan (called by ⟳ Scan button)."""
@@ -2120,19 +2123,19 @@ class AISearchApp(QMainWindow):
             return
 
         if not self.data or not self.data.get("paths"):
-            QMessageBox.information(self, "Find Duplicates", "No database loaded.")
+            QMessageBox.information(self, _t("Find Duplicates / 重複検索"), _t("No database loaded. / データベースが読み込まれていません。"))
             return
 
         n = len(self.data["paths"])
         if n > 15000:
-            if QMessageBox.question(self, "Find Duplicates",
-                f"{n} files in DB — this may use a lot of memory. Continue?",
+            if QMessageBox.question(self, _t("Find Duplicates / 重複検索"),
+                _t(f"{n} files in DB — this may use a lot of memory. Continue? / DBに{n}ファイル — メモリを大量に使用する可能性があります。続けますか？"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             ) != QMessageBox.StandardButton.Yes:
                 return
 
         self.btn_find_dups.setEnabled(False)
-        self.btn_find_dups.setText("Searching...")
+        self.btn_find_dups.setText(_t("Searching... / 検索中..."))
         self.lbl_dup_status.setText("")
         self._dup_queue = queue.Queue()
 
@@ -2278,7 +2281,7 @@ class AISearchApp(QMainWindow):
                             adj[i].append(j)
                             adj[j].append(i)
 
-                q.put(("progress", "Finding groups…"))
+                q.put(("progress", _t("Finding groups… / グループ検出中…")))
                 visited = [False] * n
                 groups  = []
                 for i in range(n):
@@ -2329,15 +2332,15 @@ class AISearchApp(QMainWindow):
         self._dup_poll_timer.stop()
         self.btn_find_dups.setText("♊ Duplicates")
         if msg == "error":
-            QMessageBox.critical(self, "Duplicate Finder", payload)
+            QMessageBox.critical(self, _t("Duplicate Finder / 重複検索"), payload)
             return
         if msg == "hash_done":
             groups_data = payload
             total_files = sum(len(g) for g in groups_data)
             self._set_dup_result(f"{len(groups_data)} groups, {total_files} files", 100)
-            self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+            self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
             self.drop_zone.setPixmap(QPixmap())
-            self.drop_zone.setText("DUPLICATES\nFINDER")
+            self.drop_zone.setText(_t("DUPLICATES\nFINDER / 重複\n検索"))
             self._collapsed_groups.clear()
             self._display_dup_from_data(groups_data)
             self._dup_display_data = groups_data
@@ -2355,10 +2358,10 @@ class AISearchApp(QMainWindow):
                              self.spin_threshold.value())
         self._dup_display_data = self._build_dup_display_data(groups, sim, paths)
         # Switch column header to "Group"
-        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
         # Switch to dup mode
         self.drop_zone.setPixmap(QPixmap())
-        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self.drop_zone.setText(_t("DUPLICATES\nFINDER / 重複\n検索"))
         self._collapsed_groups.clear()
         # self.attr_panel.show()  # disabled
         self._display_dup_groups(groups, sim, paths)
@@ -2392,7 +2395,7 @@ class AISearchApp(QMainWindow):
                 item0 = self.table.item(row, 0)
                 item0.setData(Qt.ItemDataRole.UserRole + 2, grp_label)
                 if rank == 0:
-                    item0.setToolTip("Click to collapse/expand group")
+                    item0.setToolTip(_t("Click to collapse/expand group / クリックでグループを折りたたみ/展開"))
                 sim_score = 1.0 if rank == 0 else sim[idx][rep].item()
                 item0.setData(Qt.ItemDataRole.UserRole + 1, sim_score)
                 color = self._dup_color(sim_score, g_idx)
@@ -2463,9 +2466,9 @@ class AISearchApp(QMainWindow):
         groups_data = [g for g in groups_data if len(g) > 1]
         total_files = sum(len(g) for g in groups_data)
         self._set_dup_result(f"{len(groups_data)} groups, {total_files} files", pct)
-        self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
+        self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
         self.drop_zone.setPixmap(QPixmap())
-        self.drop_zone.setText("DUPLICATES\nFINDER")
+        self.drop_zone.setText(_t("DUPLICATES\nFINDER / 重複\n検索"))
         self._collapsed_groups.clear()
         # self.attr_panel.show()  # disabled
         self._display_dup_from_data(groups_data)
@@ -2507,7 +2510,7 @@ class AISearchApp(QMainWindow):
                 item0 = self.table.item(row, 0)
                 item0.setData(Qt.ItemDataRole.UserRole + 2, grp_label)
                 if rank == 0:
-                    item0.setToolTip("Click to collapse/expand group")
+                    item0.setToolTip(_t("Click to collapse/expand group / クリックでグループを折りたたみ/展開"))
                 item0.setData(Qt.ItemDataRole.UserRole + 1, member["sim"])
                 color = self._dup_color(member["sim"], g_idx)
                 for col in range(self.table.columnCount()):
@@ -2646,7 +2649,7 @@ class AISearchApp(QMainWindow):
 
     def _post_move_dup_cleanup(self):
         header = self.table.horizontalHeaderItem(0)
-        if header and header.text() == "Group":
+        if header and header.text() in ("Group", _t("Group / グループ")):
             self._cleanup_singleton_groups()
             self._rebuild_dup_display_data()
             self._save_dup_results()
@@ -2803,7 +2806,7 @@ class AISearchApp(QMainWindow):
                 self.drop_zone.setText("")
             else:
                 self.drop_zone.setPixmap(QPixmap())
-                self.drop_zone.setText("▶ VIDEO" if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
 
         # Show preview immediately before the background search starts
         self.preview_handler.show(self.query_path)
@@ -2815,7 +2818,7 @@ class AISearchApp(QMainWindow):
         # Restore "Score" column header; exit browse mode if active; clear table immediately
         if self._browse_dir:
             self._exit_browse_mode()
-        self.table.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+        self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)   # clear browse/old listing immediately, don't wait for worker
         self.config["last_mode"] = "search"
@@ -2917,7 +2920,7 @@ class AISearchApp(QMainWindow):
             if msg == "error":
                 # Show error in status bar; still display the query image as row 0
                 first_line = payload.split("\n")[0]
-                self.statusBar().showMessage(f"Search error: {first_line}", 6000)
+                self.statusBar().showMessage(_t(f"Search error: {first_line} / 検索エラー: {first_line}"), 6000)
                 self._populate_search_results(
                     (torch.zeros(0, device='cpu'), torch.zeros(0, dtype=torch.long, device='cpu')),
                     _query_path, _data)
@@ -3003,7 +3006,7 @@ class AISearchApp(QMainWindow):
         if path:
             self.run_search(path)
         else:
-            self.table.setHorizontalHeaderLabels(["Score", "Size", "Name", "Path", "Date"])
+            self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
             self.table.setRowCount(0)
             self.config["last_mode"] = "search"
             cfg.save_config(self.config, getattr(self, "current_project", None))
@@ -3049,7 +3052,7 @@ class AISearchApp(QMainWindow):
             reverse=True  # newest first
         )
 
-        self.table.setHorizontalHeaderLabels(["#", "Size", "Name", "Path", "Date"])
+        self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         for i, fp in enumerate(files):
@@ -3074,7 +3077,7 @@ class AISearchApp(QMainWindow):
             self._update_drop_zone_thumb(self.query_path)
         else:
             self.drop_zone.setPixmap(QPixmap())
-            self.drop_zone.setText("DROP IMAGE")
+            self.drop_zone.setText(_t("DROP IMAGE / 画像をドロップ"))
 
     # ── Event handlers ───────────────────────────────────────────────────────
 
@@ -3148,7 +3151,7 @@ class AISearchApp(QMainWindow):
                 self.drop_zone.setText("")
             else:
                 self.drop_zone.setPixmap(QPixmap())
-                self.drop_zone.setText("▶ VIDEO" if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
 
     def handle_preview(self):
         if self._lock_preview: return
@@ -3268,7 +3271,7 @@ class AISearchApp(QMainWindow):
                 any_moved = True
                 last_row = r
             elif err and err != "cancelled":
-                QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
+                QMessageBox.critical(self, _t("Move Error / 移動エラー"), _t(f"Could not move file: {err} / ファイルを移動できません: {err}"))
 
         if any_moved:
             if needs_feedback_reload:
@@ -3347,7 +3350,7 @@ class AISearchApp(QMainWindow):
         try:
             shutil.move(src_path, final_path)
         except Exception as e:
-            QMessageBox.critical(self, "Move Error", str(e)); return
+            QMessageBox.critical(self, _t("Move Error / 移動エラー"), str(e)); return
 
         import aisearch_attrs as _am
         _am.update_path_in_all_stores(src_path, final_path, self.current_project)
@@ -3379,7 +3382,7 @@ class AISearchApp(QMainWindow):
             try:
                 shutil.move(src_path, final_path)
             except Exception as e:
-                QMessageBox.critical(self, "Move Error", str(e)); continue
+                QMessageBox.critical(self, _t("Move Error / 移動エラー"), str(e)); continue
 
             import aisearch_attrs as _am
             _am.update_path_in_all_stores(src_path, final_path, self.current_project)
@@ -3401,7 +3404,7 @@ class AISearchApp(QMainWindow):
         old_path = self.table.get_row_path(row)
 
         if old_path and not attrs_mod.is_editable(self.attrs_data, old_path):
-            QMessageBox.warning(self, "Locked", "This file is locked and cannot be moved.")
+            QMessageBox.warning(self, _t("Locked / ロック中"), _t("This file is locked and cannot be moved. / このファイルはロックされているため移動できません。"))
             return
 
         new_path, self.data, err, chosen_dir = front_page.select_and_move_file(
@@ -3422,7 +3425,7 @@ class AISearchApp(QMainWindow):
                 if row == 0:
                     self._rebase_to_row(next_row)
         elif err and err != "cancelled":
-            QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
+            QMessageBox.critical(self, _t("Move Error / 移動エラー"), _t(f"Could not move file: {err} / ファイルを移動できません: {err}"))
 
     def rename_file(self, from_menu=False):
         row = self._current_row()
@@ -3480,7 +3483,7 @@ class AISearchApp(QMainWindow):
                 if self.preview_handler.current_path == old_path:
                     self.preview_handler.current_path = new_path
             except Exception as e:
-                QMessageBox.critical(self, "Rename Error", str(e))
+                QMessageBox.critical(self, _t("Rename Error / 改名エラー"), str(e))
                 name_item.setText(old_name)
 
         self._rename_close_handler = _on_close
@@ -3503,11 +3506,11 @@ class AISearchApp(QMainWindow):
 
     def _confirm_trash(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("Trash")
+        dlg.setWindowTitle(_t("Trash / ゴミ箱"))
         dlg.setFixedSize(280, 120)
         layout = QVBoxLayout(dlg)
-        layout.addWidget(QLabel("Move to Trash?"))
-        dont_ask = QCheckBox("Do not ask again")
+        layout.addWidget(QLabel(_t("Move to Trash? / ゴミ箱に移動しますか？")))
+        dont_ask = QCheckBox(_t("Do not ask again / 次回から確認しない"))
         layout.addWidget(dont_ask)
         result = [False]
         bf = QHBoxLayout()
@@ -3517,8 +3520,8 @@ class AISearchApp(QMainWindow):
                 self.config["delete_confirm"] = False
                 cfg.save_config(self.config, getattr(self, "current_project", None))
             dlg.accept()
-        yes_btn = QPushButton("Move to Trash"); yes_btn.clicked.connect(_yes)
-        no_btn  = QPushButton("Cancel");        no_btn.clicked.connect(dlg.reject)
+        yes_btn = QPushButton(_t("Move to Trash / ゴミ箱に移動")); yes_btn.clicked.connect(_yes)
+        no_btn  = QPushButton(_t("Cancel / キャンセル"));        no_btn.clicked.connect(dlg.reject)
         bf.addWidget(yes_btn); bf.addWidget(no_btn)
         layout.addLayout(bf)
         dlg.exec()
@@ -3540,7 +3543,7 @@ class AISearchApp(QMainWindow):
         rows = [r for r in rows if r not in locked]
         if locked:
             names = ", ".join(os.path.basename(self.table.get_row_path(r)) for r in locked)
-            QMessageBox.warning(self, "Locked", f"Skipped locked file(s):\n{names}")
+            QMessageBox.warning(self, _t("Locked / ロック中"), _t(f"Skipped locked file(s):\n{names} / ロック中のファイルをスキップ：\n{names}"))
         if not rows:
             return
 
@@ -3600,10 +3603,10 @@ class AISearchApp(QMainWindow):
                 # Table is now empty — clear preview, thumbnail, and attrs panel
                 self._refresh_inline_attrs(None)
                 self.drop_zone.setPixmap(QPixmap())
-                self.drop_zone.setText("drop image / video")
+                self.drop_zone.setText(_t("drop image or video / 画像・動画をドロップ"))
                 pw = getattr(getattr(self, "preview_handler", None), "window", None)
                 if pw:
                     pw.label.setPixmap(QPixmap())
                     pw._refresh_attrs(None)
         if errors:
-            QMessageBox.critical(self, "Trash Error", "\n".join(errors))
+            QMessageBox.critical(self, _t("Trash Error / ゴミ箱エラー"), "\n".join(errors))
