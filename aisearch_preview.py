@@ -1803,9 +1803,9 @@ class PreviewWindow(QWidget):
                 if _fn_tags:
                     entry = dict(entry)
                     _merged = list(entry.get("tags", []))
-                    for _t in _fn_tags:
-                        if _t not in _merged:
-                            _merged.append(_t)
+                    for _tag in _fn_tags:
+                        if _tag not in _merged:
+                            _merged.append(_tag)
                     entry["tags"] = _merged
             # Auto-detect O/R/K from file dimensions/fps; inject into display entry
             # if the entry has no tag matching any of those fields' options.
