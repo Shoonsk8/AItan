@@ -3509,28 +3509,30 @@ class PreviewWindow(QWidget):
             _baked_path = getattr(self, '_attr_path', path)
             self._raw_meta_edit.setPlainText(
                 attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)")
-            # Record as correction example for future CLIP detection
+            # Record as correction example for future CLIP detection — skipped
+            # in "No inspection" mode since that mode means no AI activity.
             try:
-                import torch as _torch
-                _proj = getattr(app, "current_project", None)
-                _cemb = None
-                _data = getattr(app, "data", None)
-                if _data and "paths" in _data and path in _data["paths"]:
-                    _ci = _data["paths"].index(path)
-                    _cemb = _data["embeddings"][_ci]
-                if _cemb is None:
-                    # Fallback: load embedding from features file on disk
-                    _ft_path = os.path.join(
-                        attrs_mod.DATA_DIR,
-                        f"features_{_proj}.pt" if _proj else "features_default.pt")
-                    if os.path.exists(_ft_path):
-                        _ft = _torch.load(_ft_path, map_location="cpu", weights_only=False)
-                        if "paths" in _ft and path in _ft["paths"]:
-                            _fi = _ft["paths"].index(path)
-                            _cemb = _ft["embeddings"][_fi]
-                if _cemb is not None:
-                    _centry = attrs_mod.get(app.attrs_data, path)
-                    attrs_mod.add_correction(_proj, path, _cemb, _centry)
+                if app.config.get("clip_inspect_mode", "never") != "never":
+                    import torch as _torch
+                    _proj = getattr(app, "current_project", None)
+                    _cemb = None
+                    _data = getattr(app, "data", None)
+                    if _data and "paths" in _data and path in _data["paths"]:
+                        _ci = _data["paths"].index(path)
+                        _cemb = _data["embeddings"][_ci]
+                    if _cemb is None:
+                        # Fallback: load embedding from features file on disk
+                        _ft_path = os.path.join(
+                            attrs_mod.DATA_DIR,
+                            f"features_{_proj}.pt" if _proj else "features_default.pt")
+                        if os.path.exists(_ft_path):
+                            _ft = _torch.load(_ft_path, map_location="cpu", weights_only=False)
+                            if "paths" in _ft and path in _ft["paths"]:
+                                _fi = _ft["paths"].index(path)
+                                _cemb = _ft["embeddings"][_fi]
+                    if _cemb is not None:
+                        _centry = attrs_mod.get(app.attrs_data, path)
+                        attrs_mod.add_correction(_proj, path, _cemb, _centry)
             except Exception:
                 pass
         else:
