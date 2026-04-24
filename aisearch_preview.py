@@ -1495,6 +1495,8 @@ class PreviewWindow(QWidget):
                 else:
                     # Detect only empty fields; show "ignored" for filled ones.
                     _skip = {f for f in _clip_fields if _entry.get(f)}
+                    if _entry.get("person_id"):
+                        _skip.add("person_id")
                     self._on_inspect(skip_fields=_skip)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
@@ -2614,33 +2616,37 @@ class PreviewWindow(QWidget):
             # ── Face ────────────────────────────────────────────────────────
             face_txt = []
             _detected_pid = None
-            try:
-                _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
-                fi = attrs_mod.inspect_face_detection(path, app.current_project)
-                if fi.get("error"):
-                    face_txt.append(f"ERROR: {fi['error']}")
-                else:
-                    face_txt.append(_t(f"Faces found: {fi['num_faces']} / 検出顔数: {fi['num_faces']}"))
-                    face_txt.append(f"Stored: {'P' + _stored_pid if _stored_pid else '—'}")
-                    if fi["face_found"]:
-                        registry = attrs_mod.load_person_registry(app.current_project)
-                        if fi["matches"]:
-                            face_txt.append("Top matches:")
-                            for pid, sim in fi["matches"]:
-                                name = registry.get(pid, "")
-                                mark = "*" if pid == fi["assigned_id"] else " "
-                                face_txt.append(f"  {mark} P{pid}  {sim:.3f}  {name}")
-                        else:
-                            face_txt.append("No persons in DB")
-                        _detected_pid = fi["assigned_id"]
-                        _det_str = ('P' + _detected_pid) if _detected_pid else 'no match (thr 0.35)'
-                        _match = " ==" if _detected_pid == _stored_pid else " !="
-                        face_txt.append(f"\n-> {_det_str}{_match} stored")
+            # Skip face detection if person_id is in skip_fields (already set).
+            if skip_fields and "person_id" in skip_fields:
+                face_txt.append("(ignored — already set)")
+            else:
+                try:
+                    _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
+                    fi = attrs_mod.inspect_face_detection(path, app.current_project)
+                    if fi.get("error"):
+                        face_txt.append(f"ERROR: {fi['error']}")
                     else:
-                        face_txt.append("No face detected")
-                        _detected_pid = "000"
-            except Exception as e:
-                face_txt.append(f"ERROR: {e}")
+                        face_txt.append(_t(f"Faces found: {fi['num_faces']} / 検出顔数: {fi['num_faces']}"))
+                        face_txt.append(f"Stored: {'P' + _stored_pid if _stored_pid else '—'}")
+                        if fi["face_found"]:
+                            registry = attrs_mod.load_person_registry(app.current_project)
+                            if fi["matches"]:
+                                face_txt.append("Top matches:")
+                                for pid, sim in fi["matches"]:
+                                    name = registry.get(pid, "")
+                                    mark = "*" if pid == fi["assigned_id"] else " "
+                                    face_txt.append(f"  {mark} P{pid}  {sim:.3f}  {name}")
+                            else:
+                                face_txt.append("No persons in DB")
+                            _detected_pid = fi["assigned_id"]
+                            _det_str = ('P' + _detected_pid) if _detected_pid else 'no match (thr 0.35)'
+                            _match = " ==" if _detected_pid == _stored_pid else " !="
+                            face_txt.append(f"\n-> {_det_str}{_match} stored")
+                        else:
+                            face_txt.append("No face detected")
+                            _detected_pid = "000"
+                except Exception as e:
+                    face_txt.append(f"ERROR: {e}")
             # Store FACE text for the canvas FACE tile
             if face_txt:
                 _entry = attrs_mod.get(app.attrs_data, path)
