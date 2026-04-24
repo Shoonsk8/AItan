@@ -2526,25 +2526,27 @@ class PreviewWindow(QWidget):
                             if 0 <= _idx < _digits:
                                 _working[_f][_idx] = _corr
                                 _detected_indices.setdefault(_f, set()).add(_idx)
-                # Discrepancy learning: if the entry already has a non-empty
-                # value that differs from CLIP's prediction, the stored value
-                # is the ground truth — record it as a training example so
-                # future detections can match this embedding to the right code.
-                try:
-                    _entry_live = attrs_mod.get(app.attrs_data, path)
-                    _had_discrepancy = False
-                    for _f, _v in _working.items():
-                        _pred = "".join(_v)
-                        _actual = _entry_live.get(_f, "")
-                        if _actual and _actual != _pred:
-                            _had_discrepancy = True
-                            break
-                    if _had_discrepancy and emb is not None:
-                        attrs_mod.add_correction(
-                            getattr(app, "current_project", None),
-                            path, emb, _entry_live)
-                except Exception:
-                    pass
+                # Discrepancy learning — only when running full "Detect every
+                # time" mode. In "Skip when determined" mode we don't want to
+                # auto-learn from entries we didn't verify, and the user
+                # hasn't explicitly asked to inspect.
+                _mode_cur = app.config.get("clip_inspect_mode", "never")
+                if _mode_cur == "always":
+                    try:
+                        _entry_live = attrs_mod.get(app.attrs_data, path)
+                        _had_discrepancy = False
+                        for _f, _v in _working.items():
+                            _pred = "".join(_v)
+                            _actual = _entry_live.get(_f, "")
+                            if _actual and _actual != _pred:
+                                _had_discrepancy = True
+                                break
+                        if _had_discrepancy and emb is not None:
+                            attrs_mod.add_correction(
+                                getattr(app, "current_project", None),
+                                path, emb, _entry_live)
+                    except Exception:
+                        pass
                 # Include fields with non-zero digits OR real "0" detections (FA/SK/BG)
                 _updates = {}
                 for _f, _v in _working.items():
