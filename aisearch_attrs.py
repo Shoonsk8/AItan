@@ -402,62 +402,26 @@ _DEFAULT_TAG_GROUPS = {
         ["6", "Night"],
     ],
 
-    # ── Background  BG[major][sub][specific]  ────────────────────────────────
-    "Background": [
-        ["0", "Black BG"],     ["1", "White BG"],      ["2", "Green BG"],
-        ["3", "Indoor"],       ["4", "Commercial Indoor"],
-        ["5", "Outdoor"],      ["6", "Nature"],         ["8", "Space"],
-    ],
-    # ── Orientation  O[width][height]  ───────────────────────────────────────
-    "O": [
-        ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
-        ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
-        ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
-    ],
+    # ── Preset lookups (for O/R/K coded-field combos on the canvas) ──────────
+    # These are still defaults because they map digit codes to human labels
+    # for the blue coded fields — not user-editable tag groups.
     "O_Preset": [
         ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
         ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
         ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
-    ],
-
-    # ── Resolution  R[w][h]  ─────────────────────────────────────────────────
-    "R": [
-        ["36", "360p"], ["48", "480p"],  ["72", "720p"],
-        ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
-        ["08", "8K"],
     ],
     "R_Preset": [
         ["36", "360p"], ["48", "480p"],  ["72", "720p"],
         ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
         ["08", "8K"],
     ],
-
-    # ── FrameRate  K[tens][units]  ───────────────────────────────────────────
-    "K": [
-        ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
-    ],
     "K_Preset": [
         ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
     ],
 
-    # ── Watermark ─────────────────────────────────────────────────────────────
-    "Watermark": [["watermark", "True"], ["no_watermark", "False"]],
-
-    "Audio":    [["no_sound", "No Sound"], ["aac", "AAC"], ["mp3", "MP3"],
-                 ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
-                 ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"], ["voice", "Voice"]],
-    "audio":      [["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
-                   ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
-                   ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"]],
-    "audio_Preset": [["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
-                     ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
-                     ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"]],
-    "Variant":  [
-        ["origin", "Origin"], ["base", "Base"], ["expression", "Expression"],
-        ["clothing", "Clothing"], ["body_parts", "Body Parts"],
-        ["background", "Background"], ["hair", "Hair"], ["style", "Style"],
-        ["accessories", "Accessories"], ["mutant", "Mutant"], ["other", "Other"],
-    ],
+    # Removed from defaults (user decides): Background, O, R, K (plain),
+    # Watermark, Audio, audio, audio_Preset, Variant.
+    # User tables must live entirely in per-project attrs_tags_<project>.json.
 }
 
 # Display names for hardcoded sections (shown in Attributes tab title when no custom name saved)
