@@ -1310,7 +1310,19 @@ class PreviewWindow(QWidget):
                 except Exception:
                     _txt = ""
                 self._raw_meta_edit.setPlainText(_txt or _t("(no embedded text) / （埋め込みテキストなし）"))
-                self._on_inspect()
+                # Honour clip_inspect_mode — don't run inspect at all in
+                # 'never', and skip already-set fields in 'when_empty'.
+                _mode = self.handler.app.config.get("clip_inspect_mode", "never")
+                if _mode == "never":
+                    return
+                _entry = attrs_mod.get(self.handler.app.attrs_data, _p)
+                _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
+                _skip = set()
+                if _mode == "when_empty":
+                    _skip = {f for f in _clip_fields if _entry.get(f)}
+                    if _entry.get("person_id"):
+                        _skip.add("person_id")
+                self._on_inspect(skip_fields=_skip)
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
 
         # Apply show_raw_data config (hidden by default unless enabled in Settings > Canvas)
