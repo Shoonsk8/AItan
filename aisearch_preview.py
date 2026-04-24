@@ -1919,14 +1919,20 @@ class PreviewWindow(QWidget):
                                     _changed = True
                         except Exception:
                             pass
-                        # Face detection — set person_id if not yet assigned
+                        # Face detection — set person_id if not yet assigned.
+                        # Re-check at WRITE time (not just thread-start) because
+                        # detect_or_assign_person_id is slow enough for the user
+                        # to type a correction while we're running.
                         _stored = (app.attrs_data.get(_path) or {}).get("person_id", "")
                         if not _stored:
                             _pid = attrs_mod.detect_or_assign_person_id(_path, app.current_project)
                             if _pid is None:
                                 _pid = "000"
-                            app.attrs_data.setdefault(_path, {})["person_id"] = _pid
-                            _changed = True
+                            # Recheck live entry — user may have set person_id while we were running.
+                            _live_entry = app.attrs_data.setdefault(_path, {})
+                            if not _live_entry.get("person_id"):
+                                _live_entry["person_id"] = _pid
+                                _changed = True
                         if _changed:
                             attrs_mod.save(app.current_project, app.attrs_data)
                         # Update per-field canvas tiles
@@ -2062,8 +2068,11 @@ class PreviewWindow(QWidget):
                     meta = attrs_mod.extract_metadata(p)
                     if meta:
                         _entry["meta"] = meta; _changed = True
-                # Filename rule → person_id (one-way rules, e.g. image-*.png → Nastia)
-                if _needs_fn:
+                # Filename rule → person_id (one-way rules, e.g. image-*.png → Nastia).
+                # Only assign if the entry has no person_id yet — never overwrite a
+                # user-entered or previously-saved ID, since the filename lags
+                # behind the DB until auto-rename fires.
+                if _needs_fn and not _entry.get("person_id"):
                     try:
                         _fn_rules = attrs_mod.load_filename_rules(app.current_project)
                         _ow = [r for r in _fn_rules
@@ -2077,9 +2086,11 @@ class PreviewWindow(QWidget):
                                 _changed = True
                     except Exception:
                         pass
-                # Face match — only when faces DB has entries (never auto-assigns new IDs)
+                # Face match — only when faces DB has entries (never auto-assigns new IDs).
+                # Also only when no manual/stored person_id exists, so a face match
+                # can't override a correction the user already made.
                 _matched_pid = None
-                if _needs_person:
+                if _needs_person and not _entry.get("person_id"):
                     _matched_pid = attrs_mod.match_person_id(p, app.current_project)
                     if _matched_pid:
                         _entry["person_id"] = _matched_pid
@@ -2099,8 +2110,9 @@ class PreviewWindow(QWidget):
                     _live["tags"] = _tags
                     for _k in ("meta", "person_id", "editable", "prompt", "seed"):
                         if _k in _entry:
-                            # Never overwrite user-typed text with our stale copy
-                            if _k in ("prompt", "seed") and _live.get(_k):
+                            # Never overwrite user-set values (person_id, prompt,
+                            # seed) with our stale background-thread copy.
+                            if _k in ("prompt", "seed", "person_id") and _live.get(_k):
                                 continue
                             _live[_k] = _entry[_k]
                     attrs_mod.save(app.current_project, app.attrs_data)
