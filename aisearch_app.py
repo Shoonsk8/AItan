@@ -804,7 +804,7 @@ class AISearchApp(QMainWindow):
             self._quality_combo.wheelEvent = lambda e: e.ignore()
             self._quality_combo.addItem("—", "")
             for key, lbl in _qual_pairs:
-                self._quality_combo.addItem(lbl, key)
+                self._quality_combo.addItem(_t(lbl), key)
             self._quality_combo.setFixedWidth(70)
             self._quality_combo.currentIndexChanged.connect(self._save_inline_attrs)
             r1.addWidget(self._quality_combo)
@@ -815,7 +815,7 @@ class AISearchApp(QMainWindow):
             self._res_combo.wheelEvent = lambda e: e.ignore()
             self._res_combo.addItem("—", "")
             for key, lbl in _res_pairs:
-                self._res_combo.addItem(lbl, key)
+                self._res_combo.addItem(_t(lbl), key)
             self._res_combo.setFixedWidth(80)
             self._res_combo.currentIndexChanged.connect(self._save_inline_attrs)
             r1.addWidget(self._res_combo)
@@ -835,7 +835,7 @@ class AISearchApp(QMainWindow):
             grid.setSpacing(2)
             grid.setContentsMargins(0, 0, 0, 0)
             for i, (key, label) in enumerate(_variant_pairs):
-                cb = QCheckBox(label)
+                cb = QCheckBox(_t(label))
                 cb.setStyleSheet("color: #e0e0e0;")
                 cb.toggled.connect(self._save_inline_attrs)
                 self._inline_cbs[key] = cb
@@ -855,7 +855,7 @@ class AISearchApp(QMainWindow):
             self._audio_combo.wheelEvent = lambda e: e.ignore()
             self._audio_combo.addItem("—", "")
             for key, label in _audio_pairs:
-                self._audio_combo.addItem(label, key)
+                self._audio_combo.addItem(_t(label), key)
             self._audio_combo.currentIndexChanged.connect(self._save_inline_attrs)
             r3.addWidget(self._audio_combo)
             r3.addStretch()

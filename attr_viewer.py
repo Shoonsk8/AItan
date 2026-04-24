@@ -374,7 +374,8 @@ class FieldWidget(QGroupBox):
             grid = QGridLayout(); grid.setSpacing(3)
             COLS = len(options) if style == "radio" else 4
             for i, (k, lbl) in enumerate(options):
-                btn = QPushButton(lbl)
+                btn = QPushButton(_lang_label(lbl))
+                btn._lbl_raw = lbl
                 btn.setCheckable(True)
                 btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                 btn.setStyleSheet(_BTN_OFF)
@@ -1917,6 +1918,11 @@ class AttrViewerWidget(QWidget):
             w.setTitle(_lang_label(w._label_raw))
             if getattr(w, "_cb", None):
                 w._fill_combo(preserve=True)
+            # Taglist/boolean/radio buttons keep raw label on btn._lbl_raw
+            for _btn in getattr(w, "_btns", {}).values():
+                _raw = getattr(_btn, "_lbl_raw", None)
+                if _raw:
+                    _btn.setText(_lang_label(_raw))
             for sub_key, coded_cb in getattr(w, "_coded_combos", []):
                 cur = coded_cb.currentData()
                 sub_opts = w._cfg.get(sub_key, []) if hasattr(w, "_cfg") else []

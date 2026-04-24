@@ -689,7 +689,7 @@ class PreviewWindow(QWidget):
         self._quality_combo.wheelEvent = lambda e: e.ignore()
         self._quality_combo.addItem("—", "")
         for key, lbl in attrs_mod.TAG_GROUPS.get("Quality", []):
-            self._quality_combo.addItem(lbl, key)
+            self._quality_combo.addItem(_t(lbl), key)
         self._quality_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._quality_combo.currentIndexChanged.connect(self._save_attrs)
 
