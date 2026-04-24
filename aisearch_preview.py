@@ -1488,7 +1488,20 @@ class PreviewWindow(QWidget):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
             _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
             if _mode == "when_empty":
-                _all_filled = (all(_entry.get(f) for f in _clip_fields)
+                # Check both entry.field (for 1/2/3dig fields) AND entry.tags
+                # (for matrix fields like X, Background).
+                _tags_set_check = set(_entry.get("tags", []))
+                _x_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
+                _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
+                def _field_filled(f):
+                    if _entry.get(f):
+                        return True
+                    if f == "x" and (_tags_set_check & _x_opts_check):
+                        return True
+                    if f == "bg" and (_tags_set_check & _bg_opts_check):
+                        return True
+                    return False
+                _all_filled = (all(_field_filled(f) for f in _clip_fields)
                                and _entry.get("person_id"))
                 if _all_filled:
                     # Clear the two inspect debug text boxes
@@ -1509,6 +1522,16 @@ class PreviewWindow(QWidget):
                     _skip = {f for f in _clip_fields if _entry.get(f)}
                     if _entry.get("person_id"):
                         _skip.add("person_id")
+                    # Matrix fields (X, Background) store their selected code in
+                    # entry.tags, not entry.x / entry.bg. Detect those too.
+                    _tags_set = set(_entry.get("tags", []))
+                    if _tags_set:
+                        _x_opts = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
+                        if _tags_set & _x_opts:
+                            _skip.add("x")
+                        _bg_opts = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
+                        if _tags_set & _bg_opts:
+                            _skip.add("bg")
                     self._on_inspect(skip_fields=_skip)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
