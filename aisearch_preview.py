@@ -2064,8 +2064,20 @@ class PreviewWindow(QWidget):
                     _entry["editable"] = True
                     _changed = True
                 if _changed:
-                    _entry["tags"] = _tags
-                    app.attrs_data[p] = _entry
+                    # Merge into the LIVE entry so concurrent user edits (prompt,
+                    # neg_prompt, note, seed, etc.) are not clobbered by this
+                    # stale background snapshot.
+                    _live = app.attrs_data.get(p)
+                    if _live is None:
+                        _live = {}
+                        app.attrs_data[p] = _live
+                    _live["tags"] = _tags
+                    for _k in ("meta", "person_id", "editable", "prompt", "seed"):
+                        if _k in _entry:
+                            # Never overwrite user-typed text with our stale copy
+                            if _k in ("prompt", "seed") and _live.get(_k):
+                                continue
+                            _live[_k] = _entry[_k]
                     attrs_mod.save(app.current_project, app.attrs_data)
                 def _safe_refresh(p=p, pid=_matched_pid):
                     if self._attr_path != p:
