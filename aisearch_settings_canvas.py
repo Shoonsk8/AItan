@@ -89,9 +89,10 @@ class _CanvasMixin:
         proj_bar.addWidget(_insp_lbl)
         self._clip_inspect_mode_cb = QComboBox()
         self._clip_inspect_mode_cb.wheelEvent = lambda e: e.ignore()
-        self._clip_inspect_mode_cb.addItem(_t("No inspection / 検査なし"),    "never")
-        self._clip_inspect_mode_cb.addItem(_t("All the time / 常に"),         "always")
-        self._clip_inspect_mode_cb.addItem(_t("On watch receive / 監視受信時"), "watch")
+        self._clip_inspect_mode_cb.addItem(_t("No inspection / 検査なし"),                              "never")
+        self._clip_inspect_mode_cb.addItem(_t("Skip when determined / 判定済みはスキップ"),              "when_empty")
+        self._clip_inspect_mode_cb.addItem(_t("Detect every time / 毎回検出"),                          "always")
+        self._clip_inspect_mode_cb.addItem(_t("On watch receive / 監視受信時"),                          "watch")
         _cur_mode = self.app.config.get("clip_inspect_mode", "never")
         _mi = self._clip_inspect_mode_cb.findData(_cur_mode)
         if _mi >= 0:

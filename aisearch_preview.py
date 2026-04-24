@@ -1466,34 +1466,39 @@ class PreviewWindow(QWidget):
             self._project_edit.blockSignals(False)
             self._seed_edit.blockSignals(False)
         # Auto-run CLIP + face inspect based on clip_inspect_mode setting.
-        # If every field CLIP/face can fill is already set, skip detection and
-        # show the debug boxes blank — no point re-running when results exist.
+        #   "never"      → no detection
+        #   "when_empty" → detect only fields that are empty; mark filled ones
+        #                   as ignored; skip entirely if everything is filled
+        #   "always"     → detect every time, show all scores regardless
+        #   "watch"      → only on watch-folder receive (handled elsewhere)
         _mode = self.handler.app.config.get("clip_inspect_mode", "never")
-        if _mode == "always":
+        if _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
             _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
-            _all_filled = (all(_entry.get(f) for f in _clip_fields)
-                           and _entry.get("person_id"))
-            if _all_filled:
-                # Clear the two inspect debug text boxes
-                if getattr(self, "_clip_inspect_edit", None):
-                    self._clip_inspect_edit.setPlainText("")
-                if getattr(self, "_face_inspect_edit", None):
-                    self._face_inspect_edit.setPlainText("")
-                # Also clear the canvas debug tiles so stale score text from an
-                # earlier detection on this (or another) file doesn't linger.
-                _CF_KEYS = ("CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
-                            "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE")
-                for _k in _CF_KEYS:
-                    if _k in _entry:
-                        del _entry[_k]
-                    self._update_canvas_text_widget(_k, "")
-            else:
-                # Pass the set of already-filled fields so _on_inspect marks
-                # their CLIP_* tiles as "(ignored — already set)" instead of
-                # dumping scores. Only empty fields get real detection output.
-                _skip = {f for f in _clip_fields if _entry.get(f)}
-                self._on_inspect(skip_fields=_skip)
+            if _mode == "when_empty":
+                _all_filled = (all(_entry.get(f) for f in _clip_fields)
+                               and _entry.get("person_id"))
+                if _all_filled:
+                    # Clear the two inspect debug text boxes
+                    if getattr(self, "_clip_inspect_edit", None):
+                        self._clip_inspect_edit.setPlainText("")
+                    if getattr(self, "_face_inspect_edit", None):
+                        self._face_inspect_edit.setPlainText("")
+                    # Also clear the canvas debug tiles so stale score text
+                    # from an earlier detection doesn't linger.
+                    _CF_KEYS = ("CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
+                                "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE")
+                    for _k in _CF_KEYS:
+                        if _k in _entry:
+                            del _entry[_k]
+                        self._update_canvas_text_widget(_k, "")
+                else:
+                    # Detect only empty fields; show "ignored" for filled ones.
+                    _skip = {f for f in _clip_fields if _entry.get(f)}
+                    self._on_inspect(skip_fields=_skip)
+            else:  # _mode == "always"
+                # Detect every time, full scores for every field.
+                self._on_inspect()
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
