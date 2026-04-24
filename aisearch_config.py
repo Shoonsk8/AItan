@@ -71,7 +71,21 @@ def load_config(project=None):
     if os.path.exists(path):
         try:
             with open(path, 'r') as f:
-                return {**defaults, **json.load(f)}
+                cfg = {**defaults, **json.load(f)}
+            # One-time migration: before v1.971, clip_inspect_mode="always"
+            # meant "detect but skip when fields already set". That behavior is
+            # now "when_empty"; "always" now means force every time. Migrate
+            # so users keep the behavior they previously chose.
+            if (not cfg.get("_clip_mode_migrated_v1971")
+                    and cfg.get("clip_inspect_mode") == "always"):
+                cfg["clip_inspect_mode"] = "when_empty"
+                cfg["_clip_mode_migrated_v1971"] = True
+                try:
+                    with open(path, "w") as fh:
+                        json.dump(cfg, fh, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+            return cfg
         except:
             return defaults
     return defaults
