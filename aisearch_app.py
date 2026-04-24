@@ -1823,6 +1823,20 @@ class AISearchApp(QMainWindow):
                     self.attrs_data, path, self.current_project, skip_heavy=True)
             except Exception:
                 pass
+            # O (orientation / aspect), R (resolution), K (fps) — derived from
+            # file dimensions, cheap; fill them on the live entry so the preview
+            # shows them immediately. Only set codes that aren't already present.
+            try:
+                _ork = attrs_mod.detect_file_attrs(path)
+                if _ork:
+                    _e = self.attrs_data.setdefault(path, {})
+                    for _fk in ("o", "r", "k"):
+                        _fv = _ork.get(_fk, "")
+                        if _fv and not _e.get(_fk):
+                            _e[_fk] = _fv
+                            attrs_dirty = True
+            except Exception:
+                pass
             # CLIP auto-detect and face detection are deliberately NOT run here.
             # Previously they fired in the watch scan before the preview even
             # opened, which (a) made the pop-up slow and (b) left the entry
