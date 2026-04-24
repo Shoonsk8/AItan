@@ -2,6 +2,7 @@ import os
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTabWidget, QWidget, QApplication)
 from PyQt6.QtCore import Qt
 import aisearch_config as cfg
+from attr_viewer import _lang_label
 from aisearch_settings_widgets import _WsSec, _WsGroup
 from aisearch_settings_db import _DbMixin
 from aisearch_settings_appearance import _AppearanceMixin
@@ -11,7 +12,7 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "1.961"
+VERSION = "1.97"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
@@ -23,7 +24,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
             Qt.WindowType.WindowMinimizeButtonHint |
             Qt.WindowType.WindowMaximizeButtonHint)
         self.app = app_instance
-        self.setWindowTitle(f"Settings & DB Maintenance - Ver {VERSION}")
+        self.setWindowTitle(_lang_label(f"Settings & DB Maintenance - Ver {VERSION} / 設定 & DBメンテナンス - Ver {VERSION}"))
         self.resize(800, 850)
 
         self._is_scanning = False
@@ -58,11 +59,19 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         self._tabs_ready = set()   # set after actual widget build completes
 
         # Add placeholder widgets so tab labels are visible immediately
-        _labels = ["🗄 Database", "👤 Persons", "⚙ Settings",
-                   "🎨 Thresholds", "🖌 Appearance", "🏷 Attributes", "📁 Filename Rules",
-                   "🔗 Meta Map", "🖼 Canvas"]
-        for lbl in _labels:
-            self.tabs.addTab(QWidget(), lbl)
+        self._tab_labels_raw = [
+            "🗄 Database / 🗄 DB",
+            "👤 Persons / 👤 人物",
+            "⚙ Settings / ⚙ 設定",
+            "🎨 Thresholds / 🎨 閾値",
+            "🖌 Appearance / 🖌 外観",
+            "🏷 Attributes / 🏷 属性",
+            "📁 Filename Rules / 📁 ファイル名規則",
+            "🔗 Meta Map / 🔗 メタマップ",
+            "🖼 Canvas / 🖼 キャンバス",
+        ]
+        for lbl in self._tab_labels_raw:
+            self.tabs.addTab(QWidget(), _lang_label(lbl))
 
         # Always build tab 0 (DB tab) first — showEvent calls _sync_scan_section which
         # needs DB tab widgets regardless of which tab is shown initially.
@@ -105,6 +114,20 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         # If tab 0 just finished building, run the sync that showEvent couldn't
         if index == 0:
             self._sync_scan_section(self.app.current_project)
+
+    def rebuild_for_language(self):
+        """Update tab labels and rebuild all tabs for new language."""
+        for i, raw in enumerate(self._tab_labels_raw):
+            self.tabs.setTabText(i, _lang_label(raw))
+        self.setWindowTitle(_lang_label(
+            f"Settings & DB Maintenance - Ver {VERSION} / 設定 & DBメンテナンス - Ver {VERSION}"))
+        cur = self.tabs.currentIndex()
+        built = set(self._tabs_built)
+        self._tabs_built.clear()
+        self._tabs_ready.clear()
+        for i in built:
+            self._do_build_tab(i)
+        self.tabs.setCurrentIndex(cur)
 
     def showEvent(self, event):
         super().showEvent(event)

@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QListWidget, QApplication)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
+from attr_viewer import _lang_label as _t
 
 import aisearch_logic as logic
 import aisearch_config as cfg
@@ -30,7 +31,7 @@ class _DbMixin:
         tab_outer.addWidget(scroll)
 
         # ── Switch Project ────────────────────────────────────────────────────
-        g1 = QGroupBox("📂 Switch Project")
+        g1 = QGroupBox(_t("📂 Switch Project / 📂 プロジェクト切替"))
         l1 = QHBoxLayout(g1)
         self.db_projects = sorted([
             f.replace('features_', '').replace('.pt', '')
@@ -42,17 +43,17 @@ class _DbMixin:
         self.proj_combo.setCurrentText(self.app.current_project)
         self.proj_combo.currentTextChanged.connect(self._on_project_select)
         l1.addWidget(self.proj_combo, stretch=1)
-        self.btn_load   = QPushButton("Load")
-        self.btn_load.setToolTip("Load selected project")
+        self.btn_load   = QPushButton(_t("Load / 読み込み"))
+        self.btn_load.setToolTip(_t("Load selected project / 選択したプロジェクトを読み込む"))
         self.btn_load.clicked.connect(self.switch_project)
         self.btn_load.setStyleSheet("background-color: #2a7a2a; color: white; font-weight: bold;")
-        self.chk_close_on_load = QCheckBox("Close")
-        self.chk_close_on_load.setToolTip("Close settings window when Load is pressed")
+        self.chk_close_on_load = QCheckBox(_t("Close / 閉じる"))
+        self.chk_close_on_load.setToolTip(_t("Close settings window when Load is pressed / 読み込み時に設定を閉じる"))
         self.chk_close_on_load.setChecked(self.app.config.get("close_on_load", True))
         self.chk_close_on_load.toggled.connect(
             lambda v: self.app.config.update({"close_on_load": v}))
-        self.btn_delete = QPushButton("Delete")
-        self.btn_delete.setToolTip("Delete project entirely")
+        self.btn_delete = QPushButton(_t("Delete / 削除"))
+        self.btn_delete.setToolTip(_t("Delete project entirely / プロジェクトを完全に削除"))
         self.btn_delete.clicked.connect(self.delete_project)
         self.btn_delete.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
         for b in [self.btn_load, self.chk_close_on_load, self.btn_delete]:
@@ -60,10 +61,10 @@ class _DbMixin:
         tl.addWidget(g1)
 
         # ── Create / Update Database ─────────────────────────────────────────
-        g2 = QGroupBox("🛠 Create / Update Database")
+        g2 = QGroupBox(_t("🛠 Create/Update Database / 🛠 DB作成/更新"))
         l2 = QVBoxLayout(g2)
         proj_name_row = QHBoxLayout()
-        proj_name_row.addWidget(QLabel("Project Name:"))
+        proj_name_row.addWidget(QLabel(_t("Project Name: / プロジェクト名：")))
         self.new_proj_entry = QLineEdit()
         self.new_proj_entry.setText(self.app.current_project or "")
         self.new_proj_entry.setPlaceholderText("Enter name for new or existing project…")
@@ -82,8 +83,8 @@ class _DbMixin:
                 self.dir_listbox.setRowCount(0)
                 self._update_generate_btn()
         self.new_proj_entry.textChanged.connect(_on_proj_name_changed)
-        btn_new_proj = QPushButton("Register")
-        btn_new_proj.setToolTip("Register a new project with the current name and directories")
+        btn_new_proj = QPushButton(_t("Register / 登録"))
+        btn_new_proj.setToolTip(_t("Register a new project with the current name and directories / 現在の名前とディレクトリで新しいプロジェクトを登録"))
         btn_new_proj.setMinimumWidth(120)
         btn_new_proj.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_new_proj.clicked.connect(self._create_new_project)
@@ -92,7 +93,7 @@ class _DbMixin:
 
         self.dir_listbox = QTableWidget(0, 2)
         self.dir_listbox.setFixedHeight(150)
-        self.dir_listbox.setHorizontalHeaderLabels(["Directory", "Recursive"])
+        self.dir_listbox.setHorizontalHeaderLabels([_t("Directory / ディレクトリ"), _t("Recursive / 再帰")])
         self.dir_listbox.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.dir_listbox.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.dir_listbox.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -100,14 +101,14 @@ class _DbMixin:
         l2.addWidget(self.dir_listbox)
 
         bf = QHBoxLayout()
-        self.btn_add_dir    = QPushButton("+ Add"); self.btn_add_dir.clicked.connect(self.add_dir)
+        self.btn_add_dir    = QPushButton(_t("+ Add / + 追加")); self.btn_add_dir.clicked.connect(self.add_dir)
         self.btn_add_dir.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
-        self.btn_remove_dir = QPushButton("Remove");  self.btn_remove_dir.clicked.connect(self.remove_selected_dirs)
+        self.btn_remove_dir = QPushButton(_t("Remove / 削除"));  self.btn_remove_dir.clicked.connect(self.remove_selected_dirs)
         self.btn_remove_dir.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
         bf.addWidget(self.btn_add_dir); bf.addWidget(self.btn_remove_dir); bf.addStretch()
         l2.addLayout(bf)
 
-        self.progress_label = QLabel("Status: Ready")
+        self.progress_label = QLabel(_t("Status: Ready / 状態：準備完了"))
         l2.addWidget(self.progress_label)
         self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
@@ -122,20 +123,20 @@ class _DbMixin:
 
         # ── 3 action buttons ──────────────────────────────────────────────────
         action_row = QHBoxLayout()
-        self.btn_generate = QPushButton("Scan ALL")
-        self.btn_generate.setToolTip("Process every file: CLIP + face + metadata.\nWARNING: resets and rebuilds from scratch.")
+        self.btn_generate = QPushButton(_t("Scan ALL / 全スキャン"))
+        self.btn_generate.setToolTip(_t("Process every file: CLIP+face+metadata. WARNING: resets from scratch. / 全ファイル処理：CLIP+顔+メタデータ。警告：最初からリビルド。"))
         self.btn_generate.clicked.connect(lambda: self.execute_generate(reset=True))
         self.btn_generate.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:6px;"))
         action_row.addWidget(self.btn_generate, stretch=1)
 
-        self.btn_scan_new = QPushButton("Update")
-        self.btn_scan_new.setToolTip("Process only new / unprocessed files.")
+        self.btn_scan_new = QPushButton(_t("Update / 更新"))
+        self.btn_scan_new.setToolTip(_t("Process only new / unprocessed files. / 新規・未処理のファイルのみ処理。"))
         self.btn_scan_new.clicked.connect(lambda: self.execute_generate(reset=False))
         self.btn_scan_new.setStyleSheet(
             "background-color: #1a5a1a; color: white; font-weight: bold; padding: 6px;")
         action_row.addWidget(self.btn_scan_new, stretch=1)
 
-        self.btn_stop = QPushButton("Stop")
+        self.btn_stop = QPushButton(_t("Stop / 停止"))
         self.btn_stop.setEnabled(False)
         self.btn_stop.setStyleSheet(cfg.btn_ss("btn_stop", self.app.config))
         self.btn_stop.clicked.connect(self._unified_stop)
@@ -145,7 +146,7 @@ class _DbMixin:
 
         # ── Utility buttons row ───────────────────────────────────────────────
         util_row = QHBoxLayout()
-        btn_rename_util = QPushButton("✏ Rename Files")
+        btn_rename_util = QPushButton(_t("✏ Rename Files / ✏ ファイルリネーム"))
         btn_rename_util.setToolTip(
             "Rename all project files to coded format (no CLIP/face scan).\n"
             "Update mode: rename only files not yet in coded format.")
@@ -158,7 +159,7 @@ class _DbMixin:
         btn_rename_util.clicked.connect(self._rename_util_clicked)
         util_row.addWidget(btn_rename_util)
 
-        btn_redetect = QPushButton("🔄 Re-detect All")
+        btn_redetect = QPushButton(_t("🔄 Re-detect All / 🔄 再検出"))
         btn_redetect.setToolTip(
             "Re-run metadata + tag detection on all DB files.\n"
             "Picks up new filename rules (e.g. -watermark) on existing files.\n"
@@ -168,7 +169,7 @@ class _DbMixin:
         btn_redetect.clicked.connect(self._auto_detect_all)
         util_row.addWidget(btn_redetect)
 
-        btn_unlock_util = QPushButton("🔓 Unlock All")
+        btn_unlock_util = QPushButton(_t("🔓 Unlock All / 🔓 全解除"))
         btn_unlock_util.setToolTip(
             "Run metadata scan on all files to set editable flag — no CLIP scan.")
         btn_unlock_util.setStyleSheet(
@@ -176,7 +177,7 @@ class _DbMixin:
         btn_unlock_util.clicked.connect(self._unlock_all_metadata)
         util_row.addWidget(btn_unlock_util)
 
-        btn_fix_moved = QPushButton("🔍 Fix Moved Files")
+        btn_fix_moved = QPushButton(_t("🔍 Fix Moved Files / 🔍 移動ファイル修正"))
         btn_fix_moved.setToolTip(
             "Scan configured directories for files matching missing DB entries.\n"
             "Remaps moved/renamed paths without re-scanning.")
@@ -202,8 +203,8 @@ class _DbMixin:
         # ── Options row: Auto rename ──────────────────────────────────────────
         opt_row = QHBoxLayout()
 
-        self.chk_rename_on_scan = _QCB("✏️ Auto rename")
-        self.chk_rename_on_scan.setToolTip("Auto-rename files during scan using Filename Rules.")
+        self.chk_rename_on_scan = _QCB(_t("✏️ Auto rename / ✏️ 自動リネーム"))
+        self.chk_rename_on_scan.setToolTip(_t("Auto-rename files during scan using Filename Rules. / スキャン中にファイル名規則で自動リネーム。"))
         self.chk_rename_on_scan.setChecked(
             attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False))
         def _on_rename_toggled(v):
@@ -240,9 +241,9 @@ class _DbMixin:
         tl.addWidget(g2)
 
         # ── Watch Folders ─────────────────────────────────────────────────────
-        g_watch = QGroupBox("👁 Watch Folders (auto-add new files)")
+        g_watch = QGroupBox(_t("👁 Watch Folders (auto-add new files) / 👁 監視フォルダ（自動追加）"))
         gw = QVBoxLayout(g_watch)
-        gw.addWidget(QLabel("New files dropped here are added to the DB automatically:"))
+        gw.addWidget(QLabel(_t("New files dropped here are added to the DB automatically: / ここに追加されたファイルは自動的にDBに登録されます：")))
         self._watch_dir_list = QListWidget()
         self._watch_dir_list.setFixedHeight(80)
         # watch_dirs is global — always read from global config
@@ -251,16 +252,16 @@ class _DbMixin:
             self._watch_dir_list.addItem(d)
         gw.addWidget(self._watch_dir_list)
         wr = QHBoxLayout()
-        btn_add_w = QPushButton("+ Add"); btn_add_w.clicked.connect(self._add_watch_dir)
+        btn_add_w = QPushButton(_t("+ Add / + 追加")); btn_add_w.clicked.connect(self._add_watch_dir)
         btn_add_w.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
-        btn_rem_w = QPushButton("Remove"); btn_rem_w.clicked.connect(self._remove_watch_dir)
+        btn_rem_w = QPushButton(_t("Remove / 削除")); btn_rem_w.clicked.connect(self._remove_watch_dir)
         btn_rem_w.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config))
         wr.addWidget(btn_add_w); wr.addWidget(btn_rem_w); wr.addStretch()
         gw.addLayout(wr)
         tl.addWidget(g_watch)
 
         tl.addStretch()
-        tabs.addTab(tab_data, "🗄 Database")
+        tabs.addTab(tab_data, _t("🗄 Database / 🗄 DB"))
 
     # --- scanning ---
 

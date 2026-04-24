@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
 import aisearch_config as cfg
+from attr_viewer import _lang_label as _t
 
 
 class _AppearanceMixin:
@@ -25,7 +26,7 @@ class _AppearanceMixin:
 
         # Language — first item
         lang_row = QHBoxLayout()
-        lang_row.addWidget(QLabel("Language:"))
+        lang_row.addWidget(QLabel(_t("Language: / 言語：")))
         self._lang_cb = QComboBox()
         self._lang_cb.wheelEvent = lambda e: e.ignore()
         self._lang_cb.addItem("English", "en")
@@ -52,6 +53,9 @@ class _AppearanceMixin:
             for _w in [getattr(self, "_canvas_widget", None), _sc]:
                 if _w and hasattr(_w, "refresh_language"):
                     _w.refresh_language()
+            if hasattr(self, "rebuild_for_language"):
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self.rebuild_for_language)
             if _sc and _cur_path:
                 import aisearch_attrs as _am
                 _entry = _am.get(self.app.attrs_data, _cur_path)
@@ -62,54 +66,51 @@ class _AppearanceMixin:
         sl.addLayout(lang_row)
         sl.addWidget(_hsep())
 
-        g3 = QGroupBox("⚙ Viewer Options")
+        g3 = QGroupBox(_t("⚙ Viewer Options / ⚙ 表示オプション"))
         l3 = QVBoxLayout(g3)
-        self.check_viewer = QCheckBox("Don't close viewer when opening new file")
+        self.check_viewer = QCheckBox(_t("Don't close viewer when opening new file / 新しいファイルを開くときビューアを閉じない"))
         self.check_viewer.setChecked(self.app.keep_viewer_open)
         self.check_viewer.toggled.connect(self._save_viewer_option)
         l3.addWidget(self.check_viewer)
-        self.check_always_on_top = QCheckBox("Preview window always on top")
+        self.check_always_on_top = QCheckBox(_t("Preview window always on top / プレビューを常に前面に表示"))
         self.check_always_on_top.setChecked(self.app.config.get("preview_always_on_top", False))
         self.check_always_on_top.toggled.connect(self._save_always_on_top)
         l3.addWidget(self.check_always_on_top)
-        self.check_dbl_spread = QCheckBox("Double-click spreads preview instead of opening external viewer")
+        self.check_dbl_spread = QCheckBox(_t("Double-click spreads preview / ダブルクリックでプレビュー拡大"))
         self.check_dbl_spread.setChecked(self.app.config.get("dbl_click_spread", False))
         self.check_dbl_spread.toggled.connect(self._save_dbl_spread)
         l3.addWidget(self.check_dbl_spread)
         sl.addWidget(g3)
 
-        g4 = QGroupBox("🗑 Trash Options")
+        g4 = QGroupBox(_t("🗑 Trash Options / 🗑 ゴミ箱オプション"))
         l4 = QVBoxLayout(g4)
-        self.check_delete_confirm = QCheckBox("Ask for confirmation before moving to Trash")
+        self.check_delete_confirm = QCheckBox(_t("Ask confirmation before moving to Trash / ゴミ箱に移動する前に確認"))
         self.check_delete_confirm.setChecked(self.app.config.get("delete_confirm", True))
         self.check_delete_confirm.toggled.connect(self._save_delete_confirm)
         l4.addWidget(self.check_delete_confirm)
 
-        self.check_conflict_confirm = QCheckBox("Ask for confirmation on file conflict")
+        self.check_conflict_confirm = QCheckBox(_t("Ask confirmation on file conflict / ファイル競合時に確認"))
         self.check_conflict_confirm.setChecked(self.app.config.get("conflict_confirm", True))
         self.check_conflict_confirm.toggled.connect(self._save_conflict_confirm)
         l4.addWidget(self.check_conflict_confirm)
         sl.addWidget(g4)
 
-        g_dup = QGroupBox("♊ Duplicate Tools")
+        g_dup = QGroupBox(_t("♊ Duplicate Tools / ♊ 重複ツール"))
         l_dup = QVBoxLayout(g_dup)
-        self.check_czkawka_buttons = QCheckBox("Show czkawka import/export buttons")
-        self.check_czkawka_buttons.setToolTip(
-            "Adds Import/Export buttons to the Duplicates toolbar for\n"
-            "round-tripping with czkawka's JSON format")
+        self.check_czkawka_buttons = QCheckBox(_t("Show czkawka import/export buttons / czkawkaボタンを表示"))
         self.check_czkawka_buttons.setChecked(self.app.config.get("show_czkawka_buttons", False))
         self.check_czkawka_buttons.toggled.connect(self._save_czkawka_buttons)
         l_dup.addWidget(self.check_czkawka_buttons)
         sl.addWidget(g_dup)
 
-        g5 = QGroupBox("📁 File Conflict on Move")
+        g5 = QGroupBox(_t("📁 File Conflict on Move / 📁 移動時のファイル競合"))
         l5 = QVBoxLayout(g5)
         self._conflict_group = QButtonGroup(self)
         options = [
-            ("size_check",       "Same size → overwrite silently, different size → rename with number (recommended)"),
-            ("always_rename",    "Always rename with number (keep both files)"),
-            ("always_overwrite", "Always overwrite without asking"),
-            ("always_ask",       "Always ask (Overwrite / Rename / Cancel)"),
+            ("size_check",       _t("Same size→overwrite, different size→rename (recommended) / 同サイズ→上書き、違うサイズ→番号付きリネーム（推奨）")),
+            ("always_rename",    _t("Always rename with number (keep both) / 常に番号付きリネーム（両方保持）")),
+            ("always_overwrite", _t("Always overwrite without asking / 確認なしに常に上書き")),
+            ("always_ask",       _t("Always ask (Overwrite/Rename/Cancel) / 常に確認（上書き/リネーム/キャンセル）")),
         ]
         current = self.app.config.get("move_conflict", "size_check")
         for val, label in options:
@@ -121,9 +122,9 @@ class _AppearanceMixin:
             l5.addWidget(rb)
         sl.addWidget(g5)
 
-        g6 = QGroupBox("🔍 Search Options")
+        g6 = QGroupBox(_t("🔍 Search Options / 🔍 検索オプション"))
         l6 = QHBoxLayout(g6)
-        l6.addWidget(QLabel("Max search results:"))
+        l6.addWidget(QLabel(_t("Max search results: / 最大検索件数：")))
         self._spin_max_results = QSpinBox()
         self._spin_max_results.setRange(10, 2000)
         self._spin_max_results.setSingleStep(50)
@@ -135,7 +136,7 @@ class _AppearanceMixin:
         sl.addWidget(g6)
 
         sl.addStretch()
-        tabs.addTab(tab_settings, "⚙ Settings")
+        tabs.addTab(tab_settings, _t("⚙ Settings / ⚙ 設定"))
 
     def _build_colors_tab(self, tabs):
         tab_colors = QWidget()
@@ -162,19 +163,25 @@ class _AppearanceMixin:
 
         colors = self.app.config.setdefault("colors", cfg.DEFAULT_COLORS)
 
-        g_sel = QGroupBox("Row Selection")
+        g_sel = QGroupBox(_t("Row Selection / 行選択"))
         gs = QVBoxLayout(g_sel)
-        gs.addLayout(color_row("Selected row",
+        gs.addLayout(color_row(_t("Selected row / 選択行"),
             lambda: colors.get("selection", cfg.DEFAULT_COLORS["selection"]),
             lambda v: colors.update({"selection": v})))
         col_layout.addWidget(g_sel)
 
-        g_dup = QGroupBox("Duplicate Groups")
+        g_dup = QGroupBox(_t("Duplicate Groups / 重複グループ"))
         gd = QVBoxLayout(g_dup)
-        dup_labels = ["Group A — near-exact (≥0.98)", "Group A — similar (≥0.90)",
-                      "Group A — pale (≥0.80)",        "Group A — faint (<0.80)",
-                      "Group B — near-exact (≥0.98)",  "Group B — similar (≥0.90)",
-                      "Group B — pale (≥0.80)",         "Group B — faint (<0.80)"]
+        dup_labels = [
+            _t("Group A — near-exact (≥0.98) / グループA — ほぼ同一 (≥0.98)"),
+            _t("Group A — similar (≥0.90) / グループA — 類似 (≥0.90)"),
+            _t("Group A — pale (≥0.80) / グループA — 薄い (≥0.80)"),
+            _t("Group A — faint (<0.80) / グループA — 微 (<0.80)"),
+            _t("Group B — near-exact (≥0.98) / グループB — ほぼ同一 (≥0.98)"),
+            _t("Group B — similar (≥0.90) / グループB — 類似 (≥0.90)"),
+            _t("Group B — pale (≥0.80) / グループB — 薄い (≥0.80)"),
+            _t("Group B — faint (<0.80) / グループB — 微 (<0.80)"),
+        ]
         for i, lbl in enumerate(dup_labels):
             family = "dup_a" if i < 4 else "dup_b"
             idx    = i % 4
@@ -183,28 +190,29 @@ class _AppearanceMixin:
                 lambda v, f=family, x=idx: colors.get(f, cfg.DEFAULT_COLORS[f]).__setitem__(x, v)))
         col_layout.addWidget(g_dup)
 
-        g_score = QGroupBox("Search Score Colors")
+        g_score = QGroupBox(_t("Search Score Colors / 検索スコア色"))
         gsc = QVBoxLayout(g_score)
-        score_labels = ["Score ≥ 0.98", "Score ≥ 0.92", "Score ≥ 0.85", "Score ≥ 0.75"]
+        score_labels = [_t("Score ≥ 0.98 / スコア ≥ 0.98"), _t("Score ≥ 0.92 / スコア ≥ 0.92"),
+                        _t("Score ≥ 0.85 / スコア ≥ 0.85"), _t("Score ≥ 0.75 / スコア ≥ 0.75")]
         for i, lbl in enumerate(score_labels):
             gsc.addLayout(color_row(lbl,
                 lambda x=i: colors.get("score", cfg.DEFAULT_COLORS["score"])[x],
                 lambda v, x=i: colors.get("score", cfg.DEFAULT_COLORS["score"]).__setitem__(x, v)))
         col_layout.addWidget(g_score)
 
-        g_attrs = QGroupBox("Attributes")
+        g_attrs = QGroupBox(_t("Attributes / 属性"))
         ga = QVBoxLayout(g_attrs)
-        ga.addLayout(color_row("Unmarked file (dup view)",
+        ga.addLayout(color_row(_t("Unmarked file (dup view) / 未マークファイル（重複表示）"),
             lambda: colors.get("unmarked", cfg.DEFAULT_COLORS["unmarked"]),
             lambda v: colors.update({"unmarked": v})))
         col_layout.addWidget(g_attrs)
 
-        btn_reset = QPushButton("Reset All to Defaults")
+        btn_reset = QPushButton(_t("Reset All to Defaults / すべてデフォルトに戻す"))
         btn_reset.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:4px 12px;"))
         btn_reset.clicked.connect(self._reset_colors)
         col_layout.addWidget(btn_reset)
         col_layout.addStretch()
-        tabs.addTab(scroll, "🎨 Thresholds")
+        tabs.addTab(scroll, _t("🎨 Thresholds / 🎨 閾値"))
 
     def _build_appearance_tab(self, tabs):
         def _hsep():
@@ -218,7 +226,7 @@ class _AppearanceMixin:
         fl.setSpacing(12)
 
         # Theme
-        theme_lbl = QLabel("Theme:")
+        theme_lbl = QLabel(_t("Theme: / テーマ："))
         fl.addWidget(theme_lbl)
         theme_row = QHBoxLayout()
         theme_group = QButtonGroup(tab_fonts)
@@ -242,7 +250,7 @@ class _AppearanceMixin:
         fl.addWidget(_hsep())
 
         # Font sizes
-        fl.addWidget(QLabel("Font sizes:"))
+        fl.addWidget(QLabel(_t("Font sizes: / フォントサイズ：")))
 
         def font_row(label, key, default):
             row = QHBoxLayout()
@@ -260,17 +268,17 @@ class _AppearanceMixin:
             row.addWidget(sp)
             return row
 
-        fl.addLayout(font_row("List (table)",     "table_font_size",   10))
-        fl.addLayout(font_row("Attributes panel", "attr_font_size",    10))
-        fl.addLayout(font_row("Project name",     "project_font_size", 30))
-        fl.addLayout(font_row("General",          "ui_font_size",      10))
+        fl.addLayout(font_row(_t("List (table) / リスト（テーブル）"),     "table_font_size",   10))
+        fl.addLayout(font_row(_t("Attributes panel / 属性パネル"),        "attr_font_size",    10))
+        fl.addLayout(font_row(_t("Project name / プロジェクト名"),         "project_font_size", 30))
+        fl.addLayout(font_row(_t("General / 全般"),                       "ui_font_size",      10))
 
         fl.addWidget(_hsep())
-        fl.addWidget(QLabel("Face thumbnail size:"))
+        fl.addWidget(QLabel(_t("Face thumbnail size: / 顔サムネイルサイズ：")))
 
         def face_thumb_row():
             row = QHBoxLayout()
-            row.addWidget(QLabel("Person ID thumbnail (px)"))
+            row.addWidget(QLabel(_t("Person ID thumbnail (px) / 人物IDサムネイル (px)")))
             row.addStretch()
             sp = QSpinBox()
             sp.setRange(32, 256)
@@ -287,7 +295,7 @@ class _AppearanceMixin:
         fl.addLayout(face_thumb_row())
 
         fl.addWidget(_hsep())
-        fl.addWidget(QLabel("Button Colors:"))
+        fl.addWidget(QLabel(_t("Button Colors: / ボタンカラー：")))
 
         colors = self.app.config.setdefault("colors", cfg.DEFAULT_COLORS)
 
@@ -307,16 +315,16 @@ class _AppearanceMixin:
             return row
 
         for key, label in [
-            ("btn_add",     "Add"),
-            ("btn_remove",  "Remove"),
-            ("btn_write",   "Write / Save / Overwrite"),
-            ("btn_stop",    "Stop"),
-            ("btn_special", "Special  (Scan ALL, Reset defaults)"),
+            ("btn_add",     _t("Add / 追加")),
+            ("btn_remove",  _t("Remove / 削除")),
+            ("btn_write",   _t("Write/Save/Overwrite / 書き込み/保存/上書き")),
+            ("btn_stop",    _t("Stop / 停止")),
+            ("btn_special", _t("Special (Scan ALL, Reset) / 特殊（全スキャン、リセット）")),
         ]:
             fl.addLayout(_btn_color_row(label, key))
 
         fl.addStretch()
-        tabs.addTab(tab_fonts, "🖌 Appearance")
+        tabs.addTab(tab_fonts, _t("🖌 Appearance / 🖌 外観"))
 
     # --- callbacks ---
 

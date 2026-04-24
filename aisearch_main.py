@@ -250,6 +250,8 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     _config = _cfg.load_config()
     app.setStyleSheet(THEMES.get(_config.get("theme", "Dark"), DARK_STYLE))
+    from attr_viewer import _UI_LANG as _ui_lang_init
+    _ui_lang_init["val"] = _config.get("ui_language", "en")
 
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aisearch_icon.png")
     if os.path.exists(icon_path):

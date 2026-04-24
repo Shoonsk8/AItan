@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt
 
 import aisearch_attrs as _am_ref
 import aisearch_config as cfg
+from attr_viewer import _lang_label as _t
 from aisearch_settings_widgets import _WsSec, _WsGroup
 
 
@@ -27,7 +28,7 @@ class _AttrsMixin:
 
         # ── Project selector ──────────────────────────────────────────────────
         proj_bar = QHBoxLayout(); proj_bar.setSpacing(6)
-        proj_bar.addWidget(QLabel("Attribute Set:"))
+        proj_bar.addWidget(QLabel(_t("Attribute Set: / 属性セット：")))
         self._attr_proj_cb = QComboBox()
         self._attr_proj_cb.wheelEvent = lambda e: e.ignore()
         self._attr_proj_cb.setFixedWidth(140)
@@ -46,15 +47,15 @@ class _AttrsMixin:
             self._attr_proj_cb.setCurrentIndex(_idx)
         proj_bar.addWidget(self._attr_proj_cb)
 
-        btn_proj_load = QPushButton("Load")
+        btn_proj_load = QPushButton(_t("Load / 読込"))
         btn_proj_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         proj_bar.addWidget(btn_proj_load)
 
-        self._btn_attr_save = btn_save_over = QPushButton("💾 Overwrite")
+        self._btn_attr_save = btn_save_over = QPushButton(_t("💾 Overwrite / 💾 上書き保存"))
         btn_save_over.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_save_over.clicked.connect(self._save_attr_groups)
         proj_bar.addWidget(btn_save_over)
-        self._attr_editing_lbl = QLabel(f"Editing: {_cur_proj}")
+        self._attr_editing_lbl = QLabel(_t(f"Editing: {_cur_proj} / 編集中: {_cur_proj}"))
         self._attr_editing_lbl.setStyleSheet("color:#aaa; font-style:italic;")
         proj_bar.addWidget(self._attr_editing_lbl)
 
@@ -108,7 +109,7 @@ class _AttrsMixin:
         def _reload_attr_sections():
             """Clear and reload all workspace sections for the selected project."""
             _loaded = self._attr_proj_cb.currentText().strip() or "default"
-            self._attr_editing_lbl.setText(f"Editing: {_loaded}")
+            self._attr_editing_lbl.setText(_t(f"Editing: {_loaded} / 編集中: {_loaded}"))
             # Clear existing widgets
             while self._attr_aw_vbox.count():
                 item = self._attr_aw_vbox.takeAt(0)
@@ -162,7 +163,7 @@ class _AttrsMixin:
 
         # ── Input bar ─────────────────────────────────────────────────────────
         inp_bar = QHBoxLayout(); inp_bar.setSpacing(6)
-        inp_bar.addWidget(QLabel("Prefix/Key:"))
+        inp_bar.addWidget(QLabel(_t("Prefix/Key: / プレフィックス/キー：")))
         self._attr_key_edit = QLineEdit()
         self._attr_key_edit.setFixedWidth(120)
         self._attr_key_edit.setPlaceholderText("e.g. MDL_img")
@@ -170,13 +171,15 @@ class _AttrsMixin:
 
         self._attr_style_cb = QComboBox()
         self._attr_style_cb.wheelEvent = lambda e: e.ignore()
-        self._attr_style_cb.addItem("Select style…")
-        for _s, _ln in [("1dig","1-digit"), ("2dig","2-digit independent"),
-                        ("3dig","3-digit independent"), ("matrix","16×16 matrix"),
-                        ("taglist","Tag List  (key · label)"),
-                        ("radio","Radio  (single-select tag list)"),
-                        ("text","Text Field  (prompt / notes)"),
-                        ("id","ID  (structural marker)"),
+        self._attr_style_cb.addItem(_t("Select style… / スタイルを選択…"))
+        for _s, _ln in [("1dig", _t("1-digit / 1桁")),
+                        ("2dig", _t("2-digit independent / 2桁独立")),
+                        ("3dig", _t("3-digit independent / 3桁独立")),
+                        ("matrix", _t("16×16 matrix / 16×16マトリックス")),
+                        ("taglist", _t("Tag List  (key · label) / タグリスト（キー・ラベル）")),
+                        ("radio",   _t("Radio  (single-select tag list) / ラジオ（単一選択）")),
+                        ("text",    _t("Text Field  (prompt / notes) / テキストフィールド")),
+                        ("id",      _t("ID  (structural marker) / ID（構造マーカー）")),
                         ]:
             self._attr_style_cb.addItem(_ln, _s)
         self._attr_style_cb.setFixedWidth(195)
@@ -191,14 +194,14 @@ class _AttrsMixin:
         for _gname in ["Head", "Body", "BG", "Technical", "Tags", "Text"]:
             self._attr_grp_cb.addItem(_gname)
 
-        btn_add_tbl = QPushButton("Add Table")
+        btn_add_tbl = QPushButton(_t("Add Table / テーブル追加"))
         btn_add_tbl.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
         inp_bar.addWidget(btn_add_tbl)
 
-        inp_bar.addWidget(QLabel("Group:"))
+        inp_bar.addWidget(QLabel(_t("Group: / グループ：")))
         inp_bar.addWidget(self._attr_grp_cb)
 
-        btn_add_grp = QPushButton("Add Group")
+        btn_add_grp = QPushButton(_t("Add Group / グループ追加"))
         btn_add_grp.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
         inp_bar.addWidget(btn_add_grp)
         inp_bar.addStretch()
@@ -323,11 +326,11 @@ class _AttrsMixin:
                 sec = _WsSec(f"{_sec_title_prefix}   │   ID", prefix=prefix, color=_sec_color)
                 _add_to_target(sec)
                 if prefix == "J":
-                    msg = "  Timestamp ID — auto-stamped by scan  (not editable)"
+                    msg = _t("  Timestamp ID — auto-stamped by scan  (not editable) / タイムスタンプID — スキャン時に自動付与（編集不可）")
                 elif prefix == "P":
-                    msg = "  Person ID — 3-digit hex, managed via DB → Person Management"
+                    msg = _t("  Person ID — 3-digit hex, managed via DB → Person Management / 人物ID — 3桁16進数、DBタブの人物管理で設定")
                 else:
-                    msg = f"  Structural ID marker  (no editable data)"
+                    msg = _t(f"  Structural ID marker  (no editable data) / 構造IDマーカー（編集データなし）")
                 blank_lbl = QLabel(msg)
                 blank_lbl.setStyleSheet("color:#666; font-style:italic; padding:8px;")
                 bl = QVBoxLayout(sec.content); bl.addWidget(blank_lbl)
@@ -386,9 +389,9 @@ class _AttrsMixin:
                     rl2 = QHBoxLayout(rw); rl2.setContentsMargins(0,0,0,0); rl2.setSpacing(6)
                     flag_note = QLabel("☑", styleSheet="color:#6ea6f0; font-size:10pt;")
                     rl2.addWidget(flag_note)
-                    rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                    rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
                     l_e = QLineEdit(existing_label); l_e.setMinimumWidth(160); l_e.setStyleSheet(_les)
-                    l_e.setPlaceholderText("Display Name")
+                    l_e.setPlaceholderText(_t("Display Name / 表示名"))
                     rl2.addWidget(l_e, stretch=1)
                     rl2.addWidget(QLabel(f"  key = {existing_key}", styleSheet="color:#555; font-size:8pt; font-style:italic;"))
                     bl_lay.addWidget(rw)
@@ -401,7 +404,7 @@ class _AttrsMixin:
                     tx_lay = QVBoxLayout(s.content)
                     tx_lay.setContentsMargins(8, 4, 8, 6); tx_lay.setSpacing(4)
                     key_row = QHBoxLayout(); key_row.setSpacing(6)
-                    key_row.addWidget(QLabel("Key:", styleSheet="color:#888; font-size:8pt;"))
+                    key_row.addWidget(QLabel(_t("Key: / キー："), styleSheet="color:#888; font-size:8pt;"))
                     key_e = QLineEdit(pfx)
                     key_e.setStyleSheet(_les); key_e.setMinimumWidth(160)
                     key_e.setPlaceholderText("JSON field key (e.g. positive_prompt)")
@@ -410,12 +413,12 @@ class _AttrsMixin:
                     tx_lay.addLayout(key_row)
                     key_e.textChanged.connect(
                         lambda txt, _s=s: _s._title_lbl.setText(
-                            f"Key = {txt or _s.prefix}   │   Text Field"))
+                            _t(f"Key = {txt or _s.prefix}   │   Text Field / キー = {txt or _s.prefix}   │   テキストフィールド")))
                     lbl_row = QHBoxLayout(); lbl_row.setSpacing(6)
-                    lbl_row.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                    lbl_row.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
                     lbl_e = QLineEdit()
                     lbl_e.setStyleSheet(_les); lbl_e.setMinimumWidth(160)
-                    lbl_e.setPlaceholderText("Display name (e.g. Prompt)")
+                    lbl_e.setPlaceholderText(_t("Display name (e.g. Prompt) / 表示名（例：プロンプト）"))
                     lbl_e.setAcceptDrops(False)
                     _known_labels = {
                         "prompt": "Positive Prompt", "neg_prompt": "Negative Prompt",
@@ -426,16 +429,16 @@ class _AttrsMixin:
                     lbl_row.addWidget(lbl_e, stretch=1)
                     tx_lay.addLayout(lbl_row)
                     ph_row = QHBoxLayout(); ph_row.setSpacing(6)
-                    ph_row.addWidget(QLabel("Hint:", styleSheet="color:#888; font-size:8pt;"))
+                    ph_row.addWidget(QLabel(_t("Hint: / ヒント："), styleSheet="color:#888; font-size:8pt;"))
                     ph_e = QLineEdit()
                     ph_e.setStyleSheet(_les); ph_e.setMinimumWidth(160)
-                    ph_e.setPlaceholderText("Placeholder hint shown in input box")
+                    ph_e.setPlaceholderText(_t("Placeholder hint shown in input box / 入力欄に表示されるヒント"))
                     ph_e.setAcceptDrops(False)
                     if tp:
                         ph_e.setText(tp)
                     ph_row.addWidget(ph_e, stretch=1)
                     tx_lay.addLayout(ph_row)
-                    type_note = QLabel("  Ⓣ multi-line text input")
+                    type_note = QLabel(_t("  Ⓣ multi-line text input / Ⓣ 複数行テキスト入力"))
                     type_note.setStyleSheet("color:#88cc88; font-size:8pt;")
                     tx_lay.addWidget(type_note)
                     self._attr_text_fields[pfx] = (lbl_e, ph_e, key_e)
@@ -453,8 +456,8 @@ class _AttrsMixin:
                         _sty_row.addWidget(QLabel("Style:", styleSheet="color:#888; font-size:8pt;"))
                         _sty_cb = QComboBox()
                         _sty_cb.wheelEvent = lambda e: e.ignore()
-                        _sty_cb.addItem("Tag List  (multi-select)", "taglist")
-                        _sty_cb.addItem("Radio  (single-select)",   "radio")
+                        _sty_cb.addItem(_t("Tag List  (multi-select) / タグリスト（複数選択）"), "taglist")
+                        _sty_cb.addItem(_t("Radio  (single-select) / ラジオ（単一選択）"),   "radio")
                         _sty_cb.setFixedWidth(185)
                         _sty_cb.setCurrentIndex(0 if sty == "taglist" else 1)
                         def _on_sty_change(idx, cb=_sty_cb, _s=s, _pfx=pfx):
@@ -478,19 +481,19 @@ class _AttrsMixin:
                             k_e = QLabel(k_val); k_e.setFixedWidth(90)
                             k_e.setStyleSheet(_lbl_ro_ss)
                             rl2.addWidget(k_e)
-                            rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                            rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
                             l_e = QLabel(l_val); l_e.setMinimumWidth(120)
                             l_e.setStyleSheet(_lbl_ro_ss)
                         else:
-                            rl2.addWidget(QLabel("Key:", styleSheet="color:#888; font-size:8pt;"))
+                            rl2.addWidget(QLabel(_t("Key: / キー："), styleSheet="color:#888; font-size:8pt;"))
                             k_e = QLineEdit(k_val); k_e.setFixedWidth(90)
                             k_e.setStyleSheet(_les)
                             k_e.setPlaceholderText("tag_key")
                             rl2.addWidget(k_e)
-                            rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                            rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
                             l_e = QLineEdit(l_val); l_e.setMinimumWidth(120)
                             l_e.setStyleSheet(_les)
-                            l_e.setPlaceholderText("Display Name")
+                            l_e.setPlaceholderText(_t("Display Name / 表示名"))
                         rl2.addWidget(l_e, stretch=1)
                         if not _readonly:
                             btn_x = QPushButton("✕"); btn_x.setFixedWidth(26)
@@ -518,7 +521,7 @@ class _AttrsMixin:
                     if not existing_pairs and not readonly:
                         _make_tag_row()
                     if not readonly:
-                        btn_add_row = QPushButton("+ Add")
+                        btn_add_row = QPushButton(_t("+ Add / ＋追加"))
                         btn_add_row.setFixedWidth(60)
                         btn_add_row.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "border:none; border-radius:2px;"))
                         btn_add_row.clicked.connect(lambda checked=False, g=pfx: _make_tag_row(grp=g))
@@ -532,10 +535,10 @@ class _AttrsMixin:
                     cl.setContentsMargins(4, 4, 4, 4); cl.setSpacing(4)
                     if sty == "matrix":
                         _mx_row = QHBoxLayout(); _mx_row.setSpacing(6)
-                        _mx_row.addWidget(QLabel("Name:", styleSheet="color:#888; font-size:8pt;"))
+                        _mx_row.addWidget(QLabel(_t("Name: / 名前："), styleSheet="color:#888; font-size:8pt;"))
                         _mx_name_e = QLineEdit()
                         _mx_name_e.setFixedWidth(180); _mx_name_e.setStyleSheet(_les)
-                        _mx_name_e.setPlaceholderText("e.g. Expression")
+                        _mx_name_e.setPlaceholderText(_t("e.g. Expression / 例：表情"))
                         _saved_mx = _am_ref.TAG_GROUPS.get("__col_names__", {}).get(pfx, [""])
                         _init_name = (_saved_mx[0] if _saved_mx else "") or pfx
                         _mx_name_e.setText(_init_name)
@@ -579,11 +582,11 @@ class _AttrsMixin:
                             or _am_ref.TAG_GROUPS.get("__parent_names__", {}).get(pfx)
                             or pfx.lower())
                         _pr_row = QHBoxLayout(); _pr_row.setSpacing(6)
-                        _pr_row.addWidget(QLabel("Parent:", styleSheet="color:#888; font-size:8pt;"))
+                        _pr_row.addWidget(QLabel(_t("Parent: / 親フィールド："), styleSheet="color:#888; font-size:8pt;"))
                         _is_coded_field = pfx in FIELD_DEFS
                         _parent_e = QLineEdit(_CODED_LABELS.get(pfx, _saved_parent) if _is_coded_field else _saved_parent)
                         _parent_e.setFixedWidth(140)
-                        _parent_e.setPlaceholderText("e.g. hair")
+                        _parent_e.setPlaceholderText(_t("e.g. hair / 例：hair"))
                         if _is_coded_field:
                             _parent_e.setEnabled(False)
                         else:
@@ -805,7 +808,7 @@ class _AttrsMixin:
         def _on_add_group():
             name = self._attr_grp_cb.currentText().strip()
             if not name:
-                QMessageBox.warning(self, "Input Error", "Enter a group name.")
+                QMessageBox.warning(self, _t("Input Error / 入力エラー"), _t("Enter a group name. / グループ名を入力してください。"))
                 return
             _build_ws_group(name)
 
@@ -816,13 +819,13 @@ class _AttrsMixin:
             raw    = self._attr_key_edit.text().strip()
             prefix = raw
             if not prefix:
-                QMessageBox.warning(self, "Input Error", "Enter a prefix/key.")
+                QMessageBox.warning(self, _t("Input Error / 入力エラー"), _t("Enter a prefix/key. / プレフィックス/キーを入力してください。"))
                 return
             if not style:
-                QMessageBox.warning(self, "Input Error", "Select a style.")
+                QMessageBox.warning(self, _t("Input Error / 入力エラー"), _t("Select a style. / スタイルを選択してください。"))
                 return
             if prefix in self._attr_ws_loaded:
-                QMessageBox.information(self, "Info", f"'{prefix}' already loaded.")
+                QMessageBox.information(self, _t("Info / 情報"), _t(f"'{prefix}' already loaded. / '{prefix}' は既にロード済みです。"))
                 return
             _build_ws_section(prefix, force_style=style, group=None)
             self._attr_key_edit.clear()
@@ -830,7 +833,7 @@ class _AttrsMixin:
         btn_add_tbl.clicked.connect(_on_add_table)
         aw_vbox.addStretch()
 
-        tabs.addTab(tab_attrs, "🏷 Attributes")
+        tabs.addTab(tab_attrs, _t("🏷 Attributes / 🏷 属性"))
 
     # --- callbacks ---
 
@@ -871,10 +874,10 @@ class _AttrsMixin:
             _tgt = (_proj.currentText().strip() or "default") if _proj else "default"
             _mb = QMessageBox(self)
             _mb.setIcon(QMessageBox.Icon.Warning)
-            _mb.setWindowTitle("Overwrite")
-            _mb.setText(f"This will overwrite the attribute set <b>'{_tgt}'</b>.<br>Continue?")
+            _mb.setWindowTitle(_t("Overwrite / 上書き確認"))
+            _mb.setText(_t(f"This will overwrite the attribute set <b>'{_tgt}'</b>.<br>Continue? / 属性セット <b>'{_tgt}'</b> を上書きします。<br>続けますか？"))
             _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            _cb = _QCB("Don't show this warning again")
+            _cb = _QCB(_t("Don't show this warning again / 次回から表示しない"))
             _mb.setCheckBox(_cb)
             if _mb.exec() != QMessageBox.StandardButton.Yes:
                 return

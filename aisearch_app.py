@@ -2030,15 +2030,31 @@ class AISearchApp(QMainWindow):
         self.lbl_dup_status.setText("")
         self._dup_queue = queue.Queue()
         base_dirs = list(self.base_dirs)
+        _media_exts = tuple(logic.EXT_IMG + logic.EXT_VID)
+
+        def _is_binary(p):
+            try:
+                with open(p, 'rb') as f:
+                    return b'\x00' in f.read(512)
+            except OSError:
+                return True
+
+        def _is_media(p):
+            pl = p.lower()
+            if pl.endswith(_media_exts):
+                return True
+            return _is_binary(p)
 
         def _worker():
             try:
-                # 1. Collect all files grouped by size (skip zero-byte files)
+                # 1. Collect all media files grouped by size (skip zero-byte files)
                 size_map = defaultdict(list)
                 for base in base_dirs:
                     for root, _, files in os.walk(base):
                         for fname in files:
                             fpath = os.path.join(root, fname)
+                            if not _is_media(fpath):
+                                continue
                             try:
                                 sz = os.path.getsize(fpath)
                                 if sz > 0:

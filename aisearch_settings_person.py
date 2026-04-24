@@ -8,6 +8,7 @@ from PyQt6.QtGui import QPixmap, QDrag
 
 import aisearch_attrs as attrs_mod
 import aisearch_config as cfg
+from attr_viewer import _lang_label as _t
 
 _CARD_MIME  = "PERSON_CARD"
 _GROUP_MIME = "REORDER_PERSON_GROUP"
@@ -116,12 +117,12 @@ class _PersonCard(QFrame):
             "QMenu{background:#2a2a2a;color:#ddd;border:1px solid #555;}"
             "QMenu::item:selected{background:#4a7a4e;}"
             "QMenu::separator{background:#555;height:1px;margin:2px 0;}")
-        act_path     = menu.addAction("📋 Copy Path")
-        act_filename = menu.addAction("📋 Copy Filename")
-        act_stem     = menu.addAction("📋 Copy Stem (no ext)")
+        act_path     = menu.addAction(_t("📋 Copy Path / 📋 パスをコピー"))
+        act_filename = menu.addAction(_t("📋 Copy Filename / 📋 ファイル名をコピー"))
+        act_stem     = menu.addAction(_t("📋 Copy Stem (no ext) / 📋 ファイル名（拡張子なし）をコピー"))
         if self._attrs_getter and path:
             menu.addSeparator()
-            act_attrs = menu.addAction("📋 Copy Attributes")
+            act_attrs = menu.addAction(_t("📋 Copy Attributes / 📋 属性をコピー"))
         else:
             act_attrs = None
         chosen = menu.exec(event.globalPos())
@@ -267,7 +268,7 @@ class _PersonGroup(QWidget):
                 name = self._primary_pid
 
         self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("Person name…")
+        self._name_edit.setPlaceholderText(_t("Person name… / 人物名…"))
         self._name_edit.setText(name if show_name else "")
         self._name_edit.setStyleSheet(
             "background:transparent; color:#cceecc; font-weight:bold; "
@@ -304,7 +305,7 @@ class _PersonGroup(QWidget):
             self._reassign_pids = list(sorted_pids)
             btn_reassign = QPushButton("→")
             btn_reassign.setFixedSize(22, 22)
-            btn_reassign.setToolTip("Reassign all files in this group to a different person ID")
+            btn_reassign.setToolTip(_t("Reassign all files in this group to a different person ID / このグループの全ファイルを別の人物IDに再割り当て"))
             btn_reassign.setStyleSheet(
                 "QPushButton { background:#2a2a3a; color:#aaaaff; border:1px solid #445566; "
                 "border-radius:3px; font-weight:bold; padding:0; }"
@@ -449,10 +450,13 @@ class _PersonGroup(QWidget):
     def _on_reassign_clicked(self):
         pids_str = ", ".join(f"P{p}" for p in self._reassign_pids)
         new_id, ok = QInputDialog.getText(
-            self, "Reassign Person ID",
-            f"Reassign all files in this group ({pids_str})\n"
-            f"to which person ID?\n\n"
-            f"Enter 3-hex ID (e.g. 001):",
+            self, _t("Reassign Person ID / 人物ID再割り当て"),
+            _t(f"Reassign all files in this group ({pids_str})\n"
+               f"to which person ID?\n\n"
+               f"Enter 3-hex ID (e.g. 001): / "
+               f"このグループ({pids_str})の全ファイルを\n"
+               f"どの人物IDに再割り当てしますか？\n\n"
+               f"3桁16進数IDを入力（例：001）："),
         )
         if not ok or not new_id.strip():
             return
@@ -463,8 +467,8 @@ class _PersonGroup(QWidget):
             if val < 0 or val > 0xfff:
                 raise ValueError
         except ValueError:
-            QMessageBox.warning(self, "Invalid ID",
-                                f"'{new_id}' is not a valid 3-hex person ID (000–fff).")
+            QMessageBox.warning(self, _t("Invalid ID / 無効なID"),
+                                _t(f"'{new_id}' is not a valid 3-hex person ID (000–fff). / '{new_id}' は有効な3桁16進数IDではありません（000〜fff）。"))
             return
         self._reassign_cb(self._reassign_pids, new_id)
 
@@ -489,7 +493,7 @@ class _PendingGroup(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
 
-        lbl = QLabel("Drop a person here to create a new group")
+        lbl = QLabel(_t("Drop a person here to create a new group / 人物をここにドロップして新グループを作成"))
         lbl.setStyleSheet("color:#666; font-size:10px;")
         lay.addWidget(lbl)
         lay.addStretch()
@@ -635,7 +639,7 @@ class _PersonMixin:
 
         # ── Header ───────────────────────────────────────────────────────────
         hdr = QHBoxLayout()
-        hdr.addWidget(QLabel("Project:"))
+        hdr.addWidget(QLabel(_t("Project: / プロジェクト：")))
         self._person_proj_cb = QComboBox()
         self._person_proj_cb.wheelEvent = lambda e: e.ignore()
         _person_projs = ["default"] + sorted(
@@ -652,22 +656,22 @@ class _PersonMixin:
         self._person_proj_cb.blockSignals(False)
         hdr.addWidget(self._person_proj_cb)
 
-        btn_person_load = QPushButton("Load")
+        btn_person_load = QPushButton(_t("Load / 読込"))
         btn_person_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         hdr.addWidget(btn_person_load)
 
-        self._btn_person_over = btn_person_over = QPushButton("💾 Overwrite")
+        self._btn_person_over = btn_person_over = QPushButton(_t("💾 Overwrite / 💾 上書き保存"))
         btn_person_over.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         hdr.addWidget(btn_person_over)
 
         self._person_undo_stack = []  # list of (proj, registry_dict)
-        self._btn_person_undo = QPushButton("↩ Undo")
+        self._btn_person_undo = QPushButton(_t("↩ Undo / ↩ 元に戻す"))
         self._btn_person_undo.setStyleSheet(cfg.btn_ss("btn_special", self.app.config, "padding:3px 8px;"))
         self._btn_person_undo.setEnabled(False)
-        self._btn_person_undo.setToolTip("Undo last Overwrite or Append")
+        self._btn_person_undo.setToolTip(_t("Undo last Overwrite or Append / 最後の上書き・追加を元に戻す"))
         hdr.addWidget(self._btn_person_undo)
 
-        self._btn_person_append = btn_person_append = QPushButton("💾 Append")
+        self._btn_person_append = btn_person_append = QPushButton(_t("💾 Append / 💾 追記"))
         btn_person_append.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         hdr.addWidget(btn_person_append)
 
@@ -677,12 +681,12 @@ class _PersonMixin:
 
         hdr.addStretch()
 
-        btn_new_group = QPushButton("+ New Group")
+        btn_new_group = QPushButton(_t("+ New Group / ＋新グループ"))
         btn_new_group.setMinimumWidth(130)
         btn_new_group.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "border:none; border-radius:3px;"))
         btn_new_group.clicked.connect(self._add_pending_group)
         hdr.addWidget(btn_new_group)
-        btn_refresh = QPushButton("↺ Refresh")
+        btn_refresh = QPushButton(_t("↺ Refresh / ↺ 更新"))
         btn_refresh.setMinimumWidth(110)
         btn_refresh.clicked.connect(lambda: self._refresh_person_tab(self._person_proj_cb.currentText() or None))
         hdr.addWidget(btn_refresh)
@@ -719,10 +723,10 @@ class _PersonMixin:
             if not getattr(self, '_person_overwrite_skip_warn', False):
                 _mb = QMessageBox(self)
                 _mb.setIcon(QMessageBox.Icon.Warning)
-                _mb.setWindowTitle("Overwrite")
-                _mb.setText(f"This will overwrite the person registry for <b>'{target or 'default'}'</b>.<br>Continue?")
+                _mb.setWindowTitle(_t("Overwrite / 上書き確認"))
+                _mb.setText(_t(f"This will overwrite the person registry for <b>'{target or 'default'}'</b>.<br>Continue? / <b>'{target or 'default'}'</b> の人物レジストリを上書きします。<br>続けますか？"))
                 _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                _cb = _QCB("Don't show this warning again")
+                _cb = _QCB(_t("Don't show this warning again / 次回から表示しない"))
                 _mb.setCheckBox(_cb)
                 if _mb.exec() != QMessageBox.StandardButton.Yes:
                     return
@@ -788,8 +792,8 @@ class _PersonMixin:
             splitter.addWidget(col_w)
             return inner.vbox()
 
-        self._person_groups_vbox = _make_column("Groups",   card_drop_cb=self._add_group_from_card_drop)
-        self._unsorted_vbox      = _make_column("Unsorted", card_drop_cb=self._unlink_person)
+        self._person_groups_vbox = _make_column(_t("Groups / グループ"),   card_drop_cb=self._add_group_from_card_drop)
+        self._unsorted_vbox      = _make_column(_t("Unsorted / 未分類"), card_drop_cb=self._unlink_person)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -797,13 +801,13 @@ class _PersonMixin:
         self._person_splitter = splitter
 
         # Loading placeholder — shown until first _rebuild_person_groups completes
-        self._person_loading_lbl = QLabel("Loading…")
+        self._person_loading_lbl = QLabel(_t("Loading… / 読み込み中…"))
         self._person_loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._person_loading_lbl.setStyleSheet("color:#888; font-size:16px; padding:40px;")
         outer.addWidget(self._person_loading_lbl)
         splitter.setVisible(False)
 
-        tabs.addTab(tab_w, "👤 Persons")
+        tabs.addTab(tab_w, _t("👤 Persons / 👤 人物"))
         QTimer.singleShot(0, lambda: self._refresh_person_tab(self._person_proj_cb.currentText() or None))
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -821,7 +825,7 @@ class _PersonMixin:
             cb.setCurrentIndex(_idx)
             cb.blockSignals(False)
         if hasattr(self, '_person_editing_lbl'):
-            self._person_editing_lbl.setText(f"Editing: {proj or 'default'}")
+            self._person_editing_lbl.setText(_t(f"Editing: {proj or 'default'} / 編集中: {proj or 'default'}"))
         self._rebuild_person_groups()
 
     def _rebuild_person_groups(self):
@@ -886,7 +890,7 @@ class _PersonMixin:
             left_lay.insertWidget(i, _make_group(grp_pids))
 
         if not named_groups:
-            lbl = QLabel("No groups yet.\nUse + New Group or drag\ncards together.")
+            lbl = QLabel(_t("No groups yet.\nUse + New Group or drag\ncards together. / グループはまだありません。\n＋新グループを使うか、\nカードをドラッグして作成してください。"))
             lbl.setStyleSheet("color:#555; font-size:10px;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             left_lay.insertWidget(0, lbl)
@@ -908,7 +912,7 @@ class _PersonMixin:
             right_lay.insertWidget(idx, _make_group(entry, is_right=True))
 
         if not right_entries:
-            lbl = QLabel("All persons grouped.")
+            lbl = QLabel(_t("All persons grouped. / 全人物がグループ済みです。"))
             lbl.setStyleSheet("color:#555; font-size:10px;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             right_lay.insertWidget(0, lbl)

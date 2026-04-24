@@ -2,6 +2,7 @@
 import os, shutil
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
 import aisearch_config as cfg
+from attr_viewer import _lang_label as _t
 
 
 class _CanvasMixin:
@@ -19,7 +20,7 @@ class _CanvasMixin:
         # ── Project bar ───────────────────────────────────────────────────────
         proj_bar = QHBoxLayout()
         proj_bar.setSpacing(6)
-        proj_bar.addWidget(QLabel("Project:"))
+        proj_bar.addWidget(QLabel(_t("Project: / プロジェクト：")))
 
         _projects = ["default"] + sorted([
             f.replace("features_", "").replace(".pt", "")
@@ -43,21 +44,21 @@ class _CanvasMixin:
         self._canvas_proj_cb.setFixedWidth(160)
         proj_bar.addWidget(self._canvas_proj_cb)
 
-        btn_load = QPushButton("Load")
+        btn_load = QPushButton(_t("Load / 読み込み"))
         btn_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         proj_bar.addWidget(btn_load)
 
-        self._btn_canvas_save = btn_overwrite = QPushButton("💾 Overwrite")
+        self._btn_canvas_save = btn_overwrite = QPushButton(_t("💾 Overwrite / 💾 上書き"))
         btn_overwrite.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         proj_bar.addWidget(btn_overwrite)
 
-        self._canvas_editing_lbl = QLabel(f"Editing: {_cur_proj}")
+        self._canvas_editing_lbl = QLabel(_t(f"Editing: {_cur_proj} / 編集中: {_cur_proj}"))
         self._canvas_editing_lbl.setStyleSheet("color:#aaa; font-style:italic;")
         proj_bar.addWidget(self._canvas_editing_lbl)
 
         proj_bar.addStretch()
 
-        self._chk_show_raw_data = QCheckBox("Arrangement in preview")
+        self._chk_show_raw_data = QCheckBox(_t("Arrangement in preview / プレビューで配置表示"))
         self._chk_show_raw_data.setStyleSheet("color:#ccc;")
         self._chk_show_raw_data.setChecked(self.app.config.get("show_raw_data", False))
         def _on_raw_data_toggle(v):
@@ -83,14 +84,14 @@ class _CanvasMixin:
         proj_bar.addWidget(self._chk_show_raw_data)
 
         # ── CLIP inspect trigger ──────────────────────────────────────────────
-        _insp_lbl = QLabel("CLIP Inspect:")
+        _insp_lbl = QLabel(_t("CLIP Inspect: / CLIP検査："))
         _insp_lbl.setStyleSheet("color:#ccc; font-size:9pt;")
         proj_bar.addWidget(_insp_lbl)
         self._clip_inspect_mode_cb = QComboBox()
         self._clip_inspect_mode_cb.wheelEvent = lambda e: e.ignore()
-        self._clip_inspect_mode_cb.addItem("No inspection",    "never")
-        self._clip_inspect_mode_cb.addItem("All the time",     "always")
-        self._clip_inspect_mode_cb.addItem("On watch receive", "watch")
+        self._clip_inspect_mode_cb.addItem(_t("No inspection / 検査なし"),    "never")
+        self._clip_inspect_mode_cb.addItem(_t("All the time / 常に"),         "always")
+        self._clip_inspect_mode_cb.addItem(_t("On watch receive / 監視受信時"), "watch")
         _cur_mode = self.app.config.get("clip_inspect_mode", "never")
         _mi = self._clip_inspect_mode_cb.findData(_cur_mode)
         if _mi >= 0:
@@ -153,7 +154,7 @@ class _CanvasMixin:
             path = _am.tags_file_for_project(name)
             self._canvas_widget.reload(path)
             self._canvas_editing_proj = name
-            self._canvas_editing_lbl.setText(f"Editing: {name}")
+            self._canvas_editing_lbl.setText(_t(f"Editing: {name} / 編集中: {name}"))
             _wire_preview_sync()
 
         def _do_overwrite():
@@ -166,10 +167,10 @@ class _CanvasMixin:
             if not getattr(self, '_canvas_overwrite_skip_warn', False):
                 _mb = QMessageBox(self)
                 _mb.setIcon(QMessageBox.Icon.Warning)
-                _mb.setWindowTitle("Overwrite")
-                _mb.setText(f"This will overwrite the canvas layout for <b>'{target}'</b>.<br>Continue?")
+                _mb.setWindowTitle(_t("Overwrite / 上書き"))
+                _mb.setText(_t(f"This will overwrite the canvas layout for <b>'{target}'</b>.<br>Continue? / <b>'{target}'</b> のキャンバスレイアウトを上書きします。<br>続けますか？"))
                 _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                _cb = _QCB("Don't show this warning again")
+                _cb = _QCB(_t("Don't show this warning again / 次回から表示しない"))
                 _mb.setCheckBox(_cb)
                 if _mb.exec() != QMessageBox.StandardButton.Yes:
                     return
@@ -189,7 +190,7 @@ class _CanvasMixin:
         btn_load.clicked.connect(_do_load)
         btn_overwrite.clicked.connect(_do_overwrite)
 
-        tabs.addTab(tab, "🖼 Canvas")
+        tabs.addTab(tab, _t("🖼 Canvas / 🖼 キャンバス"))
 
         # Auto-sync: whenever this tab becomes active, reload from current project
         def _on_tab_changed(idx):

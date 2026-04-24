@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import aisearch_config as cfg
+from attr_viewer import _lang_label as _t
 
 
 # ── Color per source group category ──────────────────────────────────────────
@@ -113,7 +114,7 @@ class _MetadataMixin:
 
         # ── Project / rules-set bar ───────────────────────────────────────────
         proj_bar = QHBoxLayout(); proj_bar.setSpacing(6)
-        _lbl_rs = QLabel("Rules Set:")
+        _lbl_rs = QLabel(_t("Rules Set: / ルールセット："))
         _lbl_rs.setStyleSheet("color:#ddd; font-size:9pt;")
         proj_bar.addWidget(_lbl_rs)
         self._meta_proj_cb = QComboBox()
@@ -132,17 +133,17 @@ class _MetadataMixin:
             self._meta_proj_cb.setCurrentIndex(_idx)
         proj_bar.addWidget(self._meta_proj_cb)
 
-        btn_load = QPushButton("Load")
+        btn_load = QPushButton(_t("Load / 読込"))
         btn_load.setStyleSheet(
             "background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         proj_bar.addWidget(btn_load)
 
-        self._btn_meta_save = btn_save = QPushButton("💾 Overwrite")
+        self._btn_meta_save = btn_save = QPushButton(_t("💾 Overwrite / 💾 上書き保存"))
         btn_save.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_save.clicked.connect(self._save_meta_rules)
         proj_bar.addWidget(btn_save)
 
-        self._meta_editing_lbl = QLabel(f"Editing: {_cur}")
+        self._meta_editing_lbl = QLabel(_t(f"Editing: {_cur} / 編集中: {_cur}"))
         self._meta_editing_lbl.setStyleSheet("color:#ccc; font-style:italic; font-size:9pt;")
         proj_bar.addWidget(self._meta_editing_lbl)
         proj_bar.addStretch()
@@ -150,17 +151,18 @@ class _MetadataMixin:
         vbox.addWidget(_hsep())
 
         # ── Description ───────────────────────────────────────────────────────
-        desc = QLabel(
+        desc = QLabel(_t(
             "Other  →  Attribute mapping: when 'Read from File' detects a raw metadata key, "
-            "write its value to the chosen attribute field."
-        )
+            "write its value to the chosen attribute field. / "
+            "その他→属性マッピング：「ファイルから読込」で生メタデータキーを検出したとき、その値を指定した属性フィールドに書き込みます。"
+        ))
         desc.setStyleSheet("color:#ccc; font-size:9pt;")
         desc.setWordWrap(True)
         vbox.addWidget(desc)
         vbox.addWidget(_hsep())
 
         # ── Auto-connected (read-only reference) ──────────────────────────────
-        _auto_hdr = QLabel("  Auto-connected (always active, not editable)")
+        _auto_hdr = QLabel(_t("  Auto-connected (always active, not editable) / 自動接続（常時有効・編集不可）"))
         _auto_hdr.setStyleSheet(
             "color:#aaaaaa; background:#1e1e1e; font-size:8pt; font-weight:bold;"
             " padding:2px 4px; border-radius:2px;")
@@ -246,11 +248,11 @@ class _MetadataMixin:
 
         # ── Column headers ─────────────────────────────────────────────────────
         hdr = QHBoxLayout()
-        lbl_src = QLabel("Source Key  (from Raw Info / Read from File)")
+        lbl_src = QLabel(_t("Source Key  (from Raw Info / Read from File) / ソースキー（生情報/ファイル読込から）"))
         lbl_src.setStyleSheet("color:#bbb; font-size:9pt; font-weight:bold;")
         hdr.addWidget(lbl_src, stretch=4)
         hdr.addSpacing(20)
-        lbl_tgt = QLabel("Attribute Field")
+        lbl_tgt = QLabel(_t("Attribute Field / 属性フィールド"))
         lbl_tgt.setStyleSheet("color:#bbb; font-size:9pt; font-weight:bold;")
         hdr.addWidget(lbl_tgt, stretch=4)
         hdr.addSpacing(26)   # room for ✕ button
@@ -270,7 +272,7 @@ class _MetadataMixin:
         self._meta_scroll = scroll
 
         # ── Add row button ─────────────────────────────────────────────────────
-        btn_add = QPushButton("+ Add Rule")
+        btn_add = QPushButton(_t("+ Add Rule / ＋ルール追加"))
         btn_add.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "padding:5px 12px; font-size:10pt;"))
         btn_add.clicked.connect(lambda: self._add_meta_row())
         vbox.addWidget(btn_add)
@@ -280,7 +282,7 @@ class _MetadataMixin:
         # ── Wire load button ──────────────────────────────────────────────────
         def _do_load():
             proj = self._meta_proj_cb.currentText().strip() or None
-            self._meta_editing_lbl.setText(f"Editing: {proj or 'default'}")
+            self._meta_editing_lbl.setText(_t(f"Editing: {proj or 'default'} / 編集中: {proj or 'default'}"))
             rules = _am.load_metadata_rules(proj)
             for *_, rw in self._meta_rows:
                 rw.deleteLater()
@@ -301,11 +303,11 @@ class _MetadataMixin:
         vbox.addWidget(_sep2)
 
         _clip_hdr_row = QHBoxLayout()
-        _clip_hdr_lbl = QLabel("CLIP Label Tuning")
+        _clip_hdr_lbl = QLabel(_t("CLIP Label Tuning / CLIPラベル調整"))
         _clip_hdr_lbl.setStyleSheet("color:#ccaaff; font-weight:bold; font-size:10pt;")
         _clip_hdr_row.addWidget(_clip_hdr_lbl)
         _clip_hdr_row.addStretch()
-        btn_clip_save = QPushButton("💾 Save Labels")
+        btn_clip_save = QPushButton(_t("💾 Save Labels / 💾 ラベル保存"))
         btn_clip_save.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_clip_save.clicked.connect(self._save_clip_labels)
         _clip_hdr_row.addWidget(btn_clip_save)
@@ -325,7 +327,7 @@ class _MetadataMixin:
         self._clip_label_rows = []  # list of (spec_idx, opt_idx, label_edit, thr_spin)
         self._build_clip_label_editor()
 
-        tabs.addTab(tab, "🔗 Meta Map")
+        tabs.addTab(tab, _t("🔗 Meta Map / 🔗 メタマップ"))
 
     # ── Row builder ────────────────────────────────────────────────────────────
 
@@ -460,7 +462,7 @@ class _MetadataMixin:
         row_l.setSpacing(6)
 
         src_e = QLineEdit(source)
-        src_e.setPlaceholderText("Raw metadata key…")
+        src_e.setPlaceholderText(_t("Raw metadata key… / 生メタデータキー…"))
         src_e.setStyleSheet(
             "background:#2a2a2a; color:#f0f0f0; border:1px solid #666;"
             " padding:3px 6px; font-size:10pt;")
@@ -569,7 +571,7 @@ class _MetadataMixin:
             lbl = QLabel(sec_name)
             lbl.setStyleSheet("color:#ccaaff; font-size:8pt; font-weight:bold; min-width:160px;")
             hdr.addWidget(lbl)
-            hdr.addWidget(QLabel("thr:"))
+            hdr.addWidget(QLabel(_t("thr: / 閾値：")))
             thr_spin = QDoubleSpinBox()
             thr_spin.setRange(0.0, 1.0); thr_spin.setSingleStep(0.01)
             thr_spin.setDecimals(2); thr_spin.setValue(spec.get("threshold", 0.20))
@@ -635,10 +637,10 @@ class _MetadataMixin:
         if not getattr(self, '_meta_overwrite_skip_warn', False):
             _mb = QMessageBox(self)
             _mb.setIcon(QMessageBox.Icon.Warning)
-            _mb.setWindowTitle("Overwrite")
-            _mb.setText(f"This will overwrite the metadata rules for <b>'{proj or 'default'}'</b>.<br>Continue?")
+            _mb.setWindowTitle(_t("Overwrite / 上書き確認"))
+            _mb.setText(_t(f"This will overwrite the metadata rules for <b>'{proj or 'default'}'</b>.<br>Continue? / <b>'{proj or 'default'}'</b> のメタデータルールを上書きします。<br>続けますか？"))
             _mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            _cb = _QCB("Don't show this warning again")
+            _cb = _QCB(_t("Don't show this warning again / 次回から表示しない"))
             _mb.setCheckBox(_cb)
             if _mb.exec() != QMessageBox.StandardButton.Yes:
                 return
@@ -651,6 +653,6 @@ class _MetadataMixin:
             if src and tgt:
                 rules.append({"source": src, "target": tgt})
         _am.save_metadata_rules(rules, proj)
-        self._meta_editing_lbl.setText(f"Editing: {proj or 'default'} ✓")
+        self._meta_editing_lbl.setText(_t(f"Editing: {proj or 'default'} ✓ / 編集中: {proj or 'default'} ✓"))
         if hasattr(self, '_btn_meta_save'):
             self._flash_saved_btn(self._btn_meta_save)

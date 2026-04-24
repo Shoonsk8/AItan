@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDrag
 from PyQt6.QtCore import QMimeData
+from attr_viewer import _lang_label as _t
 
 import aisearch_config as cfg
 
@@ -30,7 +31,7 @@ class _FilenameMixin:
 
         # ── Project selector ──────────────────────────────────────────────────
         proj_bar = QHBoxLayout(); proj_bar.setSpacing(6)
-        proj_bar.addWidget(QLabel("Rules Set:"))
+        proj_bar.addWidget(QLabel(_t("Rules Set: / ルールセット：")))
         self._fn_proj_cb = QComboBox()
         self._fn_proj_cb.wheelEvent = lambda e: e.ignore()
         self._fn_proj_cb.setFixedWidth(140)
@@ -47,15 +48,15 @@ class _FilenameMixin:
             self._fn_proj_cb.setCurrentIndex(_idx)
         proj_bar.addWidget(self._fn_proj_cb)
 
-        btn_fn_proj_load = QPushButton("Load")
+        btn_fn_proj_load = QPushButton(_t("Load / 読み込み"))
         btn_fn_proj_load.setStyleSheet("background:#1e6e1e; color:white; font-weight:bold; padding:3px 8px;")
         proj_bar.addWidget(btn_fn_proj_load)
 
-        self._btn_fn_save = btn_fn_save_over = QPushButton("💾 Overwrite")
+        self._btn_fn_save = btn_fn_save_over = QPushButton(_t("💾 Overwrite / 💾 上書き"))
         btn_fn_save_over.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
         btn_fn_save_over.clicked.connect(self._save_fn_rules)
         proj_bar.addWidget(btn_fn_save_over)
-        self._fn_editing_lbl = QLabel(f"Editing: {_cur_proj}")
+        self._fn_editing_lbl = QLabel(_t(f"Editing: {_cur_proj} / 編集中: {_cur_proj}"))
         self._fn_editing_lbl.setStyleSheet("color:#aaa; font-style:italic;")
         proj_bar.addWidget(self._fn_editing_lbl)
         proj_bar.addStretch()
@@ -65,7 +66,7 @@ class _FilenameMixin:
         # Auto-rename switch
         _cur_fn_proj = self._fn_proj_cb.currentText().strip() or None
         auto_rename_on = _am.load_filename_config(_cur_fn_proj).get("auto_rename", False)
-        self.check_auto_rename = QCheckBox("Auto-rename when attributes change")
+        self.check_auto_rename = QCheckBox(_t("Auto-rename when attributes change / 属性変更時に自動リネーム"))
         self.check_auto_rename.setChecked(auto_rename_on)
         fn_l.addWidget(self.check_auto_rename)
         fn_l.addWidget(_hsep())
@@ -295,8 +296,8 @@ class _FilenameMixin:
             mode_cb.setFixedWidth(115)
             mode_cb.setStyleSheet(
                 "background:#1a2a1a; color:#88dd88; border:1px solid #446644; padding:1px 3px;")
-            mode_cb.addItem("→ Detect", "detect")
-            mode_cb.addItem("⇄ Sync", "sync")
+            mode_cb.addItem(_t("→ Detect / → 検出"), "detect")
+            mode_cb.addItem(_t("⇄ Sync / ⇄ 同期"), "sync")
             mode_cb.setCurrentIndex(0 if one_way else 1)
 
             mode_cb.currentIndexChanged.connect(lambda _: None)
@@ -379,7 +380,7 @@ class _FilenameMixin:
         # Column headers
         hdr_row = QHBoxLayout(); hdr_row.setSpacing(4); hdr_row.setContentsMargins(0,0,0,0)
         hdr_row.addSpacing(22)  # drag handle column
-        for txt, w in [("Pattern", 100), ("Mode", 115), ("Attribute", 180), ("Value", 0)]:
+        for txt, w in [(_t("Pattern / パターン"), 100), (_t("Mode / モード"), 115), (_t("Attribute / 属性"), 180), (_t("Value / 値"), 0)]:
             lbl = QLabel(txt)
             lbl.setStyleSheet("color:#666; font-size:8pt;")
             if w: lbl.setFixedWidth(w)
@@ -418,7 +419,7 @@ class _FilenameMixin:
                     rule.get("value", ""), True)
 
         fn_add_row = QHBoxLayout()
-        btn_fn_add = QPushButton("+ Add Rule")
+        btn_fn_add = QPushButton(_t("+ Add Rule / + ルール追加"))
         btn_fn_add.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
         def _on_add_rule():
             # If container is disabled (auto_rename off), enable it first
@@ -429,12 +430,12 @@ class _FilenameMixin:
         btn_fn_add.clicked.connect(_on_add_rule)
         fn_add_row.addWidget(btn_fn_add)
 
-        btn_auto = QPushButton("⚡ Auto-Assign")
+        btn_auto = QPushButton(_t("⚡ Auto-Assign / ⚡ 自動割り当て"))
         btn_auto.setStyleSheet("background:#2a4a2a; color:#aaffaa; padding:3px 10px; font-weight:bold;")
         btn_auto.setToolTip("Pick field letters and auto-generate all value rules")
         fn_add_row.addWidget(btn_auto)
 
-        btn_reapply = QPushButton("↺ Re-apply Rules")
+        btn_reapply = QPushButton(_t("↺ Re-apply Rules / ↺ ルール再適用"))
         btn_reapply.setStyleSheet("background:#2a2a4a; color:#aaaaff; padding:3px 10px;")
         btn_reapply.setToolTip(
             "Re-run filename rules on all existing DB files.\n"
@@ -532,7 +533,7 @@ class _FilenameMixin:
 
 
 
-        tabs.addTab(tab_fn, "📁 Filename Rules")
+        tabs.addTab(tab_fn, _t("📁 Filename Rules / 📁 ファイル名規則"))
 
     # --- callbacks ---
 
