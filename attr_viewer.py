@@ -17,11 +17,29 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint
 _UI_LANG = {"val": "en"}   # "en" or "ja"
 
 def _lang_label(text: str) -> str:
-    """'English / 日本語' → return the half for the current language."""
+    """'English / 日本語' → return the half for the current language.
+    Splits at the RIGHTMOST ' / ' whose right side starts with a CJK
+    character. English-only labels with embedded '/' (e.g. 'Closed / No eyes')
+    and mixed cases like 'Closed / No eyes / 閉じている／目なし' both work:
+    the left half keeps its internal slash, the right half is the Japanese."""
     if " / " not in text:
         return text
-    parts = text.split(" / ", 1)
-    return parts[0].strip() if _UI_LANG["val"] == "en" else parts[1].strip()
+    def _starts_cjk(s):
+        s = s.lstrip()
+        if not s:
+            return False
+        c = s[0]
+        return ('぀' <= c <= 'ゟ') or ('゠' <= c <= 'ヿ') or ('一' <= c <= '鿿')
+    # Find all ' / ' split positions, prefer the RIGHTMOST that yields CJK-right
+    idx = len(text)
+    while True:
+        idx = text.rfind(" / ", 0, idx)
+        if idx == -1:
+            return text
+        right = text[idx + 3:]
+        if _starts_cjk(right):
+            left = text[:idx].strip()
+            return left if _UI_LANG["val"] == "en" else right.strip()
 
 
 # ── Coded-field key lookup ────────────────────────────────────────────────────
