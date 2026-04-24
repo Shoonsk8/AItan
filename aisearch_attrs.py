@@ -2319,8 +2319,8 @@ CLIP_AUTO_DETECT = [
         ("7", "a person doing a handstand upside down"),
     ]},
     # ── Motion ────────────────────────────────────────────────────────────────
-    {"field": "pm", "pos": 1, "zero_is_none": True,  "threshold": 0.22, "options": [
-        ("1", "a person posing still not moving"),
+    {"field": "pm", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
+        ("0", "a person posing still not moving"),
         ("2", "a person walking"),
         ("3", "a person running"),
         ("4", "a person dancing"),
