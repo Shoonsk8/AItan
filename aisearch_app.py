@@ -1820,26 +1820,13 @@ class AISearchApp(QMainWindow):
                     self.attrs_data, path, self.current_project)
             except Exception:
                 pass
-            try:
-                _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
-                _clip_updates = attrs_mod.auto_detect_clip_attrs(
-                    emb, self.attrs_data.get(path, {}), allowed_fields=_clip_fields)
-                if _clip_updates:
-                    self.attrs_data.setdefault(path, {}).update(_clip_updates)
-            except Exception:
-                pass
-            # Face detection — assign person ID (000 if no face found)
-            try:
-                pid_detected = attrs_mod.detect_or_assign_person_id(
-                    path, self.current_project)
-                _stored_pid = (self.attrs_data.get(path) or {}).get("person_id", "")
-                if pid_detected is None:
-                    pid_detected = "000"   # no face detected
-                if pid_detected != _stored_pid:
-                    self.attrs_data.setdefault(path, {})["person_id"] = pid_detected
-                    attrs_dirty = True
-            except Exception:
-                pass
+            # CLIP auto-detect and face detection are deliberately NOT run here.
+            # Previously they fired in the watch scan before the preview even
+            # opened, which (a) made the pop-up slow and (b) left the entry
+            # "already determined" so the user never saw detection run. Those
+            # detections now happen when the preview actually opens, visible
+            # to the user. auto_set_all already handles filename parse + meta
+            # extraction + MediaPipe pose/shot, which is cheap and useful.
             attrs_dirty = True
 
             if _auto_rename:
