@@ -1992,7 +1992,6 @@ class PreviewWindow(QWidget):
                 if parsed and parsed.get("persons"):
                     pid = parsed["persons"][0]
             if pid:
-                app.attrs_data = attrs_mod.get(app.attrs_data, path) and app.attrs_data
                 attrs_mod.set_file(app.attrs_data, path,
                                    tags=list(tags),
                                    note=entry.get("note", ""),
