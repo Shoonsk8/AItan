@@ -399,7 +399,11 @@ class FieldWidget(QGroupBox):
                     row = QHBoxLayout(); row.setSpacing(4)
                     row.addWidget(QLabel(sub_lbl + ":", styleSheet="color:#aaa;font-size:9pt;"))
                     cb = QComboBox(); cb.setStyleSheet(_CB_SS)
-                    cb.addItem("—", "")
+                    # Only show the "—" (no selection) entry if code "0" isn't
+                    # a valid option. If "0" is defined (e.g. Standing for PM),
+                    # "—" is redundant and confusing.
+                    if not any(str(k2) == "0" for k2, _ in sub_opts):
+                        cb.addItem("—", "")
                     for k2, lbl2 in sorted(sub_opts, key=lambda kv: (-get_usage(kv[0]), kv[1])):
                         cb.addItem(_lang_label(lbl2), k2)
                     cb.currentIndexChanged.connect(
