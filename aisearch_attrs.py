@@ -1371,8 +1371,10 @@ def _extract_aitan_block(text: str) -> dict | None:
     return None
 
 def _build_aitan_block(entry: dict) -> str:
-    """Serialize attrs entry as AItan{...} string (excludes heavy/internal fields)."""
-    _SKIP = {"meta"}
+    """Serialize attrs entry as AItan{...} string (excludes heavy/internal fields).
+    CLIP/FACE debug blobs and runtime markers are stripped so the embedded
+    block stays small and file-portable — only results travel with the file."""
+    _SKIP = {"meta"} | _TRANSIENT_ENTRY_KEYS
     slim = {k: v for k, v in entry.items() if k not in _SKIP and v not in (None, "", [], {})}
     return _AITAN_PREFIX + json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
 
