@@ -2749,7 +2749,10 @@ class PreviewWindow(QWidget):
 
     @pyqtSlot(str, str)
     def _auto_apply_face(self, path: str, pid: str):
-        """Slot called from _on_inspect thread to auto-apply detected person_id to P field."""
+        """Slot called from _on_inspect thread to auto-apply detected person_id.
+        Only applies when the entry has no person_id yet — never overwrites an
+        existing value (user correction or prior save). Use the 'Apply' button
+        in the Face inspect panel to explicitly overwrite."""
         if not path or not pid or pid == "000":
             return
         app = self.handler.app
@@ -2757,14 +2760,10 @@ class PreviewWindow(QWidget):
             return  # user navigated away
         entry = attrs_mod.get(app.attrs_data, path)
         old_pid = entry.get("person_id", "")
-        if old_pid == pid:
-            return
+        if old_pid:
+            return  # already set — respect existing data
         entry["person_id"] = pid
         attrs_mod.save(app.current_project, app.attrs_data)
-        if old_pid and old_pid != pid:
-            import threading as _thr
-            _thr.Thread(target=lambda: attrs_mod.correct_person_id(
-                path, app.current_project, pid, wrong_id=old_pid), daemon=True).start()
         self._refresh_attrs_inner(path)
 
     def _on_canvas_action(self, key: str, action: str):
