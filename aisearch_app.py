@@ -378,7 +378,7 @@ class AISearchApp(QMainWindow):
         info_layout = QVBoxLayout(self.info_widget)
         info_layout.setContentsMargins(20, 0, 0, 0)
 
-        self.btn_settings = QPushButton("⚙ SETTINGS")
+        self.btn_settings = QPushButton(_t("⚙ SETTINGS / ⚙ 設定"))
         self.btn_settings.setStyleSheet(
             "background-color: #6c757d; color: white; font-weight: bold; padding: 6px 12px;")
         self.btn_settings.clicked.connect(self._open_settings)

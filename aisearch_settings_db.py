@@ -261,7 +261,7 @@ class _DbMixin:
         tl.addWidget(g_watch)
 
         tl.addStretch()
-        tabs.addTab(tab_data, _t("🗄 Database / 🗄 DB"))
+        tabs.addTab(tab_data, _t("🗄 Database / 🗄 データベース"))
 
     # --- scanning ---
 

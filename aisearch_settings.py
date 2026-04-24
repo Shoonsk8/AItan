@@ -60,7 +60,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
 
         # Add placeholder widgets so tab labels are visible immediately
         self._tab_labels_raw = [
-            "🗄 Database / 🗄 DB",
+            "🗄 Database / 🗄 データベース",
             "👤 Persons / 👤 人物",
             "⚙ Settings / ⚙ 設定",
             "🎨 Thresholds / 🎨 閾値",
