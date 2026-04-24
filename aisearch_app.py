@@ -21,7 +21,7 @@ import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
 
-VERSION = "1.96"
+VERSION = "1.961"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -65,7 +65,16 @@ class DateItem(QTableWidgetItem):
         except: return super().__lt__(other)
 
 
-# ── Drop zone label ──────────────────────────────────────────────────────────
+# ── Drop zone label / frame ───────────────────────────────────────────────────
+
+def _url_drop_handler(event, callback):
+    """Shared URL drop logic for drop-zone widgets."""
+    for url in event.mimeData().urls():
+        path = url.toLocalFile()
+        if os.path.exists(path) and callback:
+            callback(path)
+            break
+    event.accept()
 
 class DropZoneLabel(QLabel):
     def __init__(self, parent=None):
@@ -82,12 +91,26 @@ class DropZoneLabel(QLabel):
         if event.mimeData().hasUrls(): event.accept()
 
     def dropEvent(self, event):
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if os.path.exists(path) and self._drop_callback:
-                self._drop_callback(path)
-                break
-        event.accept()
+        _url_drop_handler(event, self._drop_callback)
+
+
+class DropZoneFrame(QFrame):
+    """QFrame wrapper that accepts URL drops and forwards them to a callback.
+    Used as the thumbnail container so border-area drops also work on Linux/xcb."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._drop_callback = None
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls(): event.accept()
+        else: event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls(): event.accept()
+
+    def dropEvent(self, event):
+        _url_drop_handler(event, self._drop_callback)
 
 
 # ── Results table ────────────────────────────────────────────────────────────
@@ -293,6 +316,7 @@ class AISearchApp(QMainWindow):
         self._dup_display_data = None
         self._undo_stack       = []
         self.attrs_data        = {}
+        self._emb_meta_scanned = set()
         self._collapsed_groups = set()
         self._watcher          = None
         self._browse_dir       = None
@@ -334,13 +358,14 @@ class AISearchApp(QMainWindow):
         h_layout = QHBoxLayout(self.header)
         h_layout.setContentsMargins(15, 15, 15, 15)
 
-        # Thumbnail
-        thumb_outer = QFrame()
+        # Thumbnail — DropZoneFrame so border-area drops also work on Linux/xcb
+        thumb_outer = DropZoneFrame()
         thumb_outer.setFixedSize(350, 350)
         thumb_layout = QVBoxLayout(thumb_outer)
         thumb_layout.setContentsMargins(0, 0, 0, 0)
         self.drop_zone = DropZoneLabel()
         self.drop_zone._drop_callback = self.on_drop
+        thumb_outer._drop_callback     = self.on_drop
         thumb_layout.addWidget(self.drop_zone)
         self.thumb_outer = thumb_outer
         h_layout.addWidget(thumb_outer)
@@ -539,12 +564,6 @@ class AISearchApp(QMainWindow):
 
         main_layout.addWidget(self.header)
 
-        # Browse mode path bar (hidden in search/dup mode)
-        self._browse_bar = QLabel("")
-        self._browse_bar.setStyleSheet(
-            "background-color: #1a2a1a; color: #88cc88; font-size: 10pt; padding: 3px 10px;")
-        self._browse_bar.hide()
-        main_layout.addWidget(self._browse_bar)
 
         # Results table
         self.table = FileTable()
@@ -1401,10 +1420,13 @@ class AISearchApp(QMainWindow):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
             self._settings_win = SettingsView(self, self, tab)
         else:
-            # Refresh filename rules and attr sections from disk each time settings opens
+            # Refresh filename rules, attr sections, metamap from disk each time settings opens
             _reload_fn = getattr(self._settings_win, '_reload_fn_rules', None)
             if _reload_fn:
                 _reload_fn()
+            _reload_meta = getattr(self._settings_win, '_reload_meta_rules', None)
+            if _reload_meta:
+                _reload_meta()
         self._settings_win.show()
         self._settings_win.raise_()
         self._settings_win.activateWindow()
@@ -1443,6 +1465,7 @@ class AISearchApp(QMainWindow):
             _ph._cached_pixmap_path = None
             _ph.zoom_factor         = 1.0
         self.current_project = name
+        self._emb_meta_scanned = set()  # clear per-file embedded-meta scan cache on project switch
         # Load project-specific config (falls back to global default)
         self.config = cfg.load_config(name)
         self.config["last_project"] = name
@@ -1488,6 +1511,15 @@ class AISearchApp(QMainWindow):
             _reload_attr = getattr(_sw, '_reload_attr_sections', None)
             if _reload_attr:
                 _reload_attr()
+            # Sync metamap tab combo to current project + reload rules
+            _meta_cb = getattr(_sw, '_meta_proj_cb', None)
+            if _meta_cb:
+                _idx = _meta_cb.findText(name)
+                if _idx >= 0:
+                    _meta_cb.setCurrentIndex(_idx)
+            _reload_meta = getattr(_sw, '_reload_meta_rules', None)
+            if _reload_meta:
+                _reload_meta()
         _pw = getattr(getattr(self, "preview_handler", None), "window", None)
         if _pw:
             _chk = getattr(_pw, "_chk_auto_rename", None)
@@ -1501,7 +1533,8 @@ class AISearchApp(QMainWindow):
         self.data, _ = logic.load_db_logic(name)
         self.base_dirs = []
         self.feedback_data = feedback.load(name)
-        self.attrs_data    = attrs_mod.load(name)
+        self.attrs_data        = attrs_mod.load(name)
+        self._emb_meta_scanned = set()
         # Build O(1) path→index lookup with realpath so symlinks don't cause misses
         if self.data and "paths" in self.data:
             self._path_idx = {os.path.realpath(p): i for i, p in enumerate(self.data["paths"])}
@@ -1556,7 +1589,10 @@ class AISearchApp(QMainWindow):
     def _apply_watch_dirs(self):
         """Connect watcher to all configured watch_dirs. _scan_new_files handles
         project-scope filtering so only project files get indexed."""
-        watch_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
+        # watch_dirs is a global setting — always read from global config
+        import aisearch_config as _cfg_mod
+        _global_cfg = _cfg_mod.load_config()
+        watch_dirs = [d for d in _global_cfg.get("watch_dirs", []) if os.path.isdir(d)]
         if self._watcher:
             self._watcher.directoryChanged.disconnect()
             self._watcher.deleteLater()
@@ -1598,10 +1634,15 @@ class AISearchApp(QMainWindow):
 
 
     def _do_scan_new_files(self):
-        if not self.data: return
+        if not self.data:
+            # Fresh project — initialize empty data structure so watch can work
+            self.data = {"paths": [], "embeddings": __import__("torch").empty((0, logic.EMBEDDING_DIM)).to(logic.device)}
         # Skip if a settings scan/rename is in progress
         if getattr(self, '_watcher_paused', False): return
-        scan_dirs = [d for d in self.config.get("watch_dirs", []) if os.path.isdir(d)]
+        # watch_dirs is global — read from global config regardless of current project
+        import aisearch_config as _cfg_mod
+        _global_cfg = _cfg_mod.load_config()
+        scan_dirs = [d for d in _global_cfg.get("watch_dirs", []) if os.path.isdir(d)]
         if not scan_dirs: return
 
         paths = self.data.get("paths", [])
@@ -1672,10 +1713,14 @@ class AISearchApp(QMainWindow):
         added = 0
         attrs_dirty = False
         retry_files = []
+        scan_renames = {}
+        added_final_paths = []   # final path of each newly added file (after any renames)
+        _auto_rename = attrs_mod.load_filename_config(self.current_project).get("auto_rename", False)
         # Track sizes from last check for two-stage stability test
         _prev_sizes = getattr(self, '_watch_prev_sizes', {})
         _next_sizes = {}
-        for path in new_files:
+        try:
+          for path in new_files:
             try:
                 sz = os.path.getsize(path)
             except OSError:
@@ -1704,13 +1749,99 @@ class AISearchApp(QMainWindow):
             self.data["embeddings"] = torch.cat(
                 [self.data["embeddings"], emb.unsqueeze(0)])
             added += 1
-            self.attrs_data = attrs_mod.auto_set_all(
-                self.attrs_data, path, self.current_project)
+            try:
+                self.attrs_data = attrs_mod.auto_set_all(
+                    self.attrs_data, path, self.current_project)
+            except Exception:
+                pass
+            try:
+                _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
+                _clip_updates = attrs_mod.auto_detect_clip_attrs(
+                    emb, self.attrs_data.get(path, {}), allowed_fields=_clip_fields)
+                if _clip_updates:
+                    self.attrs_data.setdefault(path, {}).update(_clip_updates)
+            except Exception:
+                pass
+            # Face detection — assign person ID (000 if no face found)
+            try:
+                pid_detected = attrs_mod.detect_or_assign_person_id(
+                    path, self.current_project)
+                _stored_pid = (self.attrs_data.get(path) or {}).get("person_id", "")
+                if pid_detected is None:
+                    pid_detected = "000"   # no face detected
+                if pid_detected != _stored_pid:
+                    self.attrs_data.setdefault(path, {})["person_id"] = pid_detected
+                    attrs_dirty = True
+            except Exception:
+                pass
             attrs_dirty = True
-        self._watch_prev_sizes = _next_sizes  # keep sizes only for pending files
+
+            if _auto_rename:
+                orig_stem = os.path.splitext(os.path.basename(path))[0]
+                pid = (self.attrs_data.get(path) or {}).get("person_id", "")
+                if pid and pid != "000":
+                    try:
+                        new_path = attrs_mod.rename_with_person_id(
+                            self.attrs_data, path, pid, flush_stores=False,
+                            skip_uncoded=False)
+                        if new_path != path:
+                            scan_renames[path] = new_path
+                            self.data["paths"][-1] = new_path
+                            path = new_path
+                    except Exception:
+                        pass
+                try:
+                    new_path = attrs_mod.apply_boolean_sync_rules(
+                        self.attrs_data, path, self.current_project,
+                        orig_stem=orig_stem)
+                    if new_path != path:
+                        scan_renames[path] = new_path
+                        self.data["paths"][-1] = new_path
+                        path = new_path
+                except Exception:
+                    pass
+                # Bake detected O/R/K into filename
+                try:
+                    _entry = self.attrs_data.get(path) or {}
+                    _cf = {k: _entry.get(f"cf_{k}", "")
+                           for k in ("o", "r", "k")}
+                    _cf = {k: v for k, v in _cf.items() if v}
+                    if _cf:
+                        _stem, _ext = os.path.splitext(os.path.basename(path))
+                        _parts = attrs_mod.parse_coded_filename(_stem)
+                        if _parts:
+                            _chg = False
+                            for _fk, _fv in _cf.items():
+                                if not _parts.get(_fk):
+                                    _parts[_fk] = _fv; _chg = True
+                            if _chg:
+                                _fo = attrs_mod.get_sync_field_order(self.current_project)
+                                _df = not bool(_parts.get("persons"))
+                                _ns = attrs_mod.build_coded_filename(_parts, date_first=_df, field_order=_fo)
+                                if _ns and _ns != _stem:
+                                    _np = attrs_mod.unique_path(
+                                        os.path.join(os.path.dirname(path), _ns + _ext))
+                                    if _np != path:
+                                        os.rename(path, _np)
+                                        if path in self.attrs_data:
+                                            self.attrs_data[_np] = self.attrs_data.pop(path)
+                                        scan_renames[path] = _np
+                                        self.data["paths"][-1] = _np
+                                        path = _np
+                except Exception:
+                    pass
+            # Record the final path of this file (after any auto-renames).
+            added_final_paths.append(path)
+        finally:
+            # Always update prev sizes — even if an exception cut the loop short.
+            # Without this, files remain "first sight" forever on the next scan.
+            self._watch_prev_sizes = _next_sizes
 
         if attrs_dirty:
             attrs_mod.save(self.current_project, self.attrs_data)
+        if scan_renames:
+            attrs_mod.flush_path_renames_to_stores(scan_renames, self.current_project,
+                                                   update_clip_pt=False)
 
         if missing_idx or added:
             torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
@@ -1718,24 +1849,36 @@ class AISearchApp(QMainWindow):
             if added:       parts.append(f"{added} added")
             if missing_idx: parts.append(f"{len(missing_idx)} removed")
             self.statusBar().showMessage(f"Auto-updated: {', '.join(parts)}.", 4000)
-            if added:
-                # Switch to browse mode on the folder where the newest file landed
-                added_paths = [p for p in new_files if p in set(self.data["paths"])]
-                if added_paths:
-                    added_paths.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
-                    newest = added_paths[-1]
-                    def _browse_to_arrival(p=newest):
-                        if hasattr(self, '_search_cancel'):
-                            self._search_cancel[0] = True
-                        self._search_running = False
-                        self._enter_browse_mode(os.path.dirname(os.path.abspath(p)))
-                        target = os.path.normpath(p)
-                        for row in range(self.table.rowCount()):
-                            rpath = self.table.get_row_path(row)
-                            if rpath and os.path.normpath(rpath) == target:
-                                self._select_row(row)
-                                break
-                    QTimer.singleShot(0, _browse_to_arrival)
+            if added and added_final_paths:
+                # added_final_paths already has the correct final path for each new file
+                # (after any auto-renames), so no need to reconstruct via scan_renames.
+                added_final_paths.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+                newest = added_final_paths[-1]
+                def _browse_to_arrival(p=newest):
+                    if hasattr(self, '_search_cancel'):
+                        self._search_cancel[0] = True
+                    self._search_running = False
+                    self._lock_preview = False  # ensure preview updates even if search was cancelled
+                    self._enter_browse_mode(os.path.dirname(os.path.abspath(p)))
+                    target = os.path.normpath(p)
+                    _found_row = -1
+                    for row in range(self.table.rowCount()):
+                        rpath = self.table.get_row_path(row)
+                        if rpath and os.path.normpath(rpath) == target:
+                            self._select_row(row)
+                            self.table.scrollToTop()
+                            _found_row = row
+                            break
+                    # Always force a direct preview show so the new file is displayed
+                    # even if row selection didn't fire (e.g. same row already selected,
+                    # or file was moved to a different directory by auto-rename).
+                    self.preview_handler.show(p)
+                    # Trigger CLIP inspect if mode = "on watch receive"
+                    if self.config.get("clip_inspect_mode") == "watch":
+                        pw = self.preview_handler.window
+                        if pw:
+                            pw._on_inspect()
+                QTimer.singleShot(0, _browse_to_arrival)
 
         # Re-check pending files after 3s
         if retry_files:
@@ -1981,6 +2124,23 @@ class AISearchApp(QMainWindow):
         all_paths = list(self.data["paths"])
         all_embs  = self.data["embeddings"]
 
+        _media_exts = tuple(logic.EXT_IMG + logic.EXT_VID)
+
+        def _is_binary(p):
+            """Return True if file content is binary (image/video), False if text."""
+            try:
+                with open(p, 'rb') as f:
+                    return b'\x00' in f.read(512)
+            except OSError:
+                return True  # can't read → keep it, let other checks fail
+
+        def _is_media(p):
+            pl = p.lower()
+            if pl.endswith(_media_exts):
+                return True          # known extension — trust it
+            # No recognised extension: check content (Linux files need no extension)
+            return _is_binary(p)
+
         # Filter to project base_dirs only — exclude watch-only dirs (e.g. Downloads)
         if self.base_dirs:
             def _in_project(p):
@@ -1990,19 +2150,22 @@ class AISearchApp(QMainWindow):
                     if pn == bdn or pn.startswith(bdn + os.sep):
                         return True
                 return False
-            keep = [i for i, p in enumerate(all_paths) if _in_project(p)]
-            paths = [all_paths[i] for i in keep]
-            embs  = all_embs[keep] if keep else all_embs[:0]
+            keep = [i for i, p in enumerate(all_paths)
+                    if _in_project(p) and _is_media(p)]
         else:
-            paths = all_paths
-            embs  = all_embs
+            keep = [i for i, p in enumerate(all_paths) if _is_media(p)]
+        paths = [all_paths[i] for i in keep]
+        embs  = all_embs[keep] if keep else all_embs[:0]
 
         def _worker():
             try:
                 import hashlib
                 from collections import defaultdict
 
+                q = self._dup_queue
                 exact_mode = (threshold >= 1.0)
+                n = len(paths)
+                q.put(("progress", f"Computing similarity for {n} files…"))
 
                 _hash_cache = {}
                 def _file_hash(path):
@@ -2023,20 +2186,48 @@ class AISearchApp(QMainWindow):
                     return (os.path.splitext(paths[i])[1].lower() ==
                             os.path.splitext(paths[j])[1].lower())
 
+                _fsize_cache2 = {}
+                def _fsize2(p):
+                    if p not in _fsize_cache2:
+                        try:    _fsize_cache2[p] = os.path.getsize(p)
+                        except: _fsize_cache2[p] = 0
+                    return _fsize_cache2[p]
+
+                def _sizes_ok(i, j):
+                    """True if file sizes are within 1.5× of each other."""
+                    sa, sb = _fsize2(paths[i]), _fsize2(paths[j])
+                    if sa == 0 or sb == 0:
+                        return True
+                    return max(sa, sb) <= min(sa, sb) * 1.5
+
                 sim = st_util.cos_sim(embs, embs).cpu()   # (N, N)
-                n   = len(paths)
+
                 # Connected components: BFS
-                adj     = [[] for _ in range(n)]
-                # Pre-pass: group by filename prefix with fingerprint stripped.
-                # 001-whitebg-front-590020482048.jpg and
-                # 001-whitebg-front-200010001000.jpg share the same prefix
-                # → guaranteed duplicates regardless of visual similarity score.
-                # Skipped in exact mode (100%) — content hash is authoritative there.
+                adj = [[] for _ in range(n)]
+
+                # Pre-pass: group by coded filename prefix (same persons + bg, same size)
                 if not exact_mode:
+                    q.put(("progress", f"Prefix pass ({n} files)…"))
+                    _fsize_cache = {}
+                    def _fsize_p(p):
+                        if p not in _fsize_cache:
+                            try:    _fsize_cache[p] = os.path.getsize(p)
+                            except: _fsize_cache[p] = 0
+                        return _fsize_cache[p]
+
+                    def _sizes_similar(i, j):
+                        sa, sb = _fsize_p(paths[i]), _fsize_p(paths[j])
+                        if sa == 0 or sb == 0:
+                            return True
+                        lo, hi = min(sa, sb), max(sa, sb)
+                        return hi <= lo * 1.05
+
                     prefix_map = defaultdict(list)
                     for i, p in enumerate(paths):
                         stem   = os.path.splitext(os.path.basename(p))[0]
                         prefix = attrs_mod.filename_group_key(stem)
+                        if prefix is None:
+                            continue
                         prefix_map[prefix].append(i)
                     for prefix_indices in prefix_map.values():
                         if len(prefix_indices) < 2:
@@ -2046,18 +2237,32 @@ class AISearchApp(QMainWindow):
                                 i, j = prefix_indices[a], prefix_indices[b]
                                 if not _same_ext(i, j):
                                     continue
+                                if not _sizes_similar(i, j):
+                                    continue
                                 if j not in adj[i]: adj[i].append(j)
                                 if i not in adj[j]: adj[j].append(i)
-                # Cosine similarity pass
+
+                # Cosine similarity pass — report progress every 5%
+                q.put(("progress", f"Comparing pairs…  0%"))
+                _step = max(1, n // 20)
+                _last_pct = 0
                 for i in range(n):
+                    pct = int(i / n * 100)
+                    if pct >= _last_pct + 5:
+                        _last_pct = pct
+                        q.put(("progress", f"Comparing pairs… {pct:3d}%"))
                     for j in range(i + 1, n):
                         if sim[i][j].item() >= threshold:
                             if not _same_ext(i, j):
+                                continue
+                            if not _sizes_ok(i, j):
                                 continue
                             if exact_mode and _file_hash(paths[i]) != _file_hash(paths[j]):
                                 continue
                             adj[i].append(j)
                             adj[j].append(i)
+
+                q.put(("progress", "Finding groups…"))
                 visited = [False] * n
                 groups  = []
                 for i in range(n):
@@ -2071,12 +2276,10 @@ class AISearchApp(QMainWindow):
                         group.append(node)
                         stack.extend(adj[node])
                     if len(group) > 1:
-                        # Sort group: largest file first — user keeps biggest, deletes smaller
-                        def _fsize(idx):
+                        def _sz(idx):
                             try: return os.path.getsize(paths[idx])
                             except OSError: return 0
-                        group.sort(key=_fsize, reverse=True)
-                        # Split by extension — different file types are never true duplicates
+                        group.sort(key=_sz, reverse=True)
                         ext_buckets = {}
                         for idx in group:
                             ext = os.path.splitext(paths[idx])[1].lower()
@@ -2084,13 +2287,13 @@ class AISearchApp(QMainWindow):
                         for bucket in ext_buckets.values():
                             if len(bucket) > 1:
                                 groups.append(bucket)
-                # Sort groups by max pairwise similarity descending
-                # (exact duplicates first, just-similar groups last)
+
+                # Sort groups: highest similarity first
                 def _group_max_sim(group):
                     rep = group[0]
                     return max(sim[idx][rep].item() for idx in group[1:]) if len(group) > 1 else 1.0
                 groups.sort(key=_group_max_sim, reverse=True)
-                self._dup_queue.put(("done", (groups, sim, paths)))
+                q.put(("done", (groups, sim, paths)))
             except Exception as e:
                 self._dup_queue.put(("error", str(e)))
 
@@ -2104,6 +2307,9 @@ class AISearchApp(QMainWindow):
             msg, payload = self._dup_queue.get_nowait()
         except queue.Empty:
             return
+        if msg == "progress":
+            self.lbl_dup_status.setText(payload)
+            return                        # keep polling
         self._dup_poll_timer.stop()
         self.btn_find_dups.setText("♊ Duplicates")
         if msg == "error":
@@ -2224,7 +2430,21 @@ class AISearchApp(QMainWindow):
         pct = data.get("threshold") or self.spin_threshold.value()
         if update_spinner:
             self.spin_threshold.setValue(pct)
-        groups_data = [g for g in data["groups"] if len(g) > 1]
+        _media_exts = tuple(logic.EXT_IMG + logic.EXT_VID)
+        def _is_media_path(entry):
+            p = entry.get("path", "") if isinstance(entry, dict) else str(entry)
+            if p.lower().endswith(_media_exts):
+                return True
+            try:
+                with open(p, 'rb') as _f:
+                    return b'\x00' in _f.read(512)
+            except OSError:
+                return True  # missing file — keep so user can see/clean it up
+        groups_data = [
+            [e for e in g if _is_media_path(e)]
+            for g in data["groups"]
+        ]
+        groups_data = [g for g in groups_data if len(g) > 1]
         total_files = sum(len(g) for g in groups_data)
         self._set_dup_result(f"{len(groups_data)} groups, {total_files} files", pct)
         self.table.setHorizontalHeaderLabels(["Group", "Size", "Name", "Path"])
@@ -2418,6 +2638,11 @@ class AISearchApp(QMainWindow):
     def _update_row(self, row, old_path, final_path, overwrite, dest_path, protect_rows=None):
         """Update a row after a move. Remove the overwritten row if needed.
         protect_rows: set of row indices that must never be removed (e.g. {0} for query row)."""
+        # Capture dest attrs before the row is removed (needed for merge below)
+        _dest_attrs = {}
+        if overwrite and dest_path in self.attrs_data:
+            _dest_attrs = dict(self.attrs_data[dest_path])
+
         if overwrite:
             for r in range(self.table.rowCount()):
                 if r == row: continue
@@ -2435,7 +2660,20 @@ class AISearchApp(QMainWindow):
             # Transfer attrs_data entry to new path
             if old_path in self.attrs_data:
                 self.attrs_data[final_path] = self.attrs_data.pop(old_path)
-                attrs_mod.save(self.current_project, self.attrs_data)
+            elif final_path not in self.attrs_data:
+                self.attrs_data[final_path] = {}
+            # Keep whichever entry has more non-empty structured fields.
+            # Text fields (note, prompt, etc.) are excluded — they shouldn't
+            # outweigh real structured metadata like person_id, tags, CLIP fields.
+            if _dest_attrs:
+                _TEXT_FIELDS = {"note", "prompt", "neg_prompt", "speech", "seed"}
+                _src_attrs = self.attrs_data.get(final_path, {})
+                def _count(d):
+                    return sum(1 for k, v in d.items()
+                               if k not in _TEXT_FIELDS and v not in (None, "", [], {}))
+                if _count(_dest_attrs) > _count(_src_attrs):
+                    self.attrs_data[final_path] = _dest_attrs
+            attrs_mod.save(self.current_project, self.attrs_data)
             # Update preview if it's showing the moved file
             if self.preview_handler.current_path == old_path:
                 self.preview_handler.current_path = final_path
@@ -2764,6 +3002,14 @@ class AISearchApp(QMainWindow):
                 directory = os.path.dirname(os.path.abspath(path)) if path else None
             if not directory and self.base_dirs:
                 directory = self.base_dirs[0]
+            # Fall back to watch dir, then home
+            if not directory:
+                _watch = cfg.load_config().get("watch_dirs", [])
+                _watch = [d for d in _watch if d and os.path.isdir(d)]
+                if _watch:
+                    directory = _watch[0]
+            if not directory:
+                directory = os.path.expanduser("~")
         if not directory or not os.path.isdir(directory):
             return
 
@@ -2799,17 +3045,20 @@ class AISearchApp(QMainWindow):
         self.table.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
         self.table.setSortingEnabled(True)
 
-        self._browse_bar.setText(f"📂  {directory}  —  {len(files)} files   [← left arrow to search]")
-        self._browse_bar.show()
-
         if self.table.rowCount():
             self._select_row(0)
+            self.table.scrollToTop()
         self.table.setFocus()
 
     def _exit_browse_mode(self):
         self._browse_dir = None
-        self._browse_bar.hide()
         self._update_mode_buttons("search")
+        # Restore query image thumbnail (or clear if no query)
+        if self.query_path and os.path.exists(self.query_path):
+            self._update_drop_zone_thumb(self.query_path)
+        else:
+            self.drop_zone.setPixmap(QPixmap())
+            self.drop_zone.setText("DROP IMAGE")
 
     # ── Event handlers ───────────────────────────────────────────────────────
 
@@ -2835,6 +3084,56 @@ class AISearchApp(QMainWindow):
         if row >= 0:
             front_page.open_in_nemo(self.table.get_row_path(row))
 
+    def _update_drop_zone_thumb(self, path):
+        """Update the header thumbnail to show path (used in browse mode)."""
+        if not path or not os.path.exists(path):
+            return
+        from PyQt6.QtGui import QImageReader
+        from PyQt6.QtCore import QSize as _QSize
+        ext = os.path.splitext(path)[1].lower()
+        _reader = QImageReader(path)
+        _reader.setAutoTransform(True)
+        _orig = _reader.size()
+        _PREVIEW_MAX = 700
+        if _orig.isValid() and max(_orig.width(), _orig.height(), 1) > _PREVIEW_MAX:
+            _sc = _PREVIEW_MAX / max(_orig.width(), _orig.height())
+            _reader.setScaledSize(_QSize(max(1, int(_orig.width() * _sc)),
+                                         max(1, int(_orig.height() * _sc))))
+        _qimg = _reader.read()
+        px = QPixmap.fromImage(_qimg) if not _qimg.isNull() else QPixmap()
+        if not px.isNull():
+            scaled = px.scaled(330, 330,
+                               Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+            self.drop_zone.setPixmap(scaled)
+            self.drop_zone.setText("")
+        else:
+            # Video — extract first frame
+            frame_px = None
+            if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm'):
+                try:
+                    import cv2, numpy as np
+                    from PyQt6.QtGui import QImage
+                    cap = cv2.VideoCapture(path)
+                    ret, frame = cap.read()
+                    cap.release()
+                    if ret:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb.shape
+                        qimg = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
+                        frame_px = QPixmap.fromImage(qimg)
+                except Exception:
+                    pass
+            if frame_px and not frame_px.isNull():
+                scaled = frame_px.scaled(330, 330,
+                                         Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                self.drop_zone.setPixmap(scaled)
+                self.drop_zone.setText("")
+            else:
+                self.drop_zone.setPixmap(QPixmap())
+                self.drop_zone.setText("▶ VIDEO" if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+
     def handle_preview(self):
         if self._lock_preview: return
         row = self._current_row()
@@ -2848,8 +3147,39 @@ class AISearchApp(QMainWindow):
                 return
             self._remove_missing_file(row, path)
             return
+        if self._browse_dir:
+            # Debounce thumbnail update — skip rapid scrolling, only render when settled
+            if not hasattr(self, '_thumb_timer'):
+                from PyQt6.QtCore import QTimer as _QT
+                self._thumb_timer = _QT(self)
+                self._thumb_timer.setSingleShot(True)
+                self._thumb_timer.timeout.connect(lambda: self._update_drop_zone_thumb(
+                    self.table.get_row_path(self._current_row()) or ""))
+            self._thumb_timer.start(80)
+        # Synchronously update attrs_data with path rules so deferred _refresh_attrs sees correct values immediately
+        _pr = self.get_path_rules_cached()
+        if _pr:
+            self.attrs_data, _ = attrs_mod.apply_path_rules(
+                self.attrs_data, path, self.current_project, _path_rules=_pr)
+
         self.preview_handler.show(path)
         self._refresh_inline_attrs(path)
+
+    def get_path_rules_cached(self):
+        """Return path-scoped filename rules, reloading only when the rules file changes."""
+        proj = self.current_project or ""
+        rules_file = attrs_mod.filename_rules_file_for_project(proj)
+        try:
+            mtime = os.path.getmtime(rules_file)
+        except OSError:
+            mtime = 0
+        key = (proj, mtime)
+        if getattr(self, '_path_rules_cache_key', None) != key:
+            fn_rules = attrs_mod.load_filename_rules(proj)
+            self._path_rules_cache = [r for r in fn_rules
+                                      if r.get("field") and '/' in r.get("pattern", "")]
+            self._path_rules_cache_key = key
+        return self._path_rules_cache
 
     def _remove_missing_file(self, row, path):
         """Remove a file that no longer exists from the table, DB, and embeddings."""
@@ -2892,30 +3222,47 @@ class AISearchApp(QMainWindow):
             self._raise_preview()
             return
         if not self.query_path: return
-        old_path = self.table.get_row_path(row)
 
-        new_path, self.data, err = front_page.move_file_physically(
-            old_path, self.query_path, self.data, self.current_project,
-            mode=self.config.get("move_conflict", "size_check"), parent_win=self)
+        sel_rows = self._selected_rows()
+        rows_to_move = sorted([r for r in sel_rows if r != 0], reverse=True)  # high→low so removals don't shift
+        multi = len(rows_to_move) > 1
+        any_moved = False
+        last_row = row
 
-        if new_path:
-            if self.query_emb is not None and self.data and "paths" in self.data:
-                if old_path in self.data["paths"]:
-                    idx = self.data["paths"].index(old_path)
-                    feedback.record(self.current_project, self.query_emb, self.data["embeddings"][idx])
-                    self.feedback_data = feedback.load(self.current_project)
-            dest_path = os.path.join(os.path.dirname(os.path.abspath(self.query_path)),
-                                     os.path.basename(old_path))
-            self._update_row(row, old_path, new_path,
-                             new_path == dest_path,
-                             dest_path,
-                             protect_rows={0})   # never remove the query row
+        needs_feedback_reload = False
+        for r in rows_to_move:
+            old_path = self.table.get_row_path(r)
+            if not old_path:
+                continue
+            new_path, self.data, err = front_page.move_file_physically(
+                old_path, self.query_path, self.data, self.current_project,
+                mode=self.config.get("move_conflict", "size_check"), parent_win=self)
+            if new_path:
+                if self.query_emb is not None and self.data and "paths" in self.data:
+                    if old_path in self.data["paths"]:
+                        idx = self.data["paths"].index(old_path)
+                        feedback.record(self.current_project, self.query_emb, self.data["embeddings"][idx])
+                        needs_feedback_reload = True
+                dest_path = os.path.join(os.path.dirname(os.path.abspath(self.query_path)),
+                                         os.path.basename(old_path))
+                self._update_row(r, old_path, new_path,
+                                 new_path == dest_path,
+                                 dest_path,
+                                 protect_rows={0})
+                any_moved = True
+                last_row = r
+            elif err and err != "cancelled":
+                QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
+
+        if any_moved:
+            if needs_feedback_reload:
+                self.feedback_data = feedback.load(self.current_project)
             self._post_move_dup_cleanup()
-            next_row = row + 1 if row + 1 < self.table.rowCount() else row - 1
-            if next_row >= 0: self._select_row(next_row)
+            if not multi:
+                next_row = last_row + 1 if last_row + 1 < self.table.rowCount() else last_row - 1
+                if next_row >= 0:
+                    self._select_row(next_row)
             self._raise_preview()
-        elif err and err != "cancelled":
-            QMessageBox.critical(self, "Move Error", f"Could not move file: {err}")
 
     def _raise_preview(self):
         """Bring the preview window to the front without stealing keyboard focus."""
@@ -3233,5 +3580,14 @@ class AISearchApp(QMainWindow):
                 self.table.setFocus()
                 if was_query:
                     self._rebase_to_row(new_row)
+            else:
+                # Table is now empty — clear preview, thumbnail, and attrs panel
+                self._refresh_inline_attrs(None)
+                self.drop_zone.setPixmap(QPixmap())
+                self.drop_zone.setText("drop image / video")
+                pw = getattr(getattr(self, "preview_handler", None), "window", None)
+                if pw:
+                    pw.label.setPixmap(QPixmap())
+                    pw._refresh_attrs(None)
         if errors:
             QMessageBox.critical(self, "Trash Error", "\n".join(errors))

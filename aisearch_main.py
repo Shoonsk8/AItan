@@ -10,9 +10,12 @@ if sys.platform == "linux":
         if os.path.exists(_plugins):
             os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _plugins
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QComboBox
 from PyQt6.QtGui import QIcon, QImageReader
 from aisearch_app import AISearchApp
+
+# Disable scroll-wheel on all combo boxes app-wide
+QComboBox.wheelEvent = lambda self, e: e.ignore()
 
 # Raise Qt's per-image allocation cap (default 256 MB is too low for large AI images)
 QImageReader.setAllocationLimit(0)

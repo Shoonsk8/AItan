@@ -82,6 +82,26 @@ class _CanvasMixin:
         self._chk_show_raw_data.toggled.connect(_on_raw_data_toggle)
         proj_bar.addWidget(self._chk_show_raw_data)
 
+        # ── CLIP inspect trigger ──────────────────────────────────────────────
+        _insp_lbl = QLabel("CLIP Inspect:")
+        _insp_lbl.setStyleSheet("color:#ccc; font-size:9pt;")
+        proj_bar.addWidget(_insp_lbl)
+        self._clip_inspect_mode_cb = QComboBox()
+        self._clip_inspect_mode_cb.wheelEvent = lambda e: e.ignore()
+        self._clip_inspect_mode_cb.addItem("No inspection",    "never")
+        self._clip_inspect_mode_cb.addItem("All the time",     "always")
+        self._clip_inspect_mode_cb.addItem("On watch receive", "watch")
+        _cur_mode = self.app.config.get("clip_inspect_mode", "never")
+        _mi = self._clip_inspect_mode_cb.findData(_cur_mode)
+        if _mi >= 0:
+            self._clip_inspect_mode_cb.setCurrentIndex(_mi)
+        def _on_inspect_mode(idx):
+            mode = self._clip_inspect_mode_cb.currentData()
+            self.app.config["clip_inspect_mode"] = mode
+            cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+        self._clip_inspect_mode_cb.currentIndexChanged.connect(_on_inspect_mode)
+        proj_bar.addWidget(self._clip_inspect_mode_cb)
+
         lay.addLayout(proj_bar)
 
         # ── Canvas widget ─────────────────────────────────────────────────────
@@ -90,6 +110,43 @@ class _CanvasMixin:
         self._canvas_editing_proj = _cur_proj
         lay.addWidget(self._canvas_widget)
 
+        def _preview_canvas():
+            pw = getattr(getattr(self.app, "preview_handler", None), "window", None)
+            return getattr(pw, "_soft_canvas", None) if pw else None
+
+        def _sync_move_to_preview(key, x, y):
+            sc = _preview_canvas()
+            if not sc:
+                return
+            for w in sc.widgets:
+                if w.key == key:
+                    w.move(x, y)
+                    sc._apply_connections_for(key)
+                    break
+            canvas = getattr(sc, "canvas", None)
+            if canvas and sc.widgets:
+                bottom = max(w.y() + w.height() for w in sc.widgets)
+                canvas.setMinimumHeight(max(1000, bottom + 40))
+
+        def _sync_resize_to_preview(key):
+            sc = _preview_canvas()
+            if not sc:
+                return
+            src_map = {w.key: w for w in self._canvas_widget.widgets}
+            for w in sc.widgets:
+                if w.key == key:
+                    src = src_map.get(key)
+                    if src:
+                        w.resize(src.width(), src.height())
+                    break
+
+        def _wire_preview_sync():
+            for w in self._canvas_widget.widgets:
+                w.moved.connect(lambda k, x, y: _sync_move_to_preview(k, x, y))
+                w.resized.connect(lambda k: _sync_resize_to_preview(k))
+
+        _wire_preview_sync()
+
         # ── Button actions ────────────────────────────────────────────────────
         def _do_load():
             name = self._canvas_proj_cb.currentText()
@@ -97,6 +154,7 @@ class _CanvasMixin:
             self._canvas_widget.reload(path)
             self._canvas_editing_proj = name
             self._canvas_editing_lbl.setText(f"Editing: {name}")
+            _wire_preview_sync()
 
         def _do_overwrite():
             from PyQt6.QtWidgets import QMessageBox, QCheckBox as _QCB

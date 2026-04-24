@@ -356,7 +356,21 @@ class TagGroupsEditor(QMainWindow):
 
         try:
             self._manager.save_data(new_data)
-            self._manager.export_tag_groups(new_data)
+            tag_groups = self._manager.export_tag_groups(new_data)
+            # Write exported groups to global attrs_tags.json (merge over existing)
+            from attribute_manager import TAG_GROUPS_FILE
+            import json as _json
+            _existing: dict = {}
+            import os as _os
+            if _os.path.exists(TAG_GROUPS_FILE):
+                try:
+                    with open(TAG_GROUPS_FILE, encoding="utf-8") as _f:
+                        _existing = _json.load(_f)
+                except Exception:
+                    pass
+            _existing.update(tag_groups)
+            with open(TAG_GROUPS_FILE, "w", encoding="utf-8") as _f:
+                _json.dump(_existing, _f, indent=2, ensure_ascii=False)
             QMessageBox.information(
                 self, "Saved",
                 f"Workspace → {self._manager.filename}\n"

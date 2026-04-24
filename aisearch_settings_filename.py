@@ -89,8 +89,13 @@ class _FilenameMixin:
             fn_cfg["auto_rename"] = v
             _am.save_filename_config(fn_cfg, proj)
             pw = self.app.preview_handler.window
-            if pw and hasattr(pw, '_btn_auto_rename'):
-                pw._btn_auto_rename.setVisible(v)
+            if pw:
+                if hasattr(pw, '_btn_auto_rename'):
+                    pw._btn_auto_rename.setVisible(v)
+                if hasattr(pw, '_chk_auto_rename') and pw._chk_auto_rename.isChecked() != v:
+                    pw._chk_auto_rename.blockSignals(True)
+                    pw._chk_auto_rename.setChecked(v)
+                    pw._chk_auto_rename.blockSignals(False)
             # Keep DB tab checkbox in sync
             db_chk = getattr(self, "chk_rename_on_scan", None)
             if db_chk and db_chk.isChecked() != v:
@@ -107,13 +112,23 @@ class _FilenameMixin:
         _tags_file = _am.tags_file_for_project(_proj)
         _proj_tg   = _am._load_tag_groups(_tags_file)
         _proj_sec_styles = {}
+        _col_names = {}
         try:
             import json as _json
             with open(_tags_file, encoding="utf-8") as _f:
                 _proj_raw = _json.load(_f)
             _proj_sec_styles = _proj_raw.get("__section_styles__", {})
+            _col_names = _proj_raw.get("__col_names__", {})
         except Exception:
             pass
+
+        def _grp_display(grp):
+            """Return a user-friendly display name for a tag group key."""
+            prefix = grp[:-6] if grp.endswith("_Table") else grp
+            col = _col_names.get(prefix)
+            if col:
+                return col[0]  # e.g. 'ModelImage' from ['ModelImage']
+            return prefix
 
         # Tag groups that are user-facing (not coded-field sub-tables or internal keys)
         # Include both global and project-specific groups; allow matrix style too
@@ -199,8 +214,8 @@ class _FilenameMixin:
             row_w.dropEvent      = _drop
 
             pat_e = QLineEdit(pattern)
-            pat_e.setPlaceholderText("e.g. -E0a")
-            pat_e.setFixedWidth(100)
+            pat_e.setPlaceholderText("e.g. nastia/image-########-####.png")
+            pat_e.setFixedWidth(200)
             pat_e.setStyleSheet(
                 "background:#252525; color:#e0e0e0; border:1px solid #444; padding:1px 4px;")
 
@@ -221,7 +236,7 @@ class _FilenameMixin:
                 attr_cb.addItem("── Tag Groups ──", "__hdr__")
                 attr_cb.model().item(attr_cb.count() - 1).setEnabled(False)
                 for grp in _tag_groups_flat:
-                    attr_cb.addItem(f"⊕ {grp}", f"TAG:{grp}")
+                    attr_cb.addItem(f"⊕ {_grp_display(grp)}", f"TAG:{grp}")
 
             idx = attr_cb.findData(attr_key)
             if idx >= 0: attr_cb.setCurrentIndex(idx)
@@ -242,7 +257,11 @@ class _FilenameMixin:
                     val_cb.blockSignals(False)
                     return
                 if _attr_is_boolean(key):
-                    val_cb.setEnabled(False)
+                    val_cb.setEnabled(True)
+                    val_cb.addItem("False", "false")
+                    val_cb.addItem("True",  "true")
+                    i = val_cb.findData((cur_val or "false").lower())
+                    if i >= 0: val_cb.setCurrentIndex(i)
                     val_cb.blockSignals(False)
                     return
                 val_cb.setEnabled(True)
@@ -414,6 +433,15 @@ class _FilenameMixin:
         btn_auto.setStyleSheet("background:#2a4a2a; color:#aaffaa; padding:3px 10px; font-weight:bold;")
         btn_auto.setToolTip("Pick field letters and auto-generate all value rules")
         fn_add_row.addWidget(btn_auto)
+
+        btn_reapply = QPushButton("↺ Re-apply Rules")
+        btn_reapply.setStyleSheet("background:#2a2a4a; color:#aaaaff; padding:3px 10px;")
+        btn_reapply.setToolTip(
+            "Re-run filename rules on all existing DB files.\n"
+            "Only updates fields the rules explicitly match — all other attrs are untouched.")
+        btn_reapply.clicked.connect(self._reapply_fn_rules)
+        fn_add_row.addWidget(btn_reapply)
+
         fn_add_row.addStretch()
         fn_l.addLayout(fn_add_row)  # outside _rules_container so always clickable
 
@@ -529,8 +557,18 @@ class _FilenameMixin:
             if _cb.isChecked():
                 self._fn_overwrite_skip_warn = True
 
+        # Build a map so we can iterate in visual (layout) order, not insertion order
+        _row_map = {id(rw): (pe, ac, vc, mc)
+                    for pe, ac, vc, mc, rw in self._fn_rows}
+        _ordered = []
+        for i in range(self._fn_grid.count()):
+            item = self._fn_grid.itemAt(i)
+            w = item.widget() if item else None
+            if w and id(w) in _row_map:
+                _ordered.append(_row_map[id(w)])
+
         rules = []
-        for pat_e, attr_cb, val_cb, mode_cb, _ in self._fn_rows:
+        for pat_e, attr_cb, val_cb, mode_cb in _ordered:
             pat      = pat_e.text().strip()
             attr_key = attr_cb.currentData() or ""
             if not pat or not attr_key or attr_key == "__hdr__":
@@ -651,7 +689,8 @@ class _FilenameMixin:
                                 parts[dk] = dv
                         parts["j"] = _am.julian_id_for_file(p)
 
-                        new_stem = _am.build_coded_filename(parts)
+                        _fo = _am.get_sync_field_order(getattr(self.app, "current_project", None))
+                        new_stem = _am.build_coded_filename(parts, field_order=_fo)
                         new_p = _os.path.join(folder, f"{new_stem}{ext}")
                         if new_p != p:
                             base_new = _os.path.join(folder, new_stem)
@@ -686,3 +725,52 @@ class _FilenameMixin:
                     self._rename_timer.stop()
         self._rename_timer.timeout.connect(_poll)
         self._rename_timer.start(150)
+
+    def _reapply_fn_rules(self):
+        """Re-run one-way filename rules on all existing DB files.
+        Only writes fields the rules explicitly match — everything else untouched."""
+        import aisearch_attrs as _am
+        app = self.app
+        if not app.data or not app.attrs_data:
+            QMessageBox.information(self, "Re-apply Rules", "No database loaded.")
+            return
+        paths = list(app.data.get("paths", []))
+        if not paths:
+            QMessageBox.information(self, "Re-apply Rules", "No files in database.")
+            return
+        proj = getattr(app, "current_project", None)
+        fn_rules = _am.load_filename_rules(proj)
+        one_way = [
+            r for r in fn_rules
+            if r.get("field") and (
+                r.get("one_way") or r.get("extract") or '/' in r.get("pattern", "")
+            )
+        ]
+        if not one_way:
+            QMessageBox.information(self, "Re-apply Rules",
+                "No detect or path-scoped rules found.\nAdd rules with '→ Detect' mode or a directory pattern first.")
+            return
+        updated = 0
+        for path in paths:
+            bn = os.path.basename(path)
+            stem = os.path.splitext(bn)[0]
+            od = _am.parse_filename_rules(stem, one_way, basename=bn, fullpath=path)
+            if not od:
+                continue
+            entry = app.attrs_data.setdefault(path, {})
+            changed = False
+            if "P" in od and od["P"]:
+                entry["person_id"] = od["P"]
+                changed = True
+            for field, value in od.items():
+                if field != "P" and value:
+                    custom_key = f"cf_{field.lower()}"
+                    entry[custom_key] = value
+                    changed = True
+            if changed:
+                updated += 1
+        if updated:
+            _am.save(proj, app.attrs_data)
+        QMessageBox.information(self, "Re-apply Rules",
+            f"Updated {updated} of {len(paths)} files.\n"
+            "Only rule-matched fields were changed.")

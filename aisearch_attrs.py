@@ -1,4 +1,7 @@
-import json, os, cv2, re, datetime, time as _time
+import json, os, cv2, re, datetime, time as _time, threading as _threading
+
+# dlib (via face_recognition) is not thread-safe — serialize all face detection calls.
+_face_lock = _threading.Lock()
 
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_DIR, "data")
@@ -123,7 +126,8 @@ def detect_file_attrs(path):
         # O — orientation / aspect ratio
         ratio = width / height
         if   abs(ratio - 1.0) < 0.05:  result["o"] = "11"  # 1:1  square
-        elif ratio >= 2.2:              result["o"] = "f1"  # 21:9 ultra-wide
+        elif ratio >= 4.0:              result["o"] = "f1"  # 15:1 extreme ultra-wide
+        elif ratio >= 2.2:              result["o"] = "73"  # 21:9 cinema wide
         elif ratio >= 1.7:              result["o"] = "09"  # 16:9 landscape
         elif ratio >= 1.4:              result["o"] = "32"  # 3:2  landscape (photo)
         elif ratio > 1.05:              result["o"] = "43"  # 4:3  landscape
@@ -203,9 +207,9 @@ def metadata_rules_save_path_for_project(project=None):
     return META_MAP_RULES_FILE
 
 def load_metadata_rules(project=None):
-    """Load metadata mapping rules for a project, merged with the default rules.
-    Default rules (metadata_mapping_rules.json) are always the base layer.
-    Project-specific rules are merged on top — same source key overrides the default."""
+    """Load metadata mapping rules for a project.
+    If a project file exists, return it as-is (complete override).
+    Only fall back to defaults when no project file has been saved yet."""
     def _read(path):
         try:
             if os.path.exists(path):
@@ -213,23 +217,18 @@ def load_metadata_rules(project=None):
                     return json.load(f)
         except Exception:
             pass
-        return []
-
-    defaults = _read(META_MAP_RULES_FILE)
+        return None
 
     if not project or project == "default":
-        return defaults
+        return _read(META_MAP_RULES_FILE) or []
 
-    proj_rules = _read(metadata_rules_save_path_for_project(project))
-    if not proj_rules:
-        return defaults
+    proj_path = metadata_rules_save_path_for_project(project)
+    proj_rules = _read(proj_path)
+    if proj_rules is not None:
+        return proj_rules  # project file exists — use it exactly as saved
 
-    # Merge: defaults first, project rules override by source key
-    merged = {r["source"]: r for r in defaults if r.get("source")}
-    for r in proj_rules:
-        if r.get("source"):
-            merged[r["source"]] = r
-    return list(merged.values())
+    # No project file yet — seed from defaults
+    return _read(META_MAP_RULES_FILE) or []
 
 def save_metadata_rules(rules, project=None):
     """Save metadata mapping rules list to disk."""
@@ -297,13 +296,6 @@ _DEFAULT_TAG_GROUPS = {
         ["d", "Heterochromia (Central)"],
         ["e", "Aniridia"],
     ],
-    # 2nd digit (left) = additional modifier
-    "E_Additional": [
-        ["0", "Naked"],              ["1", "Glasses"],
-        ["2", "Neon"],               ["3", "Glasses + Neon"],
-        ["b", "Bad"],                ["f", "Detail"],
-    ],
-
     # ── Hair  HC[length][style][color]  ──────────────────────────────────────
     # 1st digit (right) = color
     "HC_Color": [
@@ -399,7 +391,7 @@ _DEFAULT_TAG_GROUPS = {
     ],
     # 2nd digit = angle
     "CS_Angle": [
-        ["0", "(none)"],       ["1", "Low Angle"],     ["2", "High Angle"],
+        ["0", "Eye Level"],    ["1", "Low Angle"],     ["2", "High Angle"],
         ["3", "Over-Shoulder"],["4", "Dutch Angle"],   ["5", "Bird's Eye"],
     ],
     # 1st digit = lighting
@@ -416,12 +408,23 @@ _DEFAULT_TAG_GROUPS = {
         ["5", "Outdoor"],      ["6", "Nature"],         ["8", "Space"],
     ],
     # ── Orientation  O[width][height]  ───────────────────────────────────────
+    "O": [
+        ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
+        ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
+        ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
+    ],
     "O_Preset": [
-        ["f1", "15:1 (ultra-wide)"], ["09", "16:9 (landscape)"],
-        ["90", "9:16 (portrait)"],   ["11", "Square"],
+        ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
+        ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
+        ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
     ],
 
     # ── Resolution  R[w][h]  ─────────────────────────────────────────────────
+    "R": [
+        ["36", "360p"], ["48", "480p"],  ["72", "720p"],
+        ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
+        ["08", "8K"],
+    ],
     "R_Preset": [
         ["36", "360p"], ["48", "480p"],  ["72", "720p"],
         ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
@@ -429,20 +432,39 @@ _DEFAULT_TAG_GROUPS = {
     ],
 
     # ── FrameRate  K[tens][units]  ───────────────────────────────────────────
+    "K": [
+        ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
+    ],
     "K_Preset": [
         ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
     ],
 
-    "Quality":  [["crap", "Crap"], ["ok", "OK"], ["good", "Good"]],
+    # ── Watermark ─────────────────────────────────────────────────────────────
+    "Watermark": [["watermark", "True"], ["no_watermark", "False"]],
+
     "Audio":    [["no_sound", "No Sound"], ["aac", "AAC"], ["mp3", "MP3"],
                  ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
                  ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"], ["voice", "Voice"]],
+    "audio":      [["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
+                   ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
+                   ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"]],
+    "audio_Preset": [["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
+                     ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
+                     ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"]],
     "Variant":  [
         ["origin", "Origin"], ["base", "Base"], ["expression", "Expression"],
         ["clothing", "Clothing"], ["body_parts", "Body Parts"],
         ["background", "Background"], ["hair", "Hair"], ["style", "Style"],
         ["accessories", "Accessories"], ["mutant", "Mutant"], ["other", "Other"],
     ],
+}
+
+# Display names for hardcoded sections (shown in Attributes tab title when no custom name saved)
+_DEFAULT_FIELD_NAMES = {
+    "audio":   "Audio Format",
+    "Variant": "Variant",
+    "Source":  "Source",
+    "Misc":    "Misc",
 }
 
 def _load_tag_groups(tags_file=None):
@@ -522,97 +544,148 @@ HAIR_COLOR_TAGS   = set()
 # SubjectID: 3 hex digits (single), M+2 hex (multiple mains), A+2 hex (animals)
 
 EXPRESSION_CATEGORIES = {
-    0x1: "Primary Emotions 基本の感情",
-    0x2: "LOL Scale 笑いの段階",
-    0x3: "Social & Subtle 社会的・微妙な合図",
-    0x4: "Pain / Fear / Stress 痛み・恐怖・ストレス",
-    0x5: "Embarrassment 当惑・恥じらい",
-    0x6: "Intellectual 知的・思考",
-    0x7: "Exhaustion / Boredom 疲労・退屈",
-    0x8: "Sensory Pleasure 感覚的な快楽",
-    0x9: "Intense Physiological 生理的な絶頂・激しい反応",
-    0xa: "Oral & Tongue 口と舌の動き",
-    0xb: "Reflexive / Habitual 無意識・習慣的な動作",
+    0x0: "Neutral 無表情",
+    0x1: "Happy 幸せ",
+    0x2: "Disgust / Contempt 嫌悪・軽蔑",
+    0x3: "Sad 悲しみ",
+    0x4: "Angry 怒り",
+    0x5: "Surprised 驚き",
+    0x6: "Fear 恐れ",
+    0x7: "Tired / Soft 疲れ・穏やか",
+    0x8: "Seductive 誘惑",
+    0x9: "Shy / Embarrassed 恥じらい",
+    0xa: "Mischievous いたずら",
+    0xb: "Pain 痛み",
+    0xc: "Intense / Dramatic 強烈・劇的",
 }
 
 # Full X field reference table: code → (english_name, japanese_name, description)
 # First hex digit = category (1–b), second = index within category (0–f)
 EXPRESSION_TABLE = {
-    # ── 1x Primary Emotions ──────────────────────────────────────────────────
-    "10": ("Smile",          "笑顔",         "Ranging from a slight upturn of the corners of the mouth to a broad, toothy grin."),
-    "11": ("Frown",          "しかめっ面",   "Pulling the eyebrows together and down, often with a downward-curving mouth."),
-    "12": ("Scowl",          "睨み",         "Heavy, angry frown, often involving narrowed eyes."),
-    "13": ("Sneer",          "冷笑",         "Raising one side of the upper lip; usually expresses contempt or dislike."),
-    "14": ("Grimace",        "苦悶の表情",   "A twisted expression often caused by pain, disgust, or disapproval."),
-    "15": ("Gasp",           "息を呑む",     "Wide eyes and an open mouth, usually signaling sudden shock or realization."),
-    "16": ("Disgust",        "嫌悪",         "Wrinkled nose, raised upper lip, and squinted eyes."),
-    "17": ("Awe",            "畏怖",         "Widened eyes, dropped jaw, and completely relaxed brow."),
-    "18": ("Worry",          "心配",         "Furrowed brow with the inner corners of the eyebrows pulled up."),
-    # ── 2x LOL Scale ─────────────────────────────────────────────────────────
-    "20": ("Duchenne Smile", "本物の笑顔",   "A full, genuine smile that reaches the eyes (crow's feet)."),
-    "21": ("Beam",           "満面の笑み",   "A radiant, wide-eyed smile of immense pride or sudden success."),
-    "22": ("Guffaw",         "大笑い",       "Boisterous, mouth-wide-open laughter with the head back and eyes squeezed shut."),
-    "23": ("Chuckle",        "くすくす笑い", "Soft, closed-mouth laughter where the cheeks puff out and the shoulders bounce."),
-    "24": ("Wheeze",         "ひーひー笑い", "Red-faced, breathless, silent laughter with watery eyes and a strained mouth."),
-    "25": ("Snicker",        "忍び笑い",     "Suppressed laughter with tight lips and flared nostrils."),
-    "26": ("Grin",           "にっこり",     "A broad, often mischievous or highly satisfied smile that prominently shows the teeth."),
-    "27": ("Exultation",     "歓喜",         "Pure triumph; eyes wide and bright, mouth open in a shout or cheer of joy."),
-    # ── 3x Social & Subtle ───────────────────────────────────────────────────
-    "30": ("Smirk",          "にやにや",         "One-sided, smug, or 'know-it-all' smile that conveys conceit or irony."),
-    "31": ("Wink",           "ウィンク",         "One eye closed; signals a secret, joke, or flirtation."),
-    "32": ("Raised Eyebrow", "片眉を上げる",     "A single brow lifted high; signals skepticism or curiosity."),
-    "33": ("Double Brow",    "両眉を上げる",     "Both brows lifted high; signals a friendly greeting or 'Wow'."),
-    "34": ("Blank Stare",    "無表情",           "Total lack of muscle movement; the 'thousand-yard stare' or poker face."),
-    "35": ("Deadpan",        "真顔",             "A neutral, wooden face used specifically while delivering humor."),
-    "36": ("Side Eye",       "横目",             "Looking askance out of the corners of the eyes; signals suspicion or judgment."),
-    "37": ("Pout",           "口を尖らせる",     "Lower lip pushed out; signals 'childish' annoyance or sulking."),
-    # ── 4x Pain / Fear / Stress ──────────────────────────────────────────────
-    "40": ("Wince",          "顔をしかめる",     "Involuntary facial shrinking reacting to a sudden sting."),
-    "41": ("Horror",         "恐怖",             "Eyes wide with dilated pupils, brows pulled up, mouth pulled back into a scream."),
-    "42": ("Cower",          "萎縮",             "Face pulled down and away, eyes squinting and brow furrowed."),
-    "43": ("Jaw Clench",     "食いしばり",       "Teeth ground together making the jawline rigid; signals suppressed rage or stress."),
-    "44": ("Brow Furrow",    "眉間のしわ",       "Eyebrows knit together tightly in the center; signals deep focus or worry."),
-    "45": ("Lip Tremble",    "唇の震え",         "Lower lip shakes uncontrollably; the precursor to crying."),
-    # ── 5x Embarrassment ─────────────────────────────────────────────────────
-    "50": ("Blush",          "赤面",             "Visible reddening of the face and ears due to embarrassment."),
-    "51": ("Averted Gaze",   "目線を逸らす",     "Looking down or to the side repeatedly; inability to hold eye contact."),
-    "52": ("Lip Bite",       "唇を噛む",         "Sucking in the lower lip; signals nervousness or being 'caught'."),
-    "53": ("Sheepish Grin",  "照れ笑い",         "A tight-lipped, shy smile often following a mistake."),
-    "54": ("Face Palm",      "顔を覆う",         "Eyes closed tight, brow furrowed in frustration."),
-    "55": ("Guilty Look",    "罪悪感",           "Shifting eyes, a lowered head, and compressed lips."),
-    # ── 6x Intellectual ──────────────────────────────────────────────────────
-    "60": ("Pensive",        "哀愁・考え込む",   "Head tilted slightly, eyes looking up and away; indicates deep thought."),
-    "61": ("Determined",     "決意",             "Set jaw, forward-leaning head, and a fixed, unblinking gaze."),
-    "62": ("Confused",       "困惑",             "Head tilt, one brow lower than the other, and the mouth slightly open."),
-    "63": ("Concentrated",   "集中",             "Lips pursed, narrowed eyes, and a still face."),
-    "64": ("Doubtful",       "疑念",             "The lower lip is pulled up over the top lip; signals 'I'm not so sure'."),
-    # ── 7x Exhaustion / Boredom ──────────────────────────────────────────────
-    "70": ("Yawn",           "あくび",           "Mouth wide open, eyes watering slightly, and nostrils flaring."),
-    "71": ("Droopy Eyes",    "眠そうな目",       "Eyelids halfway closed and heavy; signals extreme tiredness."),
-    "72": ("Eye Roll",       "目を回す",         "Eyes rotating upward and away; signals impatience."),
-    "73": ("Slack Face",     "弛緩した顔",       "All facial muscles completely relaxed; signals total boredom."),
-    "74": ("Heavy Sigh",     "ため息",           "Mouth slightly open to exhale, shoulders dropping, eyes looking downward."),
-    # ── 8x Sensory Pleasure ──────────────────────────────────────────────────
-    "80": ("Serene Bliss",   "至福",             "Eyes gently closed, a tiny, faint smile, and completely relaxed brow."),
-    "81": ("Relief Exhale",  "安堵の吐息",       "Eyes closing halfway, a long slow exhale through slightly parted lips."),
-    "82": ("Satisfaction",   "深い満足",         "A firm, closed-mouth smile with a slow, knowing nod of the head."),
-    "83": ("Trance Gaze",    "恍惚",             "Soft, unfocused eyes and a completely slack, relaxed jaw."),
-    "84": ("Zest",           "活気",             "An energetic, wide-eyed look with a broad grin; signals high spirits."),
-    # ── 9x Intense Physiological ─────────────────────────────────────────────
-    "90": ("Euphoria",       "圧倒的な多幸感",   "Eyes squeezed tightly shut, head thrown back, mouth wide open in a peak of joy."),
-    "91": ("Adrenaline",     "アドレナリン",     "Pupils dilated, wide-eyed stare, rapid shallow breathing through slightly parted lips."),
-    "92": ("Overload",       "感覚の過負荷",     "Eyes rolling back slightly or fluttering, jaw dropped open, overwhelmed by intense sensation."),
-    "93": ("Ecstatic",       "恍惚の解放",       "Eyes closing slowly, head tilting back, deep exhale as tension leaves the body."),
-    # ── ax Oral & Tongue ─────────────────────────────────────────────────────
-    "a0": ("Tongue Poke",    "舌を出す",         "The tip of the tongue is poked out between the lips momentarily."),
-    "a1": ("Lip Lick",       "唇をなめる",       "A slow, circular movement of the tongue tip along the upper or lower lip."),
-    "a2": ("Tongue Press",   "舌を押し付ける",   "The tongue is pressed against the inside of the cheek, creating a visible bulge."),
-    "a3": ("Blep",           "べー",             "The tongue is extended fully and held flat; a teasing gesture."),
-    # ── bx Reflexive / Habitual ──────────────────────────────────────────────
-    "b0": ("Picking Nose",   "鼻をほじる",       "A finger is partially inserted into the nostril; signals boredom or distraction."),
-    "b1": ("Cover Face",     "手で顔を覆う",     "Both palms pressed against the face; signals shame, grief, or hiding a laugh."),
-    "b2": ("Wipe Tears",     "涙を拭う",         "A finger brushes under the lower eyelid to clear moisture."),
-    "b3": ("Rubbing Eyes",   "目をこする",       "Using knuckles or palms to apply pressure to closed eyes; signals fatigue."),
+    # ── 0x Neutral ← AI detects "00" ────────────────────────────────────────
+    "00": ("Neutral",        "無表情",           "Completely relaxed face with no visible muscle tension; AI-detectable baseline."),
+    "01": ("Deadpan",        "真顔",             "Neutral face used deliberately while delivering humor or sarcasm."),
+    "02": ("Resting",        "休息顔",           "Default resting expression; may read as serious or unfriendly."),
+    "03": ("Vacant",         "空虚顔",           "Empty unfocused gaze; total relaxation or 'thousand-yard stare'."),
+    "04": ("Composed",       "落ち着いた顔",     "Calm, controlled face; actively projecting stillness and poise."),
+    "05": ("Masked",         "感情を隠す顔",     "Deliberately concealing all feeling behind a smooth blank surface."),
+    "06": ("Serene",         "穏やか顔",         "Peaceful and still; no tension anywhere, soft unfocused eyes."),
+    "07": ("Impassive",      "無感動顔",         "Completely unreadable; neither tension nor relaxation gives anything away."),
+    # ── 1x Happy ← AI detects "10" ───────────────────────────────────────────
+    "10": ("Smile",          "笑顔",             "Slight upturn of the corners of the mouth; AI-detectable happy baseline."),
+    "11": ("Grin",           "にっこり",         "Broad smile showing teeth; satisfied or mischievous."),
+    "12": ("Laugh",          "大笑い",           "Open-mouth laughter; head may tilt back, eyes squeezed or bright."),
+    "13": ("Giggle",         "くすくす笑い",     "Soft suppressed laughter; cheeks puff out, shoulders bounce lightly."),
+    "14": ("Smirky Snicker", "忍び笑い",         "Tight-lipped suppressed laugh with flared nostrils; monkey snicker."),
+    "15": ("Beaming",        "満面の笑み",       "Radiant wide-eyed smile of immense joy or sudden success."),
+    "16": ("Playful Glee",   "はしゃぎ顔",       "Bright-eyed energetic expression of pure playful happiness."),
+    "17": ("Wink",           "ウィンク",         "One eye closed; signals a secret, joke, or flirtation."),
+    "18": ("Exultant",       "歓喜顔",           "Triumphant joy; eyes wide and bright, mouth open in a cheer."),
+    "19": ("Tender Smile",   "優しい笑顔",       "Soft warm affectionate smile; fondness without excitement."),
+    # ── 2x Disgust / Contempt ← AI detects "20" ─────────────────────────────
+    "20": ("Sneer",          "冷笑",             "One side of the upper lip raised; contempt or dislike; AI-detectable baseline."),
+    "21": ("Smug",           "自己満足顔",       "Self-satisfied closed smile; 'I know something you don't'."),
+    "22": ("Disgusted",      "嫌悪顔",           "Wrinkled nose, raised upper lip, squinted eyes; strong aversion."),
+    "23": ("Disdain",        "蔑み顔",           "Cold flat expression with slight downward curl; looking down on someone."),
+    "24": ("Condescending",  "見下し顔",         "Raised chin, lidded eyes; patronising superiority."),
+    "25": ("Eye Roll",       "目を回す",         "Eyes rotating upward and away; dismissive impatience or disbelief."),
+    "26": ("Bitter",         "苦々しい顔",       "Tight lips, narrowed eyes; resentful contempt from past hurt."),
+    "27": ("Withering",      "冷たい一瞥",       "A single cutting glance that diminishes without a word."),
+    "28": ("Repulsed",       "嫌悪感顔",         "Full-body revulsion visible in the face; skin crawling disgust."),
+    # ── 3x Sad ← AI detects "30" ─────────────────────────────────────────────
+    "30": ("Cry",            "泣き顔",           "Visible tears, trembling lower lip; AI-detectable sad baseline."),
+    "31": ("Pout",           "口を尖らせる",     "Lower lip pushed forward; childlike sulking or mild annoyance."),
+    "32": ("Whimper",        "今にも泣きそうな顔","Lip trembling, eyes glistening; on the verge of tears."),
+    "33": ("Wistful",        "哀愁顔",           "Soft distant gaze with a faint sad smile; bittersweet longing."),
+    "34": ("Melancholy",     "憂鬱顔",           "Downcast eyes, slack mouth; heavy lingering sadness."),
+    "35": ("Dejected",       "落胆顔",           "Bowed head, compressed lips; broken or deeply disappointed."),
+    "36": ("Grief",          "悲嘆顔",           "Profound loss; face crumpled, eyes shut tight against the pain."),
+    "37": ("Despairing",     "絶望顔",           "Hollow eyes, slack jaw; all hope extinguished."),
+    "38": ("Forlorn",        "孤独な悲しみ顔",   "Lonely sad gaze; abandoned and adrift."),
+    # ── 4x Angry ← AI detects "40" ───────────────────────────────────────────
+    "40": ("Frown",          "しかめっ面",       "Brows pulled down and together, mouth down-curved; AI-detectable angry baseline."),
+    "41": ("Stern",          "厳格な顔",         "Set jaw, flat mouth, controlled displeasure; authoritative."),
+    "42": ("Scowl",          "睨み顔",           "Heavy frown with narrowed eyes; deep displeasure or warning."),
+    "43": ("Glare",          "にらみつけ",       "Fixed piercing stare, brows low; sharp anger or challenge."),
+    "44": ("Furious",        "激怒顔",           "Flared nostrils, bared teeth, reddened face; full rage."),
+    "45": ("Brooding",       "陰鬱顔",           "Dark introspective look; suppressed anger or deep resentment."),
+    "46": ("Seething",       "怒りを抑える顔",   "Controlled surface hiding boiling rage just beneath; jaw clenched tight."),
+    "47": ("Outraged",       "憤慨顔",           "Indignant open-faced anger; a moral line has been crossed."),
+    "48": ("Cold Fury",      "冷たい怒り顔",     "Ice-cold, utterly still anger; far more dangerous than hot rage."),
+    # ── 5x Surprised ← AI detects "50" ──────────────────────────────────────
+    "50": ("Surprised",      "驚き顔",           "Raised brows, slightly open mouth; AI-detectable surprise baseline."),
+    "51": ("Shocked",        "衝撃顔",           "Wide eyes, dropped jaw; strong unexpected impact."),
+    "52": ("Amazed",         "感嘆顔",           "Wide-eyed wonder with relaxed brow; awe without fear."),
+    "53": ("Startled",       "びっくり顔",       "Flinch reaction; head pulled back, eyes snapped wide."),
+    "54": ("Bewildered",     "困惑顔",           "Surprised and confused together; head tilt, brow knit."),
+    "55": ("Astonished",     "仰天顔",           "Extreme positive surprise; mouth agape, eyes at maximum width."),
+    "56": ("Dumbfounded",    "唖然顔",           "Speechless; mouth opens but nothing comes out."),
+    "57": ("Aghast",         "ぞっとした顔",     "Horrified surprise; recoil and pallor with open mouth."),
+    # ── 6x Fear ← AI detects "60" ────────────────────────────────────────────
+    "60": ("Scared",         "恐怖顔",           "Eyes wide, brows raised, mouth pulled back; AI-detectable fear baseline."),
+    "61": ("Nervous",        "緊張顔",           "Tight smile, stiff posture, darting glances; unease without panic."),
+    "62": ("Anxious",        "不安顔",           "Furrowed brow, tense jaw, worried eyes; anticipatory dread."),
+    "63": ("Horrified",      "戦慄顔",           "Blanched skin, pupils dilated, mouth open in silent scream."),
+    "64": ("On-Guard",       "警戒顔",           "Narrowed eyes, tense brow; watchful wariness."),
+    "65": ("Panicked",       "パニック顔",       "Frantic wide eyes, rapid shallow breathing; fight-or-flight triggered."),
+    "66": ("Frozen",         "すくみ顔",         "Completely still; paralysed by fear, unable to move or speak."),
+    "67": ("Cowering",       "萎縮顔",           "Face pulled down and away; shrinking from a looming threat."),
+    # ── 7x Tired / Soft ← AI detects "70" ────────────────────────────────────
+    "70": ("Sleepy",         "眠そうな顔",       "Eyelids drooping heavily; AI-detectable tiredness baseline."),
+    "71": ("Drowsy",         "うとうと顔",       "Eyes half-closed, slow blinking; drifting in and out of awareness."),
+    "72": ("Relaxed",        "リラックス顔",     "All muscles soft, unhurried; completely at ease."),
+    "73": ("Dazed",          "ぼんやり顔",       "Unfocused gaze, slack jaw; mentally elsewhere."),
+    "74": ("Content",        "満足顔",           "Quiet settled happiness; a gentle closed-mouth smile."),
+    "75": ("Peaceful",       "平和顔",           "Eyes gently closed or soft, tiny faint smile; deep inner calm."),
+    "76": ("Languid",        "倦怠顔",           "Slow heavy pleasurably tired; every movement takes effort."),
+    "77": ("Bored",          "退屈顔",           "Flat affect, glazed eyes; nothing holds interest."),
+    "78": ("Zoned Out",      "ぼうっとした顔",   "Mind clearly elsewhere; body present, person absent."),
+    # ── 8x Seductive ← AI detects "80" ───────────────────────────────────────
+    "80": ("Flirty",         "色目遣い",         "Coy playful look with a slight smile; AI-detectable seductive baseline."),
+    "81": ("Sultry",         "妖艶顔",           "Heavy-lidded eyes, parted lips; smoldering attraction."),
+    "82": ("Bedroom Eyes",   "蠱惑的な目",       "Half-closed lids, soft gaze; intimate invitation."),
+    "83": ("Biting Lip",     "唇を噛む",         "Lower lip caught between teeth; desire or nervous anticipation."),
+    "84": ("Inviting",       "誘い顔",           "Open welcoming expression; soft smile with sustained eye contact."),
+    "85": ("Smoldering",     "くすぶる欲望顔",   "Intense restrained desire; heat behind still composed features."),
+    "86": ("Yearning",       "切望顔",           "Longing with visible desire; eyes soft, slightly parted lips."),
+    "87": ("Possessive",     "独占欲顔",         "Claiming intensity; gaze that says 'you are mine'."),
+    "88": ("Alluring",       "魅惑顔",           "Effortless magnetism; draws the eye without apparent effort."),
+    # ── 9x Shy / Embarrassed ← AI detects "90" ───────────────────────────────
+    "90": ("Shy",            "照れ顔",           "Averted gaze, compressed lips; reserved and self-conscious; AI baseline."),
+    "91": ("Embarrassed",    "恥ずかしそうな顔", "Wide eyes, flustered half-smile; caught off-guard."),
+    "92": ("Blushing",       "赤面",             "Visible reddening of cheeks and ears; warmth from attention."),
+    "93": ("Bashful",        "はにかみ顔",       "Head tilted down, eyes glancing up; charming shyness."),
+    "94": ("Timid",          "おどおど顔",       "Small gestures, slightly hunched; fearful of making a mistake."),
+    "95": ("Flustered",      "あたふた顔",       "Overwhelmed and scattered; too much happening at once."),
+    "96": ("Self-Conscious", "自意識過剰顔",     "Acutely aware of being watched; stiff and hyper-aware."),
+    "97": ("Meek",           "おとなしい顔",     "Quiet and submissive; accepting without protest."),
+    # ── ax Mischievous ← AI detects "a0" ─────────────────────────────────────
+    "a0": ("Mischievous",    "いたずらっ子顔",   "Impish smirk with bright scheming eyes; AI-detectable mischief baseline."),
+    "a1": ("Teasing",        "からかい顔",       "Playful taunting look; tongue slightly visible or exaggerated pout."),
+    "a2": ("Cheeky",         "ずうずうしい顔",   "Impudent grin; knows they're pushing limits and enjoying it."),
+    "a3": ("Devious Grin",   "悪巧み顔",         "Wide knowing grin; plotting something just naughty enough."),
+    "a4": ("Tongue Out",     "舌を出す",         "Tip of tongue poked out; teasing, playful, or cute."),
+    "a5": ("Conspiratorial", "共謀顔",           "Secret-plotting look; eyebrows raised, voice dropped, eyes darting."),
+    "a6": ("Sly",            "ずる賢い顔",       "Craftily clever; half-smile that hides more than it shows."),
+    "a7": ("Impudent",       "生意気顔",         "Boldly rude and disrespectful with complete confidence."),
+    # ── bx Pain ← AI detects "b0" ────────────────────────────────────────────
+    "b0": ("Grimace",        "顔をしかめる",     "Involuntary facial shrinking from sharp pain; AI-detectable pain baseline."),
+    "b1": ("Cringe",         "ひるみ顔",         "Full-body recoil reflected in the face; bracing for impact."),
+    "b2": ("Anguish",        "苦悩顔",           "Eyes squeezed shut, brow knotted, mouth contorted; deep suffering."),
+    "b3": ("Exhausted Pain", "消耗した痛み顔",   "All energy depleted; slack and hollow-eyed after prolonged ordeal."),
+    "b4": ("Wince",          "ひるみ顔",         "Sharp brief reactive pain; eyes snap shut, teeth clench."),
+    "b5": ("Agony",          "激痛顔",           "Extreme pain at its peak; every muscle contracted against it."),
+    "b6": ("Suffering",      "苦しみ顔",         "Ongoing sustained pain; endurance written across the whole face."),
+    "b7": ("Tearful Pain",   "痛み泣き顔",       "Crying directly from pain; wet eyes, helpless expression."),
+    # ── cx Intense / Dramatic ← AI detects "c0" ──────────────────────────────
+    "c0": ("Intense Stare",  "鋭い眼差し",       "Unblinking focused gaze; commanding presence; AI-detectable baseline."),
+    "c1": ("Fierce",         "猛々しい顔",       "Bared teeth or set jaw, forward lean; battle-ready aggression."),
+    "c2": ("Stoic",          "泰然顔",           "Utterly still face, no readable emotion; iron self-control."),
+    "c3": ("Determined",     "決意の顔",         "Set jaw, forward-leaning head, fixed unblinking gaze; unwavering resolve."),
+    "c4": ("Resolute",       "断固たる顔",       "Quiet unshakeable purpose; no drama, just absolute certainty."),
+    "c5": ("Commanding",     "威厳顔",           "Authority and power projected outward; others instinctively defer."),
+    "c6": ("Piercing",       "刺すような眼差し", "Gaze that cuts straight through; nothing is hidden from it."),
+    "c7": ("Formidable",     "圧倒的存在感",     "Intimidating presence; the whole face radiates controlled power."),
 }
 
 def expression_category(x_code):
@@ -696,7 +769,7 @@ _DEFAULT_CODED_FIELDS = [
     # ── Technical ────────────────────────────────────────────────────────────
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
     ("BG",  "Background",    3),   # [3rd=major][2nd=sub][1st=specific]
-    ("O",   "Orientation",   2),   # f1=15:1  09=16:9  90=9:16  11=square
+    ("O",   "Orientation",   2),   # f1=15:1  73=21:9  09=16:9  32=3:2  43=4:3  11=1:1  34=3:4  23=2:3  90=9:16
     ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
     ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
     ("WM",  "Watermark",     0),   # flag — WM present = watermarked
@@ -769,11 +842,14 @@ def parse_coded_filename(stem):
     result.update({k: (v or "") for k, v in m.groupdict().items()})
     return result
 
-def build_coded_filename(parts, date_first=False):
+def build_coded_filename(parts, date_first=False, field_order=None):
     """Build a coded filename stem from a dict of parts.
     Person-first (default): P001[P002...]PW003...{fields}   — AI search files
     Date-first (date_first=True): J{8chars}[P001...]...     — regular photos, sorts by date
-    parts keys: persons (list), persons_with (list), plus lowercase coded field keys."""
+    parts keys: persons (list), persons_with (list), plus lowercase coded field keys.
+    field_order: optional list of (letter, label, digits) tuples overriding CODED_FIELDS order;
+                 use get_sync_field_order(project) to derive from filename_rules.json."""
+    _fields = field_order if field_order is not None else CODED_FIELDS
     persons = parts.get("persons", [])
     if date_first:
         j_val = parts.get("j", "")
@@ -786,7 +862,7 @@ def build_coded_filename(parts, date_first=False):
             pw = str(pw).strip().lower().zfill(3)[:3]
             if pw and pw != "000":
                 stem += f'PW{pw}'
-        for letter, _, digits in CODED_FIELDS:
+        for letter, _, digits in _fields:
             if letter == 'J':
                 continue  # already placed at front
             val = parts.get(letter.lower(), "")
@@ -807,7 +883,7 @@ def build_coded_filename(parts, date_first=False):
         pw = str(pw).strip().lower().zfill(3)[:3]
         if pw and pw != "000":
             stem += f'PW{pw}'
-    for letter, _, digits in CODED_FIELDS:
+    for letter, _, digits in _fields:
         val = parts.get(letter.lower(), "")
         if not val:
             continue
@@ -873,7 +949,9 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
             except (UnidentifiedImageError, OSError):
                 # File has image extension but is not a valid image (e.g. MP4 with .jpg)
                 return None
-        encodings = face_recognition.face_encodings(img)
+        # dlib is not thread-safe — serialize all face encoding calls
+        with _face_lock:
+            encodings = face_recognition.face_encodings(img)
         if not encodings:
             return None    # no face — background/object, no ID assigned
         enc = encodings[0]
@@ -955,7 +1033,8 @@ def match_person_id(path, project, threshold=0.65):
                 img = face_recognition.load_image_file(path)
             except (UnidentifiedImageError, OSError):
                 return None
-        encodings = face_recognition.face_encodings(img)
+        with _face_lock:
+            encodings = face_recognition.face_encodings(img)
         if not encodings:
             return None
         enc   = encodings[0]
@@ -1005,7 +1084,8 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
     try:
         import face_recognition
         img  = face_recognition.load_image_file(path)
-        encs = face_recognition.face_encodings(img)
+        with _face_lock:
+            encs = face_recognition.face_encodings(img)
         if not encs:
             return
         enc = encs[0].tolist()
@@ -1167,29 +1247,44 @@ def save(project, data):
 def get(attrs_data, path):
     return attrs_data.get(path, {})
 
+def get_coded_field(entry, letter):
+    """Read a coded field value from an entry dict.
+    Checks manual key (letter.lower()) first, then auto-detected (cf_{letter.lower()}).
+    Treats both storage locations as equivalent sources for the same field."""
+    return entry.get(letter.lower(), "") or entry.get(f"cf_{letter.lower()}", "")
+
 def set_file(attrs_data, path, tags, note="", confirmed=False, project="", scene="",
              prompt="", neg_prompt="", seed="", meta=None, custom="", person_id="",
-             speech="", audio="", editable=False):
+             speech="", audio="", editable=False, preserve_text=False):
     has_data = (tags or note or confirmed or project or scene or prompt or neg_prompt
                 or seed or meta or custom or person_id or speech or audio or editable)
-    if not has_data:
+    if not has_data and not preserve_text:
         attrs_data.pop(path, None)
     else:
         # Merge into existing entry so unknown/extra fields are preserved
         entry = dict(attrs_data.get(path, {}))
         entry["tags"]       = list(dict.fromkeys(tags))  # deduplicate, preserve order
-        entry["note"]       = note
         entry["confirmed"]  = confirmed
         entry["project"]    = project
         entry["scene"]      = scene
-        entry["prompt"]     = prompt
-        entry["neg_prompt"] = neg_prompt
-        entry["seed"]       = seed
         entry["custom"]     = custom
         entry["person_id"]  = person_id
-        entry["speech"]     = speech
         entry["audio"]      = audio
         entry["editable"]   = editable
+        # preserve_text=True (auto-scan): never overwrite user text with empty string
+        if preserve_text:
+            if note:       entry["note"]       = note
+            elif "note" not in entry: entry["note"] = ""
+            if prompt:     entry["prompt"]     = prompt
+            if neg_prompt: entry["neg_prompt"] = neg_prompt
+            if seed:       entry["seed"]       = seed
+            if speech:     entry["speech"]     = speech
+        else:
+            entry["note"]       = note
+            entry["prompt"]     = prompt
+            entry["neg_prompt"] = neg_prompt
+            entry["seed"]       = seed
+            entry["speech"]     = speech
         if meta:
             entry["meta"] = meta
         attrs_data[path] = entry
@@ -1765,6 +1860,26 @@ def load_filename_config(project=None):
     """Return full filename config: {"auto_rename": bool, "rules": [...]}"""
     return dict(_load_fn_raw(project))
 
+def get_sync_field_order(project=None):
+    """Return CODED_FIELDS ordered by sync rules in filename_rules.json.
+    Sync rules (no one_way, no tag_group) define the canonical field order.
+    Any CODED_FIELDS not mentioned in sync rules are appended at the end."""
+    rules = load_filename_rules(project)
+    cf_dict = {letter: (letter, label, digits) for letter, label, digits in CODED_FIELDS}
+    ordered = []
+    seen = set()
+    for rule in rules:
+        if rule.get("one_way") or rule.get("tag_group"):
+            continue
+        field = rule.get("field", "")
+        if field and field in cf_dict and field not in seen:
+            ordered.append(cf_dict[field])
+            seen.add(field)
+    for letter, label, digits in CODED_FIELDS:
+        if letter not in seen:
+            ordered.append((letter, label, digits))
+    return ordered if ordered else CODED_FIELDS
+
 def save_filename_config(config, project=None):
     """Save full filename config (auto_rename + rules) for a project."""
     path = filename_rules_save_path_for_project(project)
@@ -1935,15 +2050,25 @@ def detect_tags_from_filename(path, rules):
     """Return list of tag keys to add based on filename field rules.
     New format: {"pattern": "-0", "field": "P", "value": "001"}
     Old format (backward compat): {"pattern": "-front", "tags": ["front"]}
-    Pattern is a plain substring matched against the full basename (with extension),
-    so '-0.' matches 'photo-0.jpg' and '-0-' matches 'photo-0-extra.jpg'."""
-    name = os.path.basename(path).lower()
+    Pattern supports wildcards (* any chars, ? or # single char) and path-scoping
+    when the pattern contains '/' (matched against full path)."""
+    import fnmatch as _fnmatch
+    name      = os.path.basename(path).lower()
+    norm_path = path.replace("\\", "/").lower()
     tags = []
     for rule in rules:
         pattern = rule.get("pattern", "").lower()
         if not pattern:
             continue
-        if pattern not in name:
+        pattern_fnmatch = pattern.replace('#', '?')
+        target = norm_path if '/' in pattern_fnmatch else name
+        if '*' in pattern_fnmatch or '?' in pattern_fnmatch:
+            matched = _fnmatch.fnmatch(target,
+                f"*{pattern_fnmatch}" if '/' in pattern_fnmatch and not pattern_fnmatch.startswith('*')
+                else pattern_fnmatch)
+        else:
+            matched = pattern_fnmatch in target
+        if not matched:
             continue
         if "tag_group" in rule:
             # Tag group rule: pattern in filename → add tag value to file's tags
@@ -1967,18 +2092,26 @@ def detect_tags_from_filename(path, rules):
                     tags.append(t)
     return tags
 
-def parse_filename_rules(stem, rules, basename=None):
+def parse_filename_rules(stem, rules, basename=None, fullpath=None, _return_path_flags=False):
     """Extract coded field values from a filename stem using rules.
     Returns dict of field→value, e.g. {"P": "001", "E": "0a"}.
+    If _return_path_flags=True, returns (result, path_fields) where path_fields is
+    the set of field keys whose winning match came from a path rule (contains '/').
     Supports:
       - Extract rule: {"field": "E", "extract": true, "digits": 2}
         → regex finds E followed by N hex digits in stem
       - Value rule:   {"pattern": "-0.", "field": "P", "value": "001"}
-        → substring match against full basename (stem + extension) sets fixed value
+        → substring/glob match against basename; if pattern contains '/' match
+          against full path (allows e.g. "nastia/image-*.png" to scope by folder)
     basename: full filename including extension (used for pattern matching).
-              Falls back to stem if not provided."""
-    name = (basename or stem).lower()   # full name for pattern matching
+              Falls back to stem if not provided.
+    fullpath: full absolute path; used when pattern contains '/'."""
+    import fnmatch as _fnmatch
+    name = (basename or stem).lower()   # filename-only target
+    norm_path = fullpath.replace("\\", "/").lower() if fullpath else name
     result = {}
+    # Track whether the current best match for each field came from a path rule (higher priority)
+    _result_is_path = {}  # field -> bool
     for rule in rules:
         if "field" not in rule:
             continue
@@ -1989,12 +2122,29 @@ def parse_filename_rules(stem, rules, basename=None):
                           stem, re.IGNORECASE)
             if m:
                 result[rule["field"]] = m.group(1).lower()
+                _result_is_path[rule["field"]] = False
         else:
             pattern = rule.get("pattern", "").lower()
             if not pattern:
                 continue
-            if pattern in name:
-                result[rule["field"]] = rule.get("value", "")
+            # '#' is an alias for '?' (single-char wildcard) — more intuitive for UUIDs
+            pattern_fnmatch = pattern.replace('#', '?')
+            is_path_rule = '/' in pattern_fnmatch
+            # Path-aware: if pattern contains '/', match against full path
+            target = norm_path if is_path_rule else name
+            if '*' in pattern_fnmatch or '?' in pattern_fnmatch:
+                matched = _fnmatch.fnmatch(target, f"*{pattern_fnmatch}" if is_path_rule and not pattern_fnmatch.startswith('*') else pattern_fnmatch)
+            else:
+                matched = pattern_fnmatch in target
+            if matched:
+                field = rule["field"]
+                # Path rules always win over filename-only rules for the same field.
+                # Within the same priority level, last-match-wins (more specific rules last).
+                if field not in result or is_path_rule or not _result_is_path.get(field):
+                    result[field] = rule.get("value", "")
+                    _result_is_path[field] = is_path_rule
+    if _return_path_flags:
+        return result, {f for f, is_path in _result_is_path.items() if is_path}
     return result
 
 
@@ -2084,24 +2234,24 @@ CLIP_AUTO_DETECT = [
         ("f", "a person with neon colored hair"),
     ]},
     # ── Hair style ────────────────────────────────────────────────────────────
-    {"field": "hc", "pos": 2, "zero_is_none": True,  "threshold": 0.20, "options": [
-        ("1", "a person with straight hair"),
-        ("2", "a person with wavy hair"),
-        ("3", "a person with curly hair"),
-        ("4", "a person with voluminous puffy hair"),
-        ("5", "a person with bob cut hair"),
-        ("6", "a person with hair in a ponytail"),
-        ("7", "a person with braided hair"),
-        ("8", "a person with hair in a bun or tied up"),
-        ("9", "a person with buzz cut or very short shaved head"),
+    {"field": "hc", "pos": 2, "zero_is_none": True,  "threshold": 0.16, "options": [
+        ("1", "a person with flat straight hair with no curl or wave"),
+        ("2", "a person with gently wavy or slightly curled hair"),
+        ("3", "a person with clearly curly or spiral ringlet hair texture"),
+        ("4", "a person with voluminous puffy or afro-style hair"),
+        ("5", "a person with bob cut chin-length hair"),
+        ("6", "a person with hair tied back in a ponytail"),
+        ("7", "a person with braided or dreadlocked hair"),
+        ("8", "a person with hair tied up in a bun or topknot"),
+        ("9", "a person with a buzzcut or head that is shaved bald"),
     ]},
     # ── Hair length ───────────────────────────────────────────────────────────
-    {"field": "hc", "pos": 3, "zero_is_none": True,  "threshold": 0.20, "options": [
-        ("1", "a person with very short hair nearly shaved"),
-        ("2", "a person with short hair above the ears"),
-        ("3", "a person with medium length hair to the shoulders"),
-        ("4", "a person with long hair below the shoulders"),
-        ("5", "a person with very long hair down to the waist or lower"),
+    {"field": "hc", "pos": 3, "zero_is_none": True,  "threshold": 0.16, "options": [
+        ("1", "a person with a buzzcut shaved head with almost no hair visible"),
+        ("2", "a person with very short hair above the ears not reaching the jaw"),
+        ("3", "a person with hair ending at or just touching the shoulders"),
+        ("4", "a person with long hair clearly past the shoulders reaching mid-back"),
+        ("5", "a person with very long hair reaching the waist hips or lower"),
     ]},
     # ── Face direction ────────────────────────────────────────────────────────
     {"field": "fa", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
@@ -2128,9 +2278,9 @@ CLIP_AUTO_DETECT = [
         ("5", "a person with very dark deeply pigmented skin"),
     ]},
     # ── Posture ───────────────────────────────────────────────────────────────
-    {"field": "pm", "pos": 2, "zero_is_none": True,  "threshold": 0.20, "options": [
-        ("1", "a person standing upright"),
-        ("2", "a person sitting down on chair or floor"),
+    {"field": "pm", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
+        ("0", "a person standing upright on both feet"),
+        ("2", "a person sitting down on a chair or floor"),
         ("3", "a person kneeling on one or both knees"),
         ("4", "a person lying down horizontally"),
         ("5", "a person leaning against a wall or surface"),
@@ -2163,7 +2313,8 @@ CLIP_AUTO_DETECT = [
         ("b", "extreme wide shot with small distant figure in large environment"),
     ]},
     # ── Camera angle ─────────────────────────────────────────────────────────
-    {"field": "cs", "pos": 2, "zero_is_none": True,  "threshold": 0.22, "options": [
+    {"field": "cs", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
+        ("0", "straight eye-level shot with camera at subject's eye height facing forward"),
         ("1", "low angle shot looking upward at the subject"),
         ("2", "high angle shot looking downward at the subject"),
         ("3", "over-the-shoulder shot from behind a person"),
@@ -2180,7 +2331,7 @@ CLIP_AUTO_DETECT = [
         ("6", "dark nighttime or very low-light scene"),
     ]},
     # ── Background major ─────────────────────────────────────────────────────
-    {"field": "bg", "pos": 3, "zero_is_none": False, "threshold": 0.0,  "options": [
+    {"field": "bg", "pos": 3, "zero_is_none": False, "threshold": 0.20, "options": [
         ("0", "solid pure black background no details"),
         ("1", "solid pure white background no details"),
         ("2", "bright green screen or chromakey green background"),
@@ -2190,8 +2341,24 @@ CLIP_AUTO_DETECT = [
         ("6", "natural outdoor setting trees grass forest field beach water"),
         ("8", "outer space stars cosmos planets"),
     ]},
+    # ── Expression family (first digit — AI detects x0 baseline of each family) ─
+    {"field": "x", "pos": 2, "zero_is_none": True,  "threshold": 0.18, "options": [
+        ("0", "a person with a neutral blank expressionless face"),
+        ("1", "a person smiling or laughing with a happy expression"),
+        ("2", "a person sneering or showing contempt disgust"),
+        ("3", "a person crying or looking sad with tears"),
+        ("4", "a person frowning or looking angry displeased"),
+        ("5", "a person looking surprised or shocked with wide eyes"),
+        ("6", "a person looking scared or fearful frightened"),
+        ("7", "a person looking sleepy tired or drowsy with heavy eyelids"),
+        ("8", "a person with a flirty seductive coy expression"),
+        ("9", "a person looking shy bashful or embarrassed"),
+        ("a", "a person with a mischievous impish smirk"),
+        ("b", "a person grimacing wincing in pain"),
+        ("c", "a person with an intense fierce dramatic stare"),
+    ]},
     # ── Eye color ─────────────────────────────────────────────────────────────
-    {"field": "e", "pos": 1, "zero_is_none": True,  "threshold": 0.22, "options": [
+    {"field": "e", "pos": 1, "zero_is_none": True,  "threshold": 0.18, "options": [
         ("1", "a person with brown eyes"),
         ("2", "a person with blue eyes"),
         ("3", "a person with hazel green-brown eyes"),
@@ -2204,6 +2371,42 @@ CLIP_AUTO_DETECT = [
         ("a", "a person with very dark black eyes"),
     ]},
 ]
+
+CLIP_LABELS_FILE = os.path.join(_DATA_DIR, "clip_labels.json")
+
+_CLIP_AUTO_DETECT_DEFAULTS = CLIP_AUTO_DETECT  # keep defaults reference
+
+def load_clip_labels():
+    """Load CLIP label overrides from clip_labels.json.
+    Returns the full specs list (file contents if exists, else defaults)."""
+    try:
+        if os.path.exists(CLIP_LABELS_FILE):
+            with open(CLIP_LABELS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            # Convert options from [[code,label],...] back to [(code,label),...]
+            for spec in data:
+                spec["options"] = [tuple(o) for o in spec["options"]]
+            return data
+    except Exception:
+        pass
+    return list(_CLIP_AUTO_DETECT_DEFAULTS)
+
+def save_clip_labels(specs):
+    """Save CLIP label specs to clip_labels.json and invalidate the cache."""
+    global CLIP_AUTO_DETECT, _clip_label_cache
+    # Serialise options as lists (JSON doesn't support tuples)
+    out = []
+    for spec in specs:
+        s = dict(spec)
+        s["options"] = [list(o) for o in spec["options"]]
+        out.append(s)
+    with open(CLIP_LABELS_FILE, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    CLIP_AUTO_DETECT = specs
+    _clip_label_cache = None  # force cache rebuild on next detection
+
+# Apply saved labels on module load
+CLIP_AUTO_DETECT = load_clip_labels()
 
 _clip_label_cache = None   # cached text embeddings, built on first use
 
@@ -2226,12 +2429,107 @@ def _get_clip_label_cache():
         return None
 
 
-def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None):
+# ── Correction-based detection ────────────────────────────────────────────────
+# Stores embeddings from manually baked images as labeled examples.
+# On detection, nearest-neighbor lookup overrides text-similarity when a very
+# similar image (cosine ≥ threshold) has a confirmed label.
+
+_corrections_cache = {}  # project_key → list[dict]
+
+
+def _corrections_file(project):
+    key = project if (project and project != "default") else "default"
+    name = f"corrections_{key}.pt" if key != "default" else "corrections.pt"
+    return os.path.join(_DATA_DIR, name)
+
+
+def load_corrections(project):
+    key = project or "default"
+    if key in _corrections_cache:
+        return _corrections_cache[key]
+    fpath = _corrections_file(project)
+    if not os.path.exists(fpath):
+        _corrections_cache[key] = []
+        return []
+    try:
+        import torch
+        data = torch.load(fpath, weights_only=False)
+        result = data if isinstance(data, list) else []
+        _corrections_cache[key] = result
+        return result
+    except Exception:
+        _corrections_cache[key] = []
+        return []
+
+
+def _save_corrections(project, corrections):
+    try:
+        import torch
+        torch.save(corrections, _corrections_file(project))
+        _corrections_cache[project or "default"] = corrections
+    except Exception:
+        pass
+
+
+def add_correction(project, path_key, image_emb, coded_entry):
+    """Record coded field values from a baked entry as labeled examples for future detection.
+    Called after a successful bake. Re-baking the same path updates its examples."""
+    try:
+        import torch
+        corrections = load_corrections(project)
+        corrections = [c for c in corrections if c.get("path") != path_key]
+        emb = image_emb
+        if hasattr(emb, "dim") and emb.dim() > 1:
+            emb = emb.squeeze(0)
+        emb = emb.cpu()
+        field_digits = {cf[0].lower(): cf[2] for cf in CODED_FIELDS if cf[2] > 0}
+        for spec in CLIP_AUTO_DETECT:
+            field = spec["field"]
+            pos   = spec["pos"]
+            zero_is_none = spec.get("zero_is_none", True)
+            digits = field_digits.get(field, 1)
+            val = coded_entry.get(field, "")
+            if not val:
+                continue
+            val_padded = val.zfill(digits)
+            digit = val_padded[-pos] if pos <= len(val_padded) else "0"
+            if zero_is_none and digit == "0":
+                continue
+            corrections.append({"path": path_key, "field": field, "pos": pos,
+                                 "value": digit, "emb": emb})
+        _save_corrections(project, corrections)
+    except Exception:
+        pass
+
+
+def detect_from_corrections(image_emb, corrections, field, pos, threshold=0.92):
+    """Return correction-based detection value or None.
+    Only fires when a stored example is very similar (cosine ≥ threshold)."""
+    relevant = [c for c in corrections if c["field"] == field and c["pos"] == pos]
+    if not relevant:
+        return None
+    try:
+        import torch
+        emb = image_emb
+        if hasattr(emb, "dim") and emb.dim() > 1:
+            emb = emb.squeeze(0)
+        embs = torch.stack([c["emb"] for c in relevant])
+        sims = torch.nn.functional.cosine_similarity(emb.unsqueeze(0), embs)
+        best_idx = int(sims.argmax())
+        if float(sims[best_idx]) >= threshold:
+            return relevant[best_idx]["value"]
+    except Exception:
+        pass
+    return None
+
+
+def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, project=None):
     """Use CLIP to auto-detect coded field values not already set.
     image_emb: 1-D tensor from logic.extract_feature().
     existing_entry: current attrs dict for the file (may be empty).
     allowed_fields: optional set of lowercase field names to detect (e.g. {"hc","fa","sk"}).
                     If None, all CLIP_AUTO_DETECT fields are run (legacy behaviour).
+    project: project name for loading correction examples.
     Returns {field_lower: new_hex} for any fields that were updated."""
     try:
         from sentence_transformers import util as _stutil
@@ -2246,6 +2544,7 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None):
     field_digits_map = {cf[0].lower(): cf[2] for cf in CODED_FIELDS if cf[2] > 0}
 
     working = {}  # field → hex string being assembled
+    detected_fields = set()  # fields where at least one digit was detected
 
     def _get_working(field):
         if field not in working:
@@ -2258,24 +2557,38 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None):
     if hasattr(emb, "dim") and emb.dim() == 1:
         emb = emb.unsqueeze(0)
 
+    corrections = load_corrections(project) if project else []
+
     for i, spec in enumerate(CLIP_AUTO_DETECT):
         field       = spec["field"]
         if allowed_fields is not None and field not in allowed_fields:
             continue
         pos         = spec["pos"]
-        zero_is_none = spec.get("zero_is_none", True)
-        threshold   = spec.get("threshold", 0.20)
-        options     = spec["options"]
+        zero_is_none    = spec.get("zero_is_none", True)
+        default_is_zero = spec.get("default_is_zero", False)
+        threshold       = spec.get("threshold", 0.20)
+        options         = spec["options"]
 
         current = _get_working(field)
         cur_digit = current[-pos] if pos <= len(current) else "0"
 
-        if zero_is_none:
+        # Skip if already set by user — don't overwrite manual corrections
+        if zero_is_none or default_is_zero:
             if cur_digit != "0":
-                continue   # already set by user — skip
+                continue
         else:
             if field in existing_entry and existing_entry[field]:
-                continue   # already has a value — skip
+                continue
+
+        # Correction-based detection: use nearest baked example if very similar
+        if corrections:
+            corr_val = detect_from_corrections(emb.squeeze(0), corrections, field, pos)
+            if corr_val is not None:
+                val = list(_get_working(field))
+                val[-pos] = corr_val
+                working[field] = "".join(val)
+                detected_fields.add(field)
+                continue
 
         # Score image against all option texts
         text_embs = cache[i]
@@ -2283,25 +2596,124 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None):
         best_idx  = int(scores.argmax())
         best_score = float(scores[best_idx])
 
-        if best_score < threshold:
-            continue
-
         best_code = options[best_idx][0]
-        if zero_is_none and best_code == "0":
+        if best_score < threshold:
+            # For default_is_zero fields (e.g. PM posture standing), store "0" even below threshold
+            if not (default_is_zero and best_code == "0"):
+                continue
+
+        if zero_is_none and not default_is_zero and best_code == "0":
             continue   # classified as "none" — leave unset
 
         # Write the detected digit into the working hex string
         val = list(current)
         val[-pos] = best_code
         working[field] = "".join(val)
+        detected_fields.add(field)
 
     # Return only fields that actually changed from original
+    # For zero_is_none=False fields (FA/SK/BG), "0" is a valid detection — include even if all zeros
     result = {}
     for field, new_val in working.items():
         digits = field_digits_map.get(field, 2)
         orig = (existing_entry.get(field, "") or "").zfill(digits) or "0" * digits
         if new_val != orig and new_val != "0" * digits:
             result[field] = new_val
+        elif field in detected_fields and not existing_entry.get(field):
+            # First-time detection produced all-zero result (e.g. FA "00" = facing forward)
+            result[field] = new_val
+    return result
+
+
+def inspect_clip_scores(image_emb):
+    """Return raw CLIP scores for all CLIP_AUTO_DETECT specs.
+    Returns list of dicts per spec: {field, pos, threshold, options: [(code, label, score)]}"""
+    try:
+        from sentence_transformers import util as _stutil
+    except ImportError:
+        return []
+    cache = _get_clip_label_cache()
+    if cache is None:
+        return []
+    emb = image_emb
+    if hasattr(emb, "dim") and emb.dim() == 1:
+        emb = emb.unsqueeze(0)
+    results = []
+    for i, spec in enumerate(CLIP_AUTO_DETECT):
+        text_embs = cache[i]
+        scores = _stutil.cos_sim(emb, text_embs)[0]
+        opts = [(code, label, float(scores[j]))
+                for j, (code, label) in enumerate(spec["options"])]
+        opts_sorted = sorted(opts, key=lambda x: x[2], reverse=True)
+        best_score = opts_sorted[0][2] if opts_sorted else 0.0
+        threshold = spec.get("threshold", 0.20)
+        _top_code = opts_sorted[0][0] if opts_sorted else None
+        if best_score >= threshold:
+            winner = _top_code
+        elif spec.get("default_is_zero", False) and _top_code == "0":
+            winner = "0"  # store default even below threshold
+        else:
+            winner = None
+        if spec.get("zero_is_none", True) and not spec.get("default_is_zero", False) and winner == "0":
+            winner = None
+        results.append({
+            "field": spec["field"].upper(),
+            "pos": spec["pos"],
+            "threshold": threshold,
+            "zero_is_none": spec.get("zero_is_none", True),
+            "options": opts_sorted,
+            "winner": winner,
+        })
+    return results
+
+
+def inspect_face_detection(path, project):
+    """Return raw face detection info for a file.
+    Returns dict: {face_found, num_faces, matches: [(pid, similarity)], assigned_id, error}"""
+    result = {"face_found": False, "num_faces": 0, "matches": [], "assigned_id": None}
+    try:
+        import face_recognition
+        import numpy as np
+        img = face_recognition.load_image_file(path)
+        with _face_lock:
+            encodings = face_recognition.face_encodings(img)
+        result["num_faces"] = len(encodings)
+        if not encodings:
+            return result
+        result["face_found"] = True
+        enc = encodings[0]
+        db = load_faces_db(project)
+        faces = db.get("faces", {})
+        aliases = load_person_aliases()
+        matches = []
+        seen_groups = set()
+        for fid, fdata in faces.items():
+            group = frozenset(get_alias_group(fid, aliases))
+            if group in seen_groups:
+                continue
+            seen_groups.add(group)
+            embs = fdata.get("embeddings", [])
+            if not embs and fdata.get("embedding"):
+                embs = [fdata["embedding"]]
+            for gid in group:
+                if gid != fid:
+                    gdata = faces.get(gid, {})
+                    ge = gdata.get("embeddings", [])
+                    if not ge and gdata.get("embedding"):
+                        ge = [gdata["embedding"]]
+                    embs.extend(ge)
+            if not embs:
+                continue
+            np_embs = np.array(embs)
+            dists = face_recognition.face_distance(np_embs, enc)
+            min_dist = float(np.min(dists))
+            matches.append((fid, round(1.0 - min_dist, 3)))
+        matches.sort(key=lambda x: x[1], reverse=True)
+        result["matches"] = matches[:10]
+        if matches and matches[0][1] >= 0.35:
+            result["assigned_id"] = matches[0][0]
+    except Exception as e:
+        result["error"] = str(e)
     return result
 
 
@@ -2382,7 +2794,7 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
         if not parts.get("j"):
             parts["j"] = julian_id_for_file(path)  # stamp creation date if not already present
         parts["persons"] = [pid] + current_persons[1:]   # keep secondary persons
-        new_stem = build_coded_filename(parts)
+        new_stem = build_coded_filename(parts, field_order=get_sync_field_order(project))
         if not new_stem:
             return path
 
@@ -2417,7 +2829,8 @@ def rename_to_date_first(attrs_data, path, project=None):
         # Already coded (person-first or date-first) — keep all fields, update J if absent
         if not parts.get("j"):
             parts["j"] = j_code
-    new_stem = build_coded_filename(parts, date_first=True)
+    new_stem = build_coded_filename(parts, date_first=True,
+                                    field_order=get_sync_field_order(project))
     if not new_stem:
         return path
     new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
@@ -2439,21 +2852,16 @@ def _strip_fingerprint(stem):
     return re.sub(r'-\d{6,}$', '', stem)
 
 def filename_group_key(stem):
-    """Return a tuple (sorted_persons, background) used for duplicate grouping.
+    """Return a grouping key used for duplicate prefix-matching.
     P001P002B0a1R04K30I001 and P001P002B0a1R02I002 → same group (same people, same bg).
-    Falls back to stem for legacy filenames."""
+    Returns None for non-coded (text) filenames — those are excluded from prefix grouping
+    and left to CLIP similarity alone."""
     parsed = parse_coded_filename(stem)
     if parsed:
         persons = tuple(sorted(parsed.get("persons", [])))
         bg      = parsed.get("b", "")
         return (persons, bg)
-    # Legacy format fallback: strip fingerprint and known suffixes
-    s = _strip_fingerprint(stem)
-    s = re.sub(r'^[0-9a-f]{3}-', '', s, flags=re.IGNORECASE)
-    for pk in ["right34", "right", "left34", "left", "front", "back"]:
-        s = re.sub(r'-' + re.escape(pk) + r'(?=[-.]|$)', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'-watermark(?=[-.]|$)', '', s, flags=re.IGNORECASE)
-    return ((), s.strip('-'))
+    return None
 
 def _extract_filename_base(stem, rules):
     """Strip fingerprint then all known rule-pattern suffixes.
@@ -2800,13 +3208,14 @@ def apply_boolean_sync_rules(attrs_data, path, project, orig_stem=None):
     if not rules:
         return path
 
-    # Boolean sync rule: field set, no one_way, no extract, no value → flag sync
+    # Boolean sync rule: field set, no one_way, no extract, value empty or "true"/"false"
     bool_sync = []
     for r in rules:
         if not r.get("field") or r.get("one_way") or r.get("extract"):
             continue
-        if r.get("value", "").strip():          # has a value → not a boolean sync
-            continue
+        val = r.get("value", "").strip().lower()
+        if val and val not in ("true", "false"):
+            continue  # non-boolean value → coded field rule, not boolean sync
         field = r["field"].upper()
         bool_sync.append((r, field))
 
@@ -2828,18 +3237,31 @@ def apply_boolean_sync_rules(attrs_data, path, project, orig_stem=None):
             continue
         lk = letter.lower()
         currently_on = bool(parts.get(lk, ""))
-        should_be_on = pattern in check_name
-        if should_be_on and not currently_on:
-            parts[lk] = letter      # truthy → build_coded_filename appends the letter
-            changed = True
-        elif not should_be_on and currently_on:
-            parts[lk] = ""          # remove the flag
-            changed = True
+        pattern_present = pattern in check_name
+        val = rule.get("value", "").strip().lower()
+        if val == "true":
+            # Pattern present → turn flag ON; absence does not turn it off
+            if pattern_present and not currently_on:
+                parts[lk] = letter
+                changed = True
+        elif val == "false":
+            # Pattern present → turn flag OFF; absence does not turn it on
+            if pattern_present and currently_on:
+                parts[lk] = ""
+                changed = True
+        else:
+            # No value (legacy): pattern present → ON, absent → OFF
+            if pattern_present and not currently_on:
+                parts[lk] = letter
+                changed = True
+            elif not pattern_present and currently_on:
+                parts[lk] = ""
+                changed = True
 
     if not changed:
         return path
 
-    new_stem = build_coded_filename(parts)
+    new_stem = build_coded_filename(parts, field_order=get_sync_field_order(project))
     if not new_stem or new_stem == stem:
         return path
 
@@ -2912,6 +3334,47 @@ def apply_tag_sync_rules(attrs_data, path, project):
     return new_path
 
 
+def apply_path_rules(attrs_data, path, project, _path_rules=None):
+    """Apply path-scoped filename rules (pattern contains '/') to a single file.
+    Called on file open — fast, no metadata/audio/CLIP detection.
+    Path rules always override existing values.
+    _path_rules: pre-filtered list of path-scoped rules (caller cache); if None, loads from disk.
+    Returns (attrs_data, changed)."""
+    if _path_rules is None:
+        fn_rules = load_filename_rules(project)
+        _path_rules = [r for r in fn_rules
+                       if r.get("field") and '/' in r.get("pattern", "")]
+    path_rules = _path_rules
+    if not path_rules:
+        return attrs_data, False
+
+    _bn  = os.path.basename(path)
+    stem = os.path.splitext(_bn)[0]
+    od, _ = parse_filename_rules(stem, path_rules, basename=_bn, fullpath=path,
+                                 _return_path_flags=True)
+    if not od:
+        return attrs_data, False
+
+    entry   = dict(get(attrs_data, path))
+    changed = False
+
+    if "P" in od and od["P"] and entry.get("person_id") != od["P"]:
+        entry["person_id"] = od["P"]
+        changed = True
+
+    for field, value in od.items():
+        if field != "P" and value:
+            custom_key = f"cf_{field.lower()}"
+            if entry.get(custom_key) != value:
+                entry[custom_key] = value
+                changed = True
+
+    if changed:
+        attrs_data[path] = entry
+
+    return attrs_data, changed
+
+
 def auto_set_all(attrs_data, path, project):
     """Auto-detect and save: resolution, audio tag, AI source, prompt, seed, metadata."""
     entry        = get(attrs_data, path)
@@ -2960,26 +3423,57 @@ def auto_set_all(attrs_data, path, project):
                     if not entry.get(tgt):
                         entry[tgt] = val; changed = True
 
-    # Shot type + pose direction via MediaPipe — always-on
-    needs_shot = not any(t in SHOT_TAGS for t in current_tags)
-    needs_pose = not any(t in POSE_TAGS for t in current_tags)
-    if needs_shot or needs_pose:
+    # Shot type + pose direction via MediaPipe → FA coded field (dir) + CS coded field (shot)
+    # FA is 2 digits [Vert][Dir]; only Dir (pos 1) is set here — Vert defaults to 0.
+    # CS is 3 digits [Shot][Angle][Light]; only Shot (pos 3, leftmost) is set here.
+    _POSE_TO_FA_DIR = {
+        "FO0": "0",   # Front
+        "FO1": "1",   # Right
+        "FO2": "2",   # Right 3/4
+        "FO4": "5",   # Back
+        "FO6": "4",   # Left 3/4
+        "FO7": "3",   # Left
+    }
+    _SHOT_TO_CS_SHOT = {
+        "SAecu":  "1",   # Extreme Close-Up
+        "SAfcu":  "2",   # Face Close-Up
+        "SAbcu":  "3",   # Big Close-Up
+        "SAcu":   "4",   # Close-Up
+        "SAbust": "5",   # Bust Shot
+        "SAmcu":  "6",   # Medium Close-Up
+        "SAms":   "7",   # Medium Shot
+        "SAmfs":  "8",   # Cowboy Shot (closest to Medium Full)
+        "SAfs":   "9",   # Full Shot
+        "SAws":   "a",   # Wide Shot
+        "SAews":  "b",   # Extreme Wide Shot
+    }
+    _needs_fa = not get_coded_field(entry, "fa")
+    _needs_cs = not get_coded_field(entry, "cs")
+    if _needs_fa or _needs_cs:
         shot_tag, pose_tag = detect_shot_and_pose(path)
-        if needs_shot and shot_tag:
-            current_tags = [t for t in current_tags if t not in SHOT_TAGS] + [shot_tag]
-            changed = True
-        if needs_pose and pose_tag:
-            current_tags = [t for t in current_tags if t not in POSE_TAGS] + [pose_tag]
-            changed = True
+        if _needs_fa and pose_tag:
+            fa_dir = _POSE_TO_FA_DIR.get(pose_tag)
+            if fa_dir:
+                entry["fa"] = fa_dir   # single digit: Dir set, Vert defaults to none
+                changed = True
+        if _needs_cs and shot_tag:
+            cs_shot = _SHOT_TO_CS_SHOT.get(shot_tag)
+            if cs_shot:
+                entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
+                changed = True
 
     # Audio detection — always-on; stores codec in entry["audio"] field
     if not entry.get("audio"):
         audio_tag = detect_audio_tag(path)
-        if audio_tag:
-            if audio_tag not in AUDIO_TAGS:
-                audio_tag = "sound"
-            entry["audio"] = audio_tag
-            changed = True
+        if audio_tag is None:
+            # Non-video file (image) — no audio by definition
+            audio_tag = "none"
+        elif audio_tag == "no_sound":
+            audio_tag = "none"
+        elif audio_tag not in AUDIO_TAGS:
+            audio_tag = "sound"
+        entry["audio"] = audio_tag
+        changed = True
 
     # Resolution detection — always-on
     if not any(t in RESOLUTION_TAGS for t in current_tags):
@@ -2988,10 +3482,13 @@ def auto_set_all(attrs_data, path, project):
             current_tags = [t for t in current_tags if t not in RESOLUTION_TAGS] + [tag]
             changed = True
 
-    # Ratio (O) / FPS (K) — always-on
+    # Ratio (O) / Resolution (R) / FPS (K) — always-on
     _fa = detect_file_attrs(path)
     if _fa.get("o") and not entry.get("cf_o"):
         entry["cf_o"] = _fa["o"]
+        changed = True
+    if _fa.get("r") and not entry.get("cf_r"):
+        entry["cf_r"] = _fa["r"]
         changed = True
     if _fa.get("k") and not entry.get("cf_k"):
         entry["cf_k"] = _fa["k"]
@@ -3004,26 +3501,34 @@ def auto_set_all(attrs_data, path, project):
             if t not in current_tags:
                 current_tags.append(t)
                 changed = True
-    # One-way coded-field detection: explicit one_way rules + extract rules (Pfff etc.)
-    one_way_rules = [r for r in fn_rules if r.get("field") and (r.get("one_way") or r.get("extract"))]
+    # Start with whatever is already stored
+    person_id = entry.get("person_id", "")
+
+    # One-way coded-field detection: detect rules, extract rules, + any sync rule with a path pattern
+    one_way_rules = [
+        r for r in fn_rules
+        if r.get("field") and (
+            r.get("one_way") or r.get("extract") or '/' in r.get("pattern", "")
+        )
+    ]
     if one_way_rules:
         _bn     = os.path.basename(path)
         stem_ow = os.path.splitext(_bn)[0]
-        od = parse_filename_rules(stem_ow, one_way_rules, basename=_bn)
+        od, _path_flds = parse_filename_rules(stem_ow, one_way_rules, basename=_bn, fullpath=path, _return_path_flags=True)
         if od:
-            if "P" in od and od["P"] and not entry.get("person_id"):
-                person_id = od["P"]
-                changed = True
-            # Store other detected coded fields as custom metadata if not already set
+            if "P" in od and od["P"]:
+                if "P" in _path_flds or not entry.get("person_id"):
+                    person_id = od["P"]
+                    changed = True
+            # Path rules override existing values; non-path rules only fill empty fields
             for field, value in od.items():
                 if field != "P" and value:
                     custom_key = f"cf_{field.lower()}"
-                    if not entry.get(custom_key):
+                    if field in _path_flds or not entry.get(custom_key):
                         entry[custom_key] = value
                         changed = True
 
     # Sync person_id from coded filename (e.g. P001.jpg → person_id "001")
-    person_id = entry.get("person_id", "")
     if not person_id:
         stem   = os.path.splitext(os.path.basename(path))[0]
         parsed = parse_coded_filename(stem)
@@ -3048,7 +3553,8 @@ def auto_set_all(attrs_data, path, project):
                  meta=meta,
                  person_id=person_id,
                  speech=entry.get("speech", ""),
-                 editable=entry.get("editable", True))
+                 editable=entry.get("editable", True),
+                 preserve_text=True)
         save(project, attrs_data)
     return attrs_data
 

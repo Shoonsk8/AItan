@@ -1,6 +1,7 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                              QLabel, QLineEdit, QComboBox, QScrollArea)
+                              QLabel, QLineEdit, QComboBox, QScrollArea,
+                              QDoubleSpinBox, QSplitter, QFrame)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import aisearch_config as cfg
@@ -176,15 +177,14 @@ class _MetadataMixin:
                 ("CS", "→", "Camera Shot",  "#cc99ff"),
                 ("BG", "→", "Background",   "#cc99ff"),
             ]),
-            ("Face Det.", "#88ffaa", "#1a3a2a", [
-                ("Shot", "→", "tag: Shot Type", "#88ffaa"),
-                ("Pose", "→", "tag: Pose Dir",  "#88ffaa"),
+            ("MediaPipe", "#88ffcc", "#1a3a2a", [
+                ("Pose", "→", "FA Dir",   "#88ffcc"),
+                ("Shot", "→", "CS Shot",  "#88ffcc"),
             ]),
             ("File Det.", "#ffcc88", "#3a2a10", [
-                ("Audio",      "→", "tag: Audio",      "#ffcc88"),
-                ("Resolution", "→", "tag: Resolution", "#ffcc88"),
-                ("Ratio",      "→", "code: O",         "#ffcc88"),
-                ("FPS",        "→", "code: K",         "#ffcc88"),
+                ("Audio", "→", "audio",   "#ffcc88"),
+                ("Ratio", "→", "code: O", "#ffcc88"),
+                ("FPS",   "→", "code: K", "#ffcc88"),
             ]),
         ]
 
@@ -292,6 +292,38 @@ class _MetadataMixin:
 
         # Load current project's rules on tab open
         _do_load()
+
+        self._reload_meta_rules = _do_load  # expose so set_project() can call it
+
+        # ── CLIP Label Tuning ─────────────────────────────────────────────────
+        _sep2 = QWidget(); _sep2.setFixedHeight(1)
+        _sep2.setStyleSheet("background:#555;")
+        vbox.addWidget(_sep2)
+
+        _clip_hdr_row = QHBoxLayout()
+        _clip_hdr_lbl = QLabel("CLIP Label Tuning")
+        _clip_hdr_lbl.setStyleSheet("color:#ccaaff; font-weight:bold; font-size:10pt;")
+        _clip_hdr_row.addWidget(_clip_hdr_lbl)
+        _clip_hdr_row.addStretch()
+        btn_clip_save = QPushButton("💾 Save Labels")
+        btn_clip_save.setStyleSheet(cfg.btn_ss("btn_write", self.app.config))
+        btn_clip_save.clicked.connect(self._save_clip_labels)
+        _clip_hdr_row.addWidget(btn_clip_save)
+        vbox.addLayout(_clip_hdr_row)
+
+        _clip_scroll = QScrollArea()
+        _clip_scroll.setWidgetResizable(True)
+        _clip_scroll.setFixedHeight(220)
+        _clip_scroll.setStyleSheet("QScrollArea { border: none; }")
+        _clip_inner = QWidget()
+        self._clip_labels_layout = QVBoxLayout(_clip_inner)
+        self._clip_labels_layout.setContentsMargins(0, 0, 0, 0)
+        self._clip_labels_layout.setSpacing(6)
+        _clip_scroll.setWidget(_clip_inner)
+        vbox.addWidget(_clip_scroll)
+
+        self._clip_label_rows = []  # list of (spec_idx, opt_idx, label_edit, thr_spin)
+        self._build_clip_label_editor()
 
         tabs.addTab(tab, "🔗 Meta Map")
 
@@ -505,6 +537,94 @@ class _MetadataMixin:
     def _remove_meta_row(self, row_w):
         self._meta_rows = [(s, t, r) for s, t, r in self._meta_rows if r is not row_w]
         row_w.deleteLater()
+
+    # ── CLIP label editor ──────────────────────────────────────────────────────
+
+    def _build_clip_label_editor(self):
+        import aisearch_attrs as _am
+        from PyQt6.QtCore import Qt as _Qt
+
+        # Clear existing
+        while self._clip_labels_layout.count():
+            w = self._clip_labels_layout.takeAt(0)
+            if w.widget(): w.widget().deleteLater()
+        self._clip_label_rows.clear()
+
+        _SECTION_NAMES = {
+            ("hc", 1): "HC  Hair color",  ("hc", 2): "HC  Hair style",
+            ("hc", 3): "HC  Hair length", ("fa", 1): "FA  Face direction",
+            ("fa", 2): "FA  Face tilt",   ("sk", 1): "SK  Skin type",
+            ("pm", 2): "PM  Posture",     ("pm", 1): "PM  Motion",
+            ("cs", 3): "CS  Shot type",   ("cs", 2): "CS  Camera angle",
+            ("cs", 1): "CS  Lighting",    ("bg", 3): "BG  Background",
+            ("e",  1): "E   Eye color",
+        }
+
+        for si, spec in enumerate(_am.CLIP_AUTO_DETECT):
+            key = (spec["field"], spec["pos"])
+            sec_name = _SECTION_NAMES.get(key, f"{spec['field'].upper()} pos={spec['pos']}")
+
+            # Section header with threshold spinbox
+            hdr = QHBoxLayout(); hdr.setSpacing(6)
+            lbl = QLabel(sec_name)
+            lbl.setStyleSheet("color:#ccaaff; font-size:8pt; font-weight:bold; min-width:160px;")
+            hdr.addWidget(lbl)
+            hdr.addWidget(QLabel("thr:"))
+            thr_spin = QDoubleSpinBox()
+            thr_spin.setRange(0.0, 1.0); thr_spin.setSingleStep(0.01)
+            thr_spin.setDecimals(2); thr_spin.setValue(spec.get("threshold", 0.20))
+            thr_spin.setFixedWidth(60)
+            thr_spin.setStyleSheet(
+                "background:#252525; color:#e0e0e0; border:1px solid #555; font-size:8pt;")
+            hdr.addWidget(thr_spin)
+            hdr.addStretch()
+            hdr_w = QWidget(); hdr_w.setLayout(hdr)
+            self._clip_labels_layout.addWidget(hdr_w)
+
+            # Option rows
+            for oi, (code, label) in enumerate(spec["options"]):
+                row = QHBoxLayout(); row.setSpacing(4)
+                code_lbl = QLabel(code)
+                code_lbl.setStyleSheet("color:#888; font-family:monospace; font-size:8pt;")
+                code_lbl.setFixedWidth(18)
+                row.addWidget(code_lbl)
+                lbl_edit = QLineEdit(label)
+                lbl_edit.setStyleSheet(
+                    "background:#1e1e2e; color:#ddd; border:1px solid #444;"
+                    " font-size:8pt; padding:1px 4px;")
+                row.addWidget(lbl_edit)
+                row_w = QWidget(); row_w.setLayout(row)
+                self._clip_labels_layout.addWidget(row_w)
+                self._clip_label_rows.append((si, oi, lbl_edit, thr_spin))
+
+            # Separator
+            sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet("color:#333;")
+            self._clip_labels_layout.addWidget(sep)
+
+        self._clip_labels_layout.addStretch()
+
+    def _save_clip_labels(self):
+        import aisearch_attrs as _am
+        import copy
+
+        specs = copy.deepcopy(_am.CLIP_AUTO_DETECT)
+        # Apply threshold changes (one thr_spin per section header)
+        seen_thr = {}  # (si) -> thr_spin already applied
+        for si, oi, lbl_edit, thr_spin in self._clip_label_rows:
+            if si not in seen_thr:
+                specs[si]["threshold"] = round(thr_spin.value(), 4)
+                seen_thr[si] = True
+            opts = list(specs[si]["options"])
+            code = opts[oi][0]
+            opts[oi] = (code, lbl_edit.text().strip() or opts[oi][1])
+            specs[si]["options"] = opts
+
+        _am.save_clip_labels(specs)
+        # Rebuild editor to reflect saved state
+        self._build_clip_label_editor()
+        if hasattr(self, '_btn_fn_save'):
+            self._flash_saved_btn(self._btn_meta_save)
 
     # ── Save ───────────────────────────────────────────────────────────────────
 

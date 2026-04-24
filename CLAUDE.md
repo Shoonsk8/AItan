@@ -12,7 +12,15 @@ Version 1.94. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 | `aisearch_main.py` | Entry point, theme setup, creates `AISearchApp` |
 | `aisearch_app.py` | Main window (`AISearchApp`): search table, inline attr panel, undo, DB load, settings |
 | `aisearch_preview.py` | Preview window (`PreviewWindow`): media display, full attr panel with collapsible sections + hex combos |
-| `aisearch_settings.py` | Settings dialog (`SettingsView`): 6 tabs — Dirs, DB, View, Colors, Attributes, Filename Rules |
+| `aisearch_settings.py` | Settings dialog (`SettingsView`): 9 tabs — coordinates mixins below |
+| `aisearch_settings_db.py` | `_DbMixin`: Database tab (scan dirs, rebuild, person registry) |
+| `aisearch_settings_person.py` | `_PersonMixin`: Persons tab (face cards, link/unlink, pending) |
+| `aisearch_settings_appearance.py` | `_AppearanceMixin`: Settings, Thresholds, Appearance tabs |
+| `aisearch_settings_attrs.py` | `_AttrsMixin`: Attributes tab (workspace editor) |
+| `aisearch_settings_filename.py` | `_FilenameMixin`: Filename Rules tab |
+| `aisearch_settings_metadata.py` | `_MetadataMixin`: Meta Map tab (raw metadata → attribute field rules) |
+| `aisearch_settings_canvas.py` | `_CanvasMixin`: Canvas tab |
+| `aisearch_settings_layout.py` | `_LayoutMixin`: group/section layout management |
 | `aisearch_attrs.py` | All attribute logic: TAG_GROUPS, CODED_FIELDS, parse/build filename, face detection, file metadata |
 | `aisearch_config.py` | Config load/save (`aisearch_config.json`) |
 | `aisearch_front_page.py` | Front page / project selector |
@@ -20,6 +28,8 @@ Version 1.94. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 | `aisearch_logic.py` | CLIP search logic |
 | `attribute_manager.py` | `AttributeManager` class: manages `attribute_workspace.json`, exports to `attrs_tags.json` |
 | `aisearch_taggroups_editor.py` | Standalone editor for tag groups (separate app) |
+| `attr_viewer.py` | Standalone attribute viewer |
+| `embed_aitan.py` | Embedding utility script |
 
 ## Data Files
 
@@ -33,6 +43,8 @@ Version 1.94. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 | `filename_rename_rules.json` | Pattern-replacement rename rules |
 | `person_registry.json` | Person ID (3-hex) → description |
 | `faces_<PROJECT>.json` | Face embeddings per project |
+| `metadata_mapping_rules.json` | Default raw metadata → attr field mapping rules |
+| `metadata_mapping_rules_<PROJECT>.json` | Project-specific overrides; merged with default by `load_metadata_rules` |
 
 ## Key Data Structures
 
@@ -49,8 +61,9 @@ Person field "P" is special (3-digit hex, looked up in person_registry).
 
 ### TAG_GROUPS (aisearch_attrs.py:202)
 Dict loaded from `_DEFAULT_TAG_GROUPS` merged with `attrs_tags.json`.
-- Coded sub-tables: `E_Color`, `E_Additional`, `HC_Color`, `HC_Style`, `HC_Length`, `FA_Dir`, `FA_Vert`, `SK_Type`, `B_Size`, `B_Shape`, `WH_Hip`, `WH_Waist`, `PM_Motion`, `PM_Posture`, `CS_Shot`, `CS_Angle`, `CS_Light`, `BG_Major`, `O_Preset`, `R_Preset`, `K_Preset`, `X_Table`
+- Each CODED_FIELDS entry has one or more sub-tables named `{PREFIX}_{Name}` (e.g. E → `E_Color`, `E_Additional`; HC → `HC_Color`, `HC_Style`, `HC_Length`; etc.)
 - User tag groups: `Quality`, `Audio`, `Source`, `Variant`, `Misc`
+- Custom matrix fields (defined in `attrs_tags.json` `__section_styles__`): e.g. `MDL` (ModelVideo), `MDL_img` (ModelImage) — data in `{PREFIX}_Table` keys
 - `__text_fields__` key: dict of `field_name → {label, placeholder}`
 
 ### Filename Rule Formats (filename_rules.json)
@@ -84,7 +97,7 @@ Styles: `1dig`, `2dig`, `3dig`, `matrix`, `id`, `taglist`, `boolean`, `text`
 - `_set_field_combos(letter_lower, hex_val)`: sets combo selections from a hex value
 - `_refresh_attrs(path)`: loads all attrs from file into widgets
 
-### Settings Attributes Tab (`aisearch_settings.py`)
+### Settings Attributes Tab (`aisearch_settings_attrs.py`)
 - `_WsSec` widget: collapsible + drag-to-reorder + × delete
 - `self._attr_ws_entries`: `json_key → {field: QLineEdit}` (for 1/2/3dig and matrix)
 - `self._attr_tag_groups`: `grp → [(k_edit, l_edit, row_widget)]` (for taglist/boolean)
@@ -94,13 +107,19 @@ Styles: `1dig`, `2dig`, `3dig`, `matrix`, `id`, `taglist`, `boolean`, `text`
 - Pre-built sections: E, HC, FA, SK, B, WH, PM, CS, BG, X + Misc(boolean), Quality/Audio/Source/Variant(taglist) + prompt/neg_prompt/speech/seed/note(text)
 - `_save_attr_groups()`: saves workspace + exports TAG_GROUPS to attrs_tags.json
 
-### Settings Filename Rules Tab (`aisearch_settings.py`)
+### Settings Filename Rules Tab (`aisearch_settings_filename.py`)
 - Unified rules table: Pattern | Attribute | Value | Mode | ✕
 - `self._fn_rows`: list of `(pat_e, attr_cb, val_cb, mode_cb, row_w)`
-- Attribute dropdown: grouped — Coded Fields (all CODED_FIELDS + P) then Tag Groups (flat user groups)
+- Attribute dropdown: grouped — Coded Fields (all CODED_FIELDS + P) then Tag Groups (flat user groups + matrix fields shown with friendly names from `__col_names__`)
 - Mode: "→ Detect" (one_way=True) or "⇄ Sync" (two-way, coded fields only)
 - Tag group attrs stored as `TAG:GroupName` in attr_cb data
 - `_save_fn_rules()`: serializes all rows to `filename_rules.json`
+
+### Settings Meta Map Tab (`aisearch_settings_metadata.py`)
+- Maps raw file/AI metadata keys → attribute fields; rules stored in `metadata_mapping_rules.json`
+- Source groups: ComfyUI, A1111, AIX, JPEG, Image, Video, File, CLIP Face, CLIP Body, CLIP Scene, Face Det.
+- Sentinel sources (Shot, Pose, CLIP fields HC/FA/SK/E/B/WH/PM/CS/BG) always pass through in `apply_metadata_rules`
+- CLIP detection is rule-driven: DB rebuild checks MetaMap rules for which fields to detect
 
 ## Common Pitfalls
 

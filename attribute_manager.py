@@ -40,12 +40,11 @@ FIELD_DEFS = {
     "O":               ("taglist",  []),
     "R":               ("taglist",  []),
     "K":               ("taglist",  []),
-    "note":            ("text",    []),
-    "positive_prompt": ("text",    []),
-    "negative_prompt": ("text",    []),
-    "speech":          ("text",    []),
-    "audio":           ("taglist", []),
-    "Quality":         ("taglist", []),
+    "audio":           ("taglist",  []),
+    "note":            ("text",     []),
+    "positive_prompt": ("text",     []),
+    "negative_prompt": ("text",     []),
+    "speech":          ("text",     []),
 }
 
 # Style → zero-padding width
@@ -76,8 +75,9 @@ class AttributeManager:
     # ------------------------------------------------------------------
     def export_tag_groups(self, data: dict | None = None) -> dict:
         """
-        Convert workspace row-data to TAG_GROUPS format and write to
-        attrs_tags.json.  Returns the exported dict.
+        Convert workspace row-data to TAG_GROUPS format and return the dict.
+        Does NOT write any file — callers are responsible for writing to the
+        correct project-specific or global file.
         """
         if data is None:
             data = self.data
@@ -114,17 +114,6 @@ class AttributeManager:
                 if entries:
                     tag_groups[tg_key] = entries
 
-        # Write to attrs_tags.json (merge over existing)
-        existing: dict = {}
-        if os.path.exists(TAG_GROUPS_FILE):
-            try:
-                with open(TAG_GROUPS_FILE, encoding="utf-8") as f:
-                    existing = json.load(f)
-            except Exception:
-                pass
-        existing.update(tag_groups)
-        with open(TAG_GROUPS_FILE, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
         return tag_groups
 
     # ------------------------------------------------------------------

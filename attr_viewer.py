@@ -12,7 +12,29 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QBrush
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint
 
+
+# ── Language helper ──────────────────────────────────────────────────────────
+_UI_LANG = {"val": "en"}   # "en" or "ja"
+
+def _lang_label(text: str) -> str:
+    """'English / 日本語' → return the half for the current language."""
+    if " / " not in text:
+        return text
+    parts = text.split(" / ", 1)
+    return parts[0].strip() if _UI_LANG["val"] == "en" else parts[1].strip()
+
+
 # ── Coded-field key lookup ────────────────────────────────────────────────────
+# Human labels for coded section keys (e.g. "E" → "Eyes")
+def _build_coded_labels():
+    try:
+        import aisearch_attrs as _am
+        return {letter: label for letter, label, _ in _am._DEFAULT_CODED_FIELDS}
+    except Exception:
+        return {}
+
+_CODED_LABELS = _build_coded_labels()
+
 # Maps section key (as used in attrs_tags) → lowercase CODED_FIELDS letter.
 # Most map 1:1 (e.g. "E"→"e", "SK"→"sk"), but "H"→"hc" because the section
 # key was shortened while the CODED_FIELDS letter is "HC".
@@ -268,16 +290,19 @@ class _ResizeHandle(QWidget):
 
 
 class FieldWidget(QGroupBox):
-    moved   = pyqtSignal(str, int, int)
-    resized = pyqtSignal(str)
+    moved            = pyqtSignal(str, int, int)
+    resized          = pyqtSignal(str)
+    action_triggered = pyqtSignal(str, str)   # (key, action_name)
 
     _RESIZE_GRIP = 12   # px square in bottom-right corner that triggers resize
+
 
     def __init__(self, key, label, style, options, text_meta, conn,
                  color=None, group=None, group_peers=None, size=None,
                  collapsible=True, collapsed=False, hidden_for=None,
                  exclusive=False, parent=None):
-        super().__init__(label or key, parent)
+        self._label_raw = label or key
+        super().__init__(_lang_label(self._label_raw), parent)
         self.key          = key
         self.style        = style
         self.options      = options   # [[k, lbl], ...]
@@ -313,8 +338,7 @@ class FieldWidget(QGroupBox):
         if style == "text":
             placeholder = (text_meta or {}).get("placeholder", "") if isinstance(text_meta, dict) else ""
             self._te = QTextEdit()
-            self._te.setMinimumHeight(80)
-            self._te.setMaximumHeight(80)
+            self._te.setMinimumHeight(0)
             self._te.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
             self._te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self._te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -358,7 +382,7 @@ class FieldWidget(QGroupBox):
                     cb = QComboBox(); cb.setStyleSheet(_CB_SS)
                     cb.addItem("—", "")
                     for k2, lbl2 in sorted(sub_opts, key=lambda kv: (-get_usage(kv[0]), kv[1])):
-                        cb.addItem(lbl2, k2)
+                        cb.addItem(_lang_label(lbl2), k2)
                     cb.currentIndexChanged.connect(
                         lambda _, _k=sub_key, _cb=cb: (inc_usage(_cb.currentData() or ""),
                                                         save_usage(self.conn, _cb.currentData() or "")))
@@ -382,11 +406,36 @@ class FieldWidget(QGroupBox):
             vlay.addWidget(self._date_lbl)
 
         elif style == "id":
-            # P / A / PI / PW — show the ID value as a read-only label
-            self._id_lbl = QLabel("—")
-            self._id_lbl.setStyleSheet(
-                "color:#aaa; font-family:monospace; font-size:9pt;")
-            vlay.addWidget(self._id_lbl)
+            if key == "P":
+                # P — editable person ID input + Detect button
+                self._pid_edit = QLineEdit()
+                self._pid_edit.setPlaceholderText("ID…")
+                self._pid_edit.setMaxLength(6)
+                self._pid_edit.setStyleSheet(
+                    "QLineEdit{background:#1e1e1e;color:#aaa;border:1px solid #444;"
+                    "border-radius:2px;font-family:monospace;font-size:9pt;padding:1px 4px;}"
+                    "QLineEdit:focus{border-color:#6a8a6a;}")
+                self._detect_btn = QPushButton("Detect")
+                self._detect_btn.setFixedHeight(20)
+                self._detect_btn.setStyleSheet(
+                    "QPushButton{background:#2e4a2e;color:#8fc88f;border:1px solid #4a6a4a;"
+                    "border-radius:3px;font-size:8pt;padding:0 6px;}"
+                    "QPushButton:hover{background:#3a5e3a;}"
+                    "QPushButton:disabled{color:#555;border-color:#333;background:#222;}")
+                self._detect_btn.setToolTip("Run face detection on this file")
+                self._detect_btn.clicked.connect(
+                    lambda: self.action_triggered.emit(self.key, "detect_face"))
+                _id_row = QHBoxLayout()
+                _id_row.setContentsMargins(0, 0, 0, 0)
+                _id_row.addWidget(self._pid_edit, stretch=1)
+                _id_row.addWidget(self._detect_btn)
+                vlay.addLayout(_id_row)
+            else:
+                # A / PI / PW — read-only label
+                self._id_lbl = QLabel("—")
+                self._id_lbl.setStyleSheet(
+                    "color:#aaa; font-family:monospace; font-size:9pt;")
+                vlay.addWidget(self._id_lbl)
 
         elif style == "matrix" and not options:
             # Matrix with no entries yet — show a clear placeholder instead of editable combo
@@ -457,7 +506,7 @@ class FieldWidget(QGroupBox):
         self._cb.clear()
         self._cb.addItem("—", "")
         for k, lbl in items:
-            self._cb.addItem(lbl, k)
+            self._cb.addItem(_lang_label(lbl), k)
         if cur:
             idx = self._cb.findData(cur)
             if idx >= 0:
@@ -543,6 +592,26 @@ class FieldWidget(QGroupBox):
                             break
         elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "id")):
             val = next((k for k, _ in self.options if k in tags_set), "")
+            # For "combo" coded fields (O/R/K), also check the coded filename then cf_ entry
+            if self.style == "combo" and not val:
+                _field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
+                _path = entry.get("path", "")
+                if _path:
+                    try:
+                        import aisearch_attrs as _am
+                        _stem = os.path.splitext(os.path.basename(_path))[0]
+                        _parts = _am.parse_coded_filename(_stem)
+                        if _parts:
+                            _coded_val = _parts.get(_field_key, "")
+                            if _coded_val and any(k == _coded_val for k, _ in self.options):
+                                val = _coded_val
+                    except Exception:
+                        pass
+                # Fall back to auto-detected cf_ value (set by auto_set_all)
+                if not val:
+                    _cf_val = entry.get(f"cf_{_field_key}", "")
+                    if _cf_val and any(k == _cf_val for k, _ in self.options):
+                        val = _cf_val
             cb = getattr(self, "_cb", None)
             if cb:
                 cb.blockSignals(True)
@@ -562,51 +631,54 @@ class FieldWidget(QGroupBox):
                 lbl.setText(decoded)
                 lbl.setToolTip(f"Julian ID: {j_val}")
         elif self.style == "id":
-            lbl = getattr(self, "_id_lbl", None)
-            if lbl:
-                if self.key == "P":
+            if self.key == "P":
+                _pe = getattr(self, "_pid_edit", None)
+                if _pe:
                     import aisearch_attrs as _am
                     val = entry.get("person_id", "")
+                    _pe.blockSignals(True)
+                    _pe.setText(val or "")
+                    _proj = entry.get("_project") or getattr(self, "_project", None)
                     if val:
-                        _proj = entry.get("_project") or getattr(self, "_project", None)
                         name = _am.get_person_id_label(_proj, val)
-                        display = f"{val}  {name}" if name and name != val else val
+                        _pe.setToolTip(name if name and name != val else "")
                     else:
-                        display = "—"
-                    lbl.setText(display)
-                    lbl.setToolTip(val or "")
-                    return
+                        _pe.setToolTip("")
+                    _pe.blockSignals(False)
+                return
+            # A / PI / PW — read-only, parse from filename
+            lbl = getattr(self, "_id_lbl", None)
+            if lbl:
+                import aisearch_attrs as _am
+                _path = entry.get("path", "")
+                _stem = os.path.splitext(os.path.basename(_path))[0] if _path else ""
+                _parsed = _am.parse_coded_filename(_stem) or {} if _stem else {}
+                if self.key == "PW":
+                    pws = _parsed.get("persons_with", [])
+                    val = ", ".join(pws) if pws else ""
                 else:
-                    # A / PI / PW — not stored in entry, parse from filename
-                    import aisearch_attrs as _am
-                    _path = entry.get("path", "")
-                    _stem = os.path.splitext(os.path.basename(_path))[0] if _path else ""
-                    _parsed = _am.parse_coded_filename(_stem) or {} if _stem else {}
-                    if self.key == "PW":
-                        pws = _parsed.get("persons_with", [])
-                        val = ", ".join(pws) if pws else ""
-                    else:
-                        val = _parsed.get(self.key.lower(), "")
+                    val = _parsed.get(self.key.lower(), "")
                 lbl.setText(val if val else "—")
         elif self.style in ("1dig", "2dig", "3dig"):
             # Resolve which key this field is stored under (e.g. section "H" → "hc")
             _field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
-            # Read value: parse from filename first, fall back to entry dict (CLIP)
-            val = ""
-            _path = entry.get("path", "")
-            if _path:
-                import aisearch_attrs as _am
-                _stem = os.path.splitext(os.path.basename(_path))[0]
-                _parsed = _am.parse_coded_filename(_stem) or {}
-                val = _parsed.get(_field_key, "")
+            # Prefer attrs_data (manual input), fall back to filename
+            val = entry.get(_field_key, "")
             if not val:
-                val = entry.get(_field_key, "")
+                _path = entry.get("path", "")
+                if _path:
+                    import aisearch_attrs as _am
+                    _stem = os.path.splitext(os.path.basename(_path))[0]
+                    _parsed = _am.parse_coded_filename(_stem) or {}
+                    val = _parsed.get(_field_key, "")
             combos = getattr(self, "_coded_combos", [])
             hex_edit = getattr(self, "_hex_edit", None)
             if combos and val:
+                # Pad short values so pos=2/"0" options (E Additional, FA Vert, etc.) populate
+                val_padded = val.zfill(len(combos))
                 for i, (_sk, cb) in enumerate(combos):
                     pos = i + 1   # pos=1 = rightmost digit
-                    digit = val[-pos] if len(val) >= pos else ""
+                    digit = val_padded[-pos] if len(val_padded) >= pos else ""
                     cb.blockSignals(True)
                     cb.setCurrentIndex(max(0, cb.findData(digit)) if digit else 0)
                     cb.blockSignals(False)
@@ -639,9 +711,35 @@ class FieldWidget(QGroupBox):
             return ("tag", checked)
         elif self.style in ("taglist", "boolean"):
             return ("tags", {k for k, btn in getattr(self, "_btns", {}).items() if btn.isChecked()})
+        elif self.style in ("1dig", "2dig", "3dig"):
+            combos = getattr(self, "_coded_combos", [])
+            hex_edit = getattr(self, "_hex_edit", None)
+            field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
+            if combos:
+                any_set = any(cb.currentData() for _, cb in combos)
+                if any_set:
+                    n = len(combos)
+                    parts = [combos[i][1].currentData() or "0" for i in range(n - 1, -1, -1)]
+                    val = "".join(parts)
+                else:
+                    val = ""
+            elif hex_edit is not None:
+                val = hex_edit.text().strip()
+            else:
+                return None
+            return ("coded", field_key, val)
+        elif self.style == "combo" and self.options:
+            # Coded combo (O/R/K) — value lives in the filename, not tags
+            cb = getattr(self, "_cb", None)
+            val = cb.currentData() or "" if cb else ""
+            field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
+            return ("coded", field_key, val)
         elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "id", "radio")):
             cb = getattr(self, "_cb", None)
             return ("tag", cb.currentData() or "" if cb else "")
+        elif self.style == "id" and self.key == "P":
+            _pe = getattr(self, "_pid_edit", None)
+            return ("text", "person_id", _pe.text().strip() if _pe else "")
         elif self.style == "text":
             db_key = _TEXT_KEY_MAP.get(self.key, self.key)
             te = getattr(self, "_te", None)
@@ -668,7 +766,8 @@ class FieldWidget(QGroupBox):
 
     def _pick_color(self, _pos=None):
         grp_label = f"group: {self._group}" if self._group else self.key
-        initial = QColor(self._bg_color)
+        _init_hex = self._bg_color if self._bg_color != "transparent" else "#222222"
+        initial = QColor(_init_hex)
         color = QColorDialog.getColor(initial, self, f"Color for {grp_label}")
         if color.isValid():
             hex_c = color.name()
@@ -762,10 +861,12 @@ class FieldWidget(QGroupBox):
             delta = e.globalPosition().toPoint() - self._resize_pos
             w = self._resize_start_size.width()
             h = self._resize_start_size.height()
+            _min_h = 60
+            _min_w = 150
             if self._resize_dir in ("h", "both"):
-                w = max(150, w + delta.x())
+                w = max(_min_w, w + delta.x())
             if self._resize_dir in ("v", "both"):
-                h = max(60,  h + delta.y())
+                h = max(_min_h, h + delta.y())
             self.resize(int(w), int(h))
         elif self.drag_mode and self._drag_pos:
             new_pos = self.mapToParent(pos - self._drag_pos)
@@ -872,13 +973,17 @@ class FieldWidget(QGroupBox):
         if chosen == act_color:
             self._pick_color()
         elif chosen == act_disc_this and cv and my_conns:
-            cv._remove_connection(my_conns[0][0])
+            cv._remove_connection(my_conns[0][0])   # single — lets _remove_connection push
         elif chosen == act_disc_box and cv:
+            viewer = getattr(cv, "_viewer", None)
+            if viewer: viewer._push_undo()           # one snapshot for whole batch
             for row in list(my_conns):
-                cv._remove_connection(row[0])
+                cv._remove_connection(row[0], _push=False)
         elif chosen == act_disc_all and cv:
+            viewer = getattr(cv, "_viewer", None)
+            if viewer: viewer._push_undo()           # one snapshot for whole batch
             for row in list(cv._connections):
-                cv._remove_connection(row[0])
+                cv._remove_connection(row[0], _push=False)
         elif chosen == act_cond:
             self._open_conditions_dialog()
         else:
@@ -1211,7 +1316,8 @@ class _AnchorCanvas(QWidget):
 
 class AttrViewerWidget(QWidget):
     """Canvas + toolbar — embeddable anywhere (Settings tab, preview panel…)."""
-    data_changed = pyqtSignal()   # emitted when any soft field value changes
+    data_changed     = pyqtSignal()        # emitted when any soft field value changes
+    action_triggered = pyqtSignal(str, str)  # (key, action_name) — from FieldWidget buttons
 
     def __init__(self, config_path=CONFIG_FILE, parent=None):
         super().__init__(parent)
@@ -1267,8 +1373,7 @@ class AttrViewerWidget(QWidget):
 
         btn_align_left = QPushButton("⬛← Left")
         btn_align_top  = QPushButton("⬛↑ Top")
-        btn_reset      = QPushButton("⊞ Auto")
-        for b in (btn_align_left, btn_align_top, btn_reset):
+        for b in (btn_align_left, btn_align_top):
             b.setStyleSheet(
                 "QPushButton{background:#383838;color:#ccc;border:1px solid #555;"
                 "border-radius:3px;padding:2px 8px;font-size:8pt;}"
@@ -1276,7 +1381,6 @@ class AttrViewerWidget(QWidget):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_align_left.setToolTip("Align all panels to same left edge")
         btn_align_top.setToolTip("Align all panels to same top edge")
-        btn_reset.setToolTip("Auto-arrange all panels in a grid")
         btn_gather = QPushButton("⚑ Gather")
         btn_gather.setToolTip("Move any off-screen boxes back into view")
         btn_gather.setStyleSheet(
@@ -1287,11 +1391,9 @@ class AttrViewerWidget(QWidget):
         btn_gather.clicked.connect(self._gather_lost)
         btn_align_left.clicked.connect(self._align_left)
         btn_align_top.clicked.connect(self._align_top)
-        btn_reset.clicked.connect(self._auto_arrange)
         bar.addWidget(btn_gather)
         bar.addWidget(btn_align_left)
         bar.addWidget(btn_align_top)
-        bar.addWidget(btn_reset)
         self._toolbar_widget = QWidget()
         self._toolbar_widget.setLayout(bar)
         main.addWidget(self._toolbar_widget)
@@ -1347,7 +1449,9 @@ class AttrViewerWidget(QWidget):
         sec_order   = cfg.get("__section_order__", [k for k in cfg if not k.startswith("__")])
         sec_styles  = cfg.get("__section_styles__", {})
         text_fields = cfg.get("__text_fields__", {})
-        sec_groups  = cfg.get("__section_groups__", {})
+        sec_groups   = cfg.get("__section_groups__", {})
+        col_names    = cfg.get("__col_names__", {})
+        parent_names = cfg.get("__parent_names__", {})
 
         # Build reverse map: field key → group name
         key_to_group  = {k: grp for grp, keys in sec_groups.items() for k in keys}
@@ -1363,6 +1467,14 @@ class AttrViewerWidget(QWidget):
                 continue
             style   = sec_styles.get(key, "")
             options = cfg.get(key, []) if isinstance(cfg.get(key), list) else []
+            # Fall back to _DEFAULT_TAG_GROUPS for taglist/radio/combo with no project-level data
+            if not options and style in ("taglist", "radio", "boolean", "combo"):
+                try:
+                    import aisearch_attrs as _am
+                    options = (_am._DEFAULT_TAG_GROUPS.get(key + "_Preset")
+                               or _am._DEFAULT_TAG_GROUPS.get(key, []))
+                except Exception:
+                    pass
             # For matrix fields with empty options, auto-collect from first sub-table
             if style == "matrix" and not options:
                 for sub_k in sorted(cfg):
@@ -1370,8 +1482,25 @@ class AttrViewerWidget(QWidget):
                             and isinstance(cfg.get(sub_k), list) and cfg[sub_k]):
                         options = cfg[sub_k]
                         break
-            label   = text_fields.get(key, {}).get("label", key.replace("_"," ").title()) \
-                      if style == "text" else key
+            # For combo fields with empty options, fall back to {key}_Preset
+            if style == "combo" and not options:
+                preset = cfg.get(key + "_Preset")
+                if isinstance(preset, list) and preset:
+                    options = preset
+            if style == "text":
+                label = text_fields.get(key, {}).get("label", key.replace("_", " ").title())
+            elif style == "matrix" and key in col_names and col_names[key]:
+                label = col_names[key][0]
+            elif key in _CODED_LABELS and _CODED_LABELS[key]:
+                label = _CODED_LABELS[key]
+            elif key in parent_names and parent_names[key]:
+                label = parent_names[key]
+            else:
+                try:
+                    import aisearch_attrs as _am
+                    label = _am._DEFAULT_FIELD_NAMES.get(key, key)
+                except Exception:
+                    label = key
             if style == "text":
                 tmeta = dict(text_fields.get(key) or {})
             elif style in ("1dig", "2dig", "3dig"):
@@ -1413,9 +1542,16 @@ class AttrViewerWidget(QWidget):
             _cb = getattr(w, "_cb", None)
             if _cb:
                 _cb.currentIndexChanged.connect(lambda _: self.data_changed.emit())
+            for _, _coded_cb in getattr(w, "_coded_combos", []):
+                _coded_cb.currentIndexChanged.connect(lambda _: self.data_changed.emit())
             _te = getattr(w, "_te", None)
             if _te:
                 _te.textChanged.connect(self.data_changed.emit)
+            _pid_edit = getattr(w, "_pid_edit", None)
+            if _pid_edit:
+                _pid_edit.textChanged.connect(lambda _: self.data_changed.emit())
+            # Bubble action buttons (e.g. Detect on P box)
+            w.action_triggered.connect(self.action_triggered)
             self.widgets.append(w)
 
             x += col_w
@@ -1463,6 +1599,13 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             w.moved.connect(lambda k, _x, _y: self._apply_connections_for(k))
             w.resized.connect(lambda k: self._apply_connections_for(k))
+
+        # Expand canvas to fit all placed tiles (saved positions may exceed 1000px default)
+        if self.widgets:
+            bottom = max(w.y() + w.height() for w in self.widgets)
+            right  = max(w.x() + w.width()  for w in self.widgets)
+            self.canvas.setMinimumHeight(max(1000, bottom + 40))
+            self.canvas.setMinimumWidth(max(1400, right + 40))
 
     # ── Undo ─────────────────────────────────────────────────────────────────
 
@@ -1523,7 +1666,7 @@ class AttrViewerWidget(QWidget):
         row = (cid, parent_key, parent_port, child_key, child_port)
         self._connections.append(row)
         self._snap_child(row)
-        self._apply_connections_for(child_key)  # propagate snap down the chain
+        self._apply_connections_for(child_key)
         self.canvas.update()
 
     def _snap_child(self, conn_row):
@@ -1546,18 +1689,25 @@ class AttrViewerWidget(QWidget):
         cw.move(new_x, new_y)
         save_position(self.conn, child_key, new_x, new_y)
 
-    def _apply_connections_for(self, key):
+    def _apply_connections_for(self, key, _visited=None):
         """Reposition all boxes connected as child to `key` (parent moved/resized)."""
+        if _visited is None:
+            _visited = set()
+        if key in _visited:
+            return
+        _visited.add(key)
+        wmap = {w.key: w for w in self.widgets}
         for row in self._connections:
             _, ba, pa, bb, pb = row
             if ba == key:
                 self._snap_child(row)
-                self._apply_connections_for(bb)  # propagate transitively
+                self._apply_connections_for(bb, _visited)
         self.canvas.update()
 
-    def _remove_connection(self, cid):
+    def _remove_connection(self, cid, _push=True):
         """Remove a connection by its DB id."""
-        self._push_undo()
+        if _push:
+            self._push_undo()
         delete_connection(self.conn, cid)
         # Mutate in-place to preserve shared reference with canvas._connections
         to_remove = [r for r in self._connections if r[0] == cid]
@@ -1579,11 +1729,19 @@ class AttrViewerWidget(QWidget):
             self.canvas._pending = (key, port)
         else:
             # Second click on a different box — create connection.
-            # First click = child (the box that moves/snaps).
-            # Second click = parent (the anchor that stays fixed).
+            # Parent = box with lower Y (higher on canvas); child = lower box (snaps when parent moves).
             self.canvas._pending = None
-            child_key,  child_port  = pending
-            parent_key, parent_port = key, port
+            key_a, port_a = pending
+            key_b, port_b = key, port
+            wmap = {w.key: w for w in self.widgets}
+            wa = wmap.get(key_a)
+            wb = wmap.get(key_b)
+            if wa and wb and wa.y() <= wb.y():
+                parent_key, parent_port = key_a, port_a
+                child_key,  child_port  = key_b, port_b
+            else:
+                parent_key, parent_port = key_b, port_b
+                child_key,  child_port  = key_a, port_a
             self._create_connection(parent_key, parent_port, child_key, child_port)
         self.canvas.update()
 
@@ -1591,6 +1749,7 @@ class AttrViewerWidget(QWidget):
         on = bool(state)
         for w in self.widgets:
             w.drag_mode = on
+
         if not on:
             self.canvas._pending = None   # cancel any pending connection
         self.canvas.update()
@@ -1618,6 +1777,7 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             w.move(min_x, w.y())
             save_position(self.conn, w.key, w.x(), w.y())
+            self._apply_connections_for(w.key)
 
     def _align_top(self):
         if not self.widgets: return
@@ -1626,6 +1786,7 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             w.move(w.x(), min_y)
             save_position(self.conn, w.key, w.x(), w.y())
+            self._apply_connections_for(w.key)
 
     # ── Preview data binding ──────────────────────────────────────────────────
 
@@ -1712,10 +1873,12 @@ class AttrViewerWidget(QWidget):
 
     def collect_soft_data(self):
         """Collect current canvas widget values.
-        Returns (extra_tags: set, text_dict: {db_key: str}).
+        Returns (extra_tags: set, text_dict: {db_key: str}, coded_dict: {field_key: val}).
+        coded_dict holds O/R/K-style combo values that live in the coded filename.
         """
         extra_tags = set()
         text_dict  = {}
+        coded_dict = {}
         for w in self.widgets:
             result = w.collect_soft()
             if result is None:
@@ -1726,27 +1889,48 @@ class AttrViewerWidget(QWidget):
                 extra_tags.add(result[1])
             elif result[0] == "text":
                 text_dict[result[1]] = result[2]
-        return extra_tags, text_dict
+            elif result[0] == "coded" and result[2]:
+                coded_dict[result[1]] = result[2]
+        return extra_tags, text_dict, coded_dict
+
+    def refresh_language(self):
+        """Re-populate all combo labels and tile titles after a language change."""
+        for w in self.widgets:
+            w.setTitle(_lang_label(w._label_raw))
+            if getattr(w, "_cb", None):
+                w._fill_combo(preserve=True)
+            for sub_key, coded_cb in getattr(w, "_coded_combos", []):
+                cur = coded_cb.currentData()
+                sub_opts = w._cfg.get(sub_key, []) if hasattr(w, "_cfg") else []
+                coded_cb.blockSignals(True)
+                for i in range(1, coded_cb.count()):
+                    code = coded_cb.itemData(i)
+                    raw = next((lbl for k, lbl in sub_opts if k == code), code)
+                    coded_cb.setItemText(i, _lang_label(raw))
+                if cur:
+                    idx = coded_cb.findData(cur)
+                    if idx >= 0:
+                        coded_cb.setCurrentIndex(idx)
+                coded_cb.blockSignals(False)
 
     def _gather_lost(self):
         """Move any off-screen or out-of-bounds boxes back into the visible canvas area."""
         self._push_undo()
-        CW = self.canvas.width()
-        CH = self.canvas.height()
+        # Use minimum canvas dimensions as the reference for "off-screen" so that
+        # widgets parked beyond the 1400×1000 safe area are always gathered,
+        # regardless of how large the canvas widget has grown to accommodate them.
+        CW = 1400
+        CH = 1000
         MARGIN = 10
-        # Place gathered boxes in a row below all currently visible boxes
-        occupied_bottom = max(
-            (w.y() + w.height() for w in self.widgets
-             if 0 <= w.x() < CW and 0 <= w.y() < CH),
-            default=MARGIN
-        ) + MARGIN
-        gx, gy = MARGIN, occupied_bottom
+        # Always start gathered boxes at the top-left so they're easy to find.
+        gx, gy = MARGIN, MARGIN
         row_h  = 0
         for w in self.widgets:
             in_view = (0 <= w.x() < CW and 0 <= w.y() < CH)
             if not in_view:
                 w.move(gx, gy)
                 save_position(self.conn, w.key, gx, gy)
+                self._apply_connections_for(w.key)
                 row_h = max(row_h, w.height())
                 gx += w.width() + MARGIN
                 if gx + w.width() > CW:

@@ -23,6 +23,45 @@ class _AppearanceMixin:
         sl.setContentsMargins(15, 10, 15, 10)
         sl.setSpacing(10)
 
+        # Language — first item
+        lang_row = QHBoxLayout()
+        lang_row.addWidget(QLabel("Language:"))
+        self._lang_cb = QComboBox()
+        self._lang_cb.wheelEvent = lambda e: e.ignore()
+        self._lang_cb.addItem("English", "en")
+        self._lang_cb.addItem("日本語", "ja")
+        from attr_viewer import _UI_LANG
+        _cur_lang = self.app.config.get("ui_language", "en")
+        _UI_LANG["val"] = _cur_lang
+        _li = self._lang_cb.findData(_cur_lang)
+        if _li >= 0:
+            self._lang_cb.blockSignals(True)
+            self._lang_cb.setCurrentIndex(_li)
+            self._lang_cb.blockSignals(False)
+        self._lang_cb.setFixedWidth(100)
+        def _on_lang_changed(_idx):
+            from attr_viewer import _UI_LANG
+            lang = self._lang_cb.currentData()
+            _UI_LANG["val"] = lang
+            self.app.config["ui_language"] = lang
+            cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            _ph = getattr(self.app, "preview_handler", None)
+            _pw = getattr(_ph, "window", None)
+            _sc = getattr(_pw, "_soft_canvas", None)
+            _cur_path = getattr(_ph, "current_path", None)
+            for _w in [getattr(self, "_canvas_widget", None), _sc]:
+                if _w and hasattr(_w, "refresh_language"):
+                    _w.refresh_language()
+            if _sc and _cur_path:
+                import aisearch_attrs as _am
+                _entry = _am.get(self.app.attrs_data, _cur_path)
+                _sc.load_file(_cur_path, _entry)
+        self._lang_cb.currentIndexChanged.connect(_on_lang_changed)
+        lang_row.addWidget(self._lang_cb)
+        lang_row.addStretch()
+        sl.addLayout(lang_row)
+        sl.addWidget(_hsep())
+
         g3 = QGroupBox("⚙ Viewer Options")
         l3 = QVBoxLayout(g3)
         self.check_viewer = QCheckBox("Don't close viewer when opening new file")

@@ -7,13 +7,13 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QMenu,
                               QTextEdit, QScrollArea, QSizePolicy,
                               QSplitter, QSplitterHandle, QToolButton, QMessageBox)
 import aisearch_attrs as attrs_mod
-from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize, pyqtSignal, pyqtSlot, Q_ARG, QMetaObject
 from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor, QImage
 
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 
-VERSION = "1.96"
+VERSION = "1.961"
 
 
 def _read_embedded_meta(path):
@@ -83,6 +83,10 @@ def _read_embedded_meta(path):
                         data["prompt"] = desc
     except Exception:
         pass
+    # Discard AItan baked-attrs blocks — they are not AI generation prompts
+    for _k in ("prompt", "neg_prompt", "speech"):
+        if data.get(_k, "").startswith("AItan{"):
+            data.pop(_k, None)
     return {k: v for k, v in data.items() if v}
 
 
@@ -846,7 +850,15 @@ class PreviewWindow(QWidget):
                 hidden_edit.blockSignals(True)
                 hidden_edit.setText(code)
                 hidden_edit.blockSignals(False)
-                self._on_name_edit_finished()
+                self._save_attrs()
+                # Write coded value into attrs_data AFTER set_file creates the entry
+                _path = self._attr_path
+                if _path and _path in self.handler.app.attrs_data:
+                    self.handler.app.attrs_data[_path][letter.lower()] = code
+                self._update_bake_btn("pending")
+                if attrs_mod.load_filename_config(
+                        getattr(self.handler.app, "current_project", None)).get("auto_rename"):
+                    self._on_normalize_filename()
             for _, _, cb_w in combos:
                 cb_w.currentIndexChanged.connect(_recompute)
 
@@ -1026,6 +1038,7 @@ class PreviewWindow(QWidget):
                         self._person_id_label = _fe
                     elif _sk.upper() in ("PW",):
                         self._pw_edits.append(_fe)
+                        _fe.editingFinished.connect(self._on_pw_changed)
                 elif _kind == "combo":
                     _ck = _extra   # the _combo_specs key
                     _hid = QLineEdit(panel); _hid.setVisible(False)
@@ -1115,14 +1128,18 @@ class PreviewWindow(QWidget):
         self._soft_sec_map = {}  # kept: referenced by legacy drag-reorder code
 
         # ── Soft canvas — free-canvas AttrViewerWidget (main attr UI) ───────────
-        from attr_viewer import AttrViewerWidget as _AV
+        from attr_viewer import AttrViewerWidget as _AV, _UI_LANG as _av_lang
+        _av_lang["val"] = self.handler.app.config.get("ui_language", "en")
         _cfg_path = attrs_mod.tags_file_for_project(self.handler.app.current_project)
         self._soft_canvas = _AV(config_path=_cfg_path, parent=None)
         self._soft_canvas.setMinimumHeight(300)
         vbox.addWidget(self._soft_canvas, stretch=1)
         self._soft_canvas.data_changed.connect(self._text_save_timer.start)
         self._soft_canvas.data_changed.connect(lambda: self._update_bake_btn("pending"))
+        self._soft_canvas.action_triggered.connect(self._on_canvas_action)
         self._wire_canvas_bool_flags()
+        # Make CLIP and FACE canvas tiles auto-expand to show full detection text
+        self._setup_clip_face_autoheight()
         # Design and Drag Mode only available when Arrangement in preview is ON
         _show_raw = self.handler.app.config.get("show_raw_data", False)
         _snap_cb = getattr(self._soft_canvas, "_snap_cb", None)
@@ -1146,8 +1163,8 @@ class PreviewWindow(QWidget):
         self._btn_bake_meta.clicked.connect(self._bake_to_file)
         r_bake.addWidget(self._btn_bake_meta)
         self._bake_btn_state = "idle"   # idle | pending | ok | error
-        from PyQt6.QtWidgets import QCheckBox as _QCB
-        self._chk_auto_bake = _QCB("Auto-bake")
+        from PyQt6.QtWidgets import QCheckBox as _QCB2
+        self._chk_auto_bake = _QCB2("Auto-bake")
         self._chk_auto_bake.setToolTip("Automatically bake to file when navigating to next image")
         self._chk_auto_bake.setChecked(self.handler.app.config.get("auto_bake", False))
         def _on_ab_toggle(v):
@@ -1157,6 +1174,22 @@ class PreviewWindow(QWidget):
                              getattr(self.handler.app, "current_project", None))
         self._chk_auto_bake.toggled.connect(_on_ab_toggle)
         r_bake.addWidget(self._chk_auto_bake)
+        self._btn_gather = QPushButton("⚑ Gather")
+        self._btn_gather.setToolTip("Move any off-screen canvas tiles back into view")
+        self._btn_gather.setStyleSheet(
+            "QPushButton { background:#2a2a2a; color:#ccaa66; border:1px solid #554433; padding:2px 6px; }"
+            "QPushButton:hover { background:#3a3a2a; color:#eedd88; }")
+        self._btn_gather.clicked.connect(
+            lambda: getattr(self._soft_canvas, "_gather_lost", lambda: None)())
+        r_bake.addWidget(self._btn_gather)
+        self._btn_apply_clip = QPushButton("🔄 Refresh CLIP")
+        self._btn_apply_clip.setToolTip("Clear all CLIP fields and re-detect from scratch")
+        self._btn_apply_clip.setStyleSheet(
+            "QPushButton { background:#2a2a3a; color:#88aacc; border:1px solid #446; padding:2px 6px; }"
+            "QPushButton:hover { background:#3a3a5a; color:#aaccee; }")
+        self._btn_apply_clip.clicked.connect(lambda: self._on_inspect(overwrite=True))
+        r_bake.addWidget(self._btn_apply_clip)
+        from PyQt6.QtWidgets import QCheckBox as _QCB
         self._chk_auto_rename = _QCB("Auto-rename")
         self._chk_auto_rename.setToolTip("Rename file to match person ID when baking")
         self._chk_auto_rename.setChecked(
@@ -1167,10 +1200,15 @@ class PreviewWindow(QWidget):
             fn_cfg["auto_rename"] = v
             attrs_mod.save_filename_config(fn_cfg, proj)
             sv = getattr(self.handler.app, "_settings_win", None)
-            if sv and hasattr(sv, "chk_rename_on_scan") and sv.chk_rename_on_scan.isChecked() != v:
-                sv.chk_rename_on_scan.blockSignals(True)
-                sv.chk_rename_on_scan.setChecked(v)
-                sv.chk_rename_on_scan.blockSignals(False)
+            if sv:
+                if hasattr(sv, "chk_rename_on_scan") and sv.chk_rename_on_scan.isChecked() != v:
+                    sv.chk_rename_on_scan.blockSignals(True)
+                    sv.chk_rename_on_scan.setChecked(v)
+                    sv.chk_rename_on_scan.blockSignals(False)
+                if hasattr(sv, "check_auto_rename") and sv.check_auto_rename.isChecked() != v:
+                    sv.check_auto_rename.blockSignals(True)
+                    sv.check_auto_rename.setChecked(v)
+                    sv.check_auto_rename.blockSignals(False)
         self._chk_auto_rename.toggled.connect(_on_ar_toggle)
         r_bake.addWidget(self._chk_auto_rename)
         self._protected_check = QPushButton("🔓 Editable")
@@ -1197,6 +1235,13 @@ class PreviewWindow(QWidget):
             _toolbar.setParent(self._raw_meta_sec)
             _toolbar.setVisible(True)
             self._raw_meta_sec._hdr_lay.addWidget(_toolbar, stretch=1)
+        self._btn_save_layout = QPushButton("💾 Layout")
+        self._btn_save_layout.setToolTip("Save current canvas tile positions")
+        self._btn_save_layout.setStyleSheet(
+            "QPushButton { background:#2a3a2a; color:#88cc88; border:1px solid #446644; padding:2px 6px; }"
+            "QPushButton:hover { background:#3a4a3a; color:#aaeebb; }")
+        self._btn_save_layout.clicked.connect(self._save_canvas_layout)
+        self._raw_meta_sec._hdr_lay.addWidget(self._btn_save_layout)
         _raw_lay = QVBoxLayout(self._raw_meta_sec.content)
         _raw_lay.setContentsMargins(6, 4, 6, 6)
         _raw_lay.setSpacing(4)
@@ -1209,6 +1254,51 @@ class PreviewWindow(QWidget):
         self._raw_meta_edit.setPlaceholderText("No data.")
         _raw_lay.addWidget(self._raw_meta_edit)
 
+        # ── CLIP + Face side by side (CLIP 2/3, Face 1/3) ────────────────
+        _inspect_row = QHBoxLayout()
+        _inspect_row.setSpacing(4)
+
+        _clip_col = QVBoxLayout()
+        _clip_col.setSpacing(2)
+        _clip_hdr = QHBoxLayout()
+        _clip_hdr.addWidget(QLabel("CLIP:"))
+        _clip_hdr.addStretch()
+        _clip_col.addLayout(_clip_hdr)
+        self._clip_inspect_edit = QTextEdit()
+        self._clip_inspect_edit.setReadOnly(True)
+        self._clip_inspect_edit.setStyleSheet(
+            "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
+            "font-family: monospace; font-size: 8pt;")
+        self._clip_inspect_edit.setPlaceholderText("CLIP scores will appear here.")
+        _clip_col.addWidget(self._clip_inspect_edit)
+        _inspect_row.addLayout(_clip_col, stretch=2)
+
+        _face_col = QVBoxLayout()
+        _face_col.setSpacing(2)
+        _face_hdr = QHBoxLayout()
+        _face_hdr.addWidget(QLabel("Face:"))
+        self._btn_apply_face = QPushButton("Apply")
+        self._btn_apply_face.setEnabled(False)
+        self._btn_apply_face.setFixedHeight(18)
+        self._btn_apply_face.setStyleSheet(
+            "background:#2a4a2a; color:#88cc88; border:1px solid #466; padding:0 6px; font-size:8pt;")
+        self._btn_apply_face.setToolTip("Apply detected person ID to this file")
+        self._btn_apply_face.clicked.connect(self._apply_detected_face)
+        _face_hdr.addWidget(self._btn_apply_face)
+        _face_hdr.addStretch()
+        _face_col.addLayout(_face_hdr)
+        self._face_inspect_edit = QTextEdit()
+        self._face_inspect_edit.setReadOnly(True)
+        self._face_inspect_edit.setFixedHeight(260)
+        self._face_inspect_edit.setStyleSheet(
+            "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
+            "font-family: monospace; font-size: 8pt;")
+        self._face_inspect_edit.setPlaceholderText("Face scores will appear here.")
+        _face_col.addWidget(self._face_inspect_edit)
+        _inspect_row.addLayout(_face_col, stretch=1)
+
+        _raw_lay.addLayout(_inspect_row)
+
         # Re-read from disk whenever the Raw Data section is expanded
         def _on_raw_expand():
             _p = getattr(self, '_attr_path', None)
@@ -1219,6 +1309,7 @@ class PreviewWindow(QWidget):
                 except Exception:
                     _txt = ""
                 self._raw_meta_edit.setPlainText(_txt or "(no embedded text)")
+                self._on_inspect()
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
 
         # Apply show_raw_data config (hidden by default unless enabled in Settings > Canvas)
@@ -1354,7 +1445,12 @@ class PreviewWindow(QWidget):
         if not self._attr_panel_built:
             self._attr_panel_pending_path = path
             return
-        self._text_save_timer.stop()
+        # Flush any pending auto-save when switching to a different file
+        if self._text_save_timer.isActive() and path != self._attr_path:
+            self._text_save_timer.stop()
+            self._save_attrs()
+        elif self._text_save_timer.isActive():
+            self._text_save_timer.stop()
         # Rebuild attr panel if attrs_tags.json changed (new attributes added via Settings)
         self._maybe_rebuild_attr_panel()
         # Block editingFinished on note/seed so setEnabled(False) in _apply_protected_lock
@@ -1367,9 +1463,94 @@ class PreviewWindow(QWidget):
         finally:
             self._project_edit.blockSignals(False)
             self._seed_edit.blockSignals(False)
+        # Auto-run CLIP + face inspect based on clip_inspect_mode setting
+        _mode = self.handler.app.config.get("clip_inspect_mode", "never")
+        if _mode == "always":
+            self._on_inspect()
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
+
+    @pyqtSlot(str)
+    def _refresh_attrs_from_thread(self, path: str):
+        """Slot so background threads can trigger attr refresh on the main thread.
+        Calls _refresh_attrs_inner directly to avoid re-triggering _on_inspect."""
+        if not self._attr_panel_built:
+            return
+        # _refresh_attrs_from_thread is always same-file (called after inspect/detect),
+        # so never flush-save here — that would overwrite newly detected values.
+        if self._text_save_timer.isActive():
+            self._text_save_timer.stop()
+        self._maybe_rebuild_attr_panel()
+        self._project_edit.blockSignals(True)
+        self._seed_edit.blockSignals(True)
+        try:
+            self._refresh_attrs_inner(path)
+        finally:
+            self._project_edit.blockSignals(False)
+            self._seed_edit.blockSignals(False)
+
+    @pyqtSlot(str)
+    def _set_detect_status(self, msg: str):
+        """Show/clear a temporary detection status in the info bar."""
+        self._info_bar.setText(msg)
+        self._info_bar.setVisible(bool(msg))
+
+    @pyqtSlot()
+    def _refresh_clip_canvas(self):
+        """Called after background CLIP detection completes — re-loads canvas with updated entry."""
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc is None:
+            return
+        app = self.handler.app
+        entry = attrs_mod.get(app.attrs_data, path)
+        entry["_project"] = getattr(app, "current_project", None)
+        # Re-inject live O/R/K detections (same as _refresh_attrs_inner) so combos stay populated
+        try:
+            _det = attrs_mod.detect_file_attrs(path)
+            if _det:
+                _ork_opts = {}
+                for _w in _sc.widgets:
+                    if getattr(_w, "key", None) in ("O", "R", "K"):
+                        _ork_opts[_w.key] = {k for k, _ in (_w.options or [])}
+                _cur_tags = set(entry.get("tags", []))
+                _extra = [_fv for _fk, _fv in [("O", _det.get("o")), ("R", _det.get("r")), ("K", _det.get("k"))]
+                          if _fv and _ork_opts.get(_fk) and not (_cur_tags & _ork_opts[_fk])]
+                if _extra:
+                    entry = dict(entry)
+                    entry["tags"] = list(_cur_tags) + _extra
+        except Exception:
+            pass
+        _sc.load_file(path, entry)
+        # Resize CLIP/FACE/per-field tiles to fit their loaded text content
+        _clip_keys = {"CLIP", "FACE", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X"}
+        for _cfw in _sc.widgets:
+            if _cfw.key in _clip_keys and getattr(_cfw, "_te", None):
+                QTimer.singleShot(50, lambda _w=_cfw: self._fit_clip_face_tile(_w))
+        # Restore normal info bar (file info text in horiz mode, else hidden)
+        info = getattr(self, "_file_info_text", "")
+        if self._is_horiz():
+            self._info_bar.setText(info)
+            self._info_bar.setVisible(bool(info))
+        else:
+            self._info_bar.setVisible(False)
+
+    def _setup_clip_face_autoheight(self):
+        """Make CLIP and FACE canvas tiles resize to fit their full text content."""
+        sc = getattr(self, "_soft_canvas", None)
+        if not sc:
+            return
+        _clip_keys = {"CLIP", "FACE", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X"}
+        for w in getattr(sc, "widgets", []):
+            if w.key in _clip_keys:
+                te = getattr(w, "_te", None)
+                if te:
+                    te.setMaximumHeight(16777215)
+                # Collapse empty tiles to title-only height on first load
+                QTimer.singleShot(100, lambda _w=w: self._fit_clip_face_tile(_w))
 
     def _apply_file_visibility(self, path):
         """Show/hide soft canvas sections based on __hidden_for__ rules and file type."""
@@ -1400,12 +1581,13 @@ class PreviewWindow(QWidget):
         if self._attr_path and self._attr_path != path:
             if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
                 self._bake_to_file(silent=True)
+        _same_file = (self._attr_path == path)
         self._attr_path = path
-        # Show pending if DB has data that may not be baked into the file yet;
-        # otherwise start idle and let edits drive the state.
-        _entry_pre = attrs_mod.get(self.handler.app.attrs_data, path) if path else {}
-        _has_bakeable = any(_entry_pre.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id"))
-        self._update_bake_btn("pending" if _has_bakeable else "idle")
+        # Only reset bake state when navigating to a new file — preserve state on same-file refresh
+        if not _same_file:
+            _entry_pre = attrs_mod.get(self.handler.app.attrs_data, path) if path else {}
+            _has_bakeable = any(_entry_pre.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id"))
+            self._update_bake_btn("pending" if _has_bakeable else "idle")
         self._btn_detect_person.setText("Detect & Register")
         self._btn_detect_person.setStyleSheet(
             "background:#445566; color:#e0e0e0; border:1px solid #667788;"
@@ -1418,6 +1600,49 @@ class PreviewWindow(QWidget):
             return
         self.attr_widget.setEnabled(True)
         self._attr_scroll.setEnabled(True)
+        # Clean up any AItan{} blocks accidentally written into text fields
+        _ep_clean = app.attrs_data.get(path, {})
+        _ep_dirty = False
+        for _ep_k in ("prompt", "neg_prompt", "speech", "note"):
+            if str(_ep_clean.get(_ep_k, "")).startswith("AItan{"):
+                _ep_clean[_ep_k] = ""
+                _ep_dirty = True
+        if _ep_dirty:
+            attrs_mod.save(app.current_project, app.attrs_data)
+
+        # Sync embedded file metadata into attrs_data before anything else reads entry.
+        # Sync embedded file metadata — skip if already scanned this session (avoids Image.open on every view).
+        _emb_scanned = getattr(app, '_emb_meta_scanned', None)
+        if _emb_scanned is None:
+            app._emb_meta_scanned = set()
+            _emb_scanned = app._emb_meta_scanned
+        if path not in _emb_scanned:
+            _emb_scanned.add(path)
+            _emb_pre = _read_embedded_meta(path)
+            if _emb_pre:
+                if path not in app.attrs_data:
+                    app.attrs_data[path] = {}
+                _ep_stored = app.attrs_data[path]
+                _ep_changed = False
+                for _ep_key in ("prompt", "neg_prompt", "speech"):
+                    _ep_val = _emb_pre.get(_ep_key, "")
+                    if _ep_val and not _ep_stored.get(_ep_key):
+                        _ep_stored[_ep_key] = _ep_val
+                        _ep_changed = True
+                _ep_seed = str(_emb_pre["seed"]) if _emb_pre.get("seed") else ""
+                if _ep_seed and not _ep_stored.get("seed"):
+                    _ep_stored["seed"] = _ep_seed
+                    _ep_changed = True
+                if _ep_changed:
+                    attrs_mod.save(app.current_project, app.attrs_data)
+
+        # Apply path-scoped rules before reading entry so widgets fill with correct values
+        _app = self.handler.app
+        _path_rules = _app.get_path_rules_cached()
+        if _path_rules:
+            _app.attrs_data, _ = attrs_mod.apply_path_rules(
+                _app.attrs_data, path, _app.current_project, _path_rules=_path_rules)
+
         entry = attrs_mod.get(self.handler.app.attrs_data, path)
         tags  = set(entry.get("tags", []))
 
@@ -1441,13 +1666,15 @@ class PreviewWindow(QWidget):
 
 
 
-        # Person fields — try parsing coded filename first, fall back to saved person_id
+        # Person fields — prefer saved person_id if set (non-000), then filename
         stem    = os.path.splitext(os.path.basename(path))[0]
         parsed  = attrs_mod.parse_coded_filename(stem)
         persons = parsed.get("persons", []) if parsed else []
-        if not persons:
-            saved = entry.get("person_id", "")
-            persons = [saved] if saved else []
+        saved_pid = entry.get("person_id", "")
+        if saved_pid and saved_pid != "000":
+            persons = [saved_pid] + (persons[1:] if len(persons) > 1 else [])
+        elif not persons:
+            persons = [saved_pid] if saved_pid else []
         for i, pe in enumerate(self._p_edits):
             pe.blockSignals(True)
             pe.setText(persons[i] if i < len(persons) else "")
@@ -1464,25 +1691,26 @@ class PreviewWindow(QWidget):
         for i, pwe in enumerate(self._pw_edits):
             pwe.setText(pws[i] if i < len(pws) else "")
 
-        # Populate coded fields from parsed filename — skip collapsed sections
+        # Populate coded fields — prefer attrs_data value (manual input) over filename
         _fts = getattr(self, "_field_to_section", {})
-        if parsed:
-            for letter, _, digits in attrs_mod.CODED_FIELDS:
-                _sec = _fts.get(letter.lower())
-                if _sec and not _sec.is_expanded():
-                    continue   # section is collapsed — will refresh when opened
-                fe = self._code_edits.get(letter.lower())
-                if fe is None:
-                    continue
-                val = parsed.get(letter.lower(), "")
-                if digits == 0:
-                    fe.blockSignals(True)
-                    fe.setChecked(bool(val))
-                    fe.blockSignals(False)
-                else:
-                    fe.setText(val)
-                    # Sync combo boxes (if this field uses them)
-                    self._set_field_combos(letter.lower(), val)
+        for letter, _, digits in attrs_mod.CODED_FIELDS:
+            _sec = _fts.get(letter.lower())
+            if _sec and not _sec.is_expanded():
+                continue   # section is collapsed — will refresh when opened
+            fe = self._code_edits.get(letter.lower())
+            if fe is None:
+                continue
+            # manual value → cf_ auto-detected → parsed filename
+            _db_val = attrs_mod.get_coded_field(entry, letter)
+            val = _db_val if _db_val else (parsed.get(letter.lower(), "") if parsed else "")
+            if digits == 0:
+                fe.blockSignals(True)
+                fe.setChecked(bool(val))
+                fe.blockSignals(False)
+            else:
+                fe.setText(val)
+                # Sync combo boxes (if this field uses them)
+                self._set_field_combos(letter.lower(), val)
         # Auto-fill O/R/K from file metadata when not set in filename
         _auto_detect_keys = {"o", "r", "k"}
         _need_detect = False
@@ -1603,6 +1831,96 @@ class PreviewWindow(QWidget):
                 pass
             entry["_project"] = getattr(app, "current_project", None)
             _sc.load_file(path, entry, raw_meta=_raw_meta)
+
+            # If key CLIP fields are absent, run detection in background and refresh canvas
+            _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
+            if not any(entry.get(f) for f in _clip_fields):
+                import threading as _thr
+                QMetaObject.invokeMethod(
+                    self, "_set_detect_status",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, "Detecting CLIP & face…"))
+                def _run_clip(_path=path, _entry=dict(entry)):
+                    try:
+                        import aisearch_logic as _lg
+                        _data = getattr(app, "data", None)
+                        _emb = None
+                        if _data and "paths" in _data and _path in _data["paths"]:
+                            _idx = _data["paths"].index(_path)
+                            _emb = _data["embeddings"][_idx]
+                        if _emb is None:
+                            _emb = _lg.extract_feature(_path)
+                        if _emb is None:
+                            QMetaObject.invokeMethod(
+                                self, "_set_detect_status",
+                                Qt.ConnectionType.QueuedConnection,
+                                Q_ARG(str, ""))
+                            return
+                        _changed = False
+                        _updates = attrs_mod.auto_detect_clip_attrs(
+                            _emb, _entry, allowed_fields=_clip_fields,
+                            project=getattr(app, "current_project", None))
+                        if _updates:
+                            # Check live entry — user may have manually set a field
+                            # while this thread was running; don't overwrite their input
+                            _live = app.attrs_data.setdefault(_path, {})
+                            for _k, _v in _updates.items():
+                                if not _live.get(_k):
+                                    _live[_k] = _v
+                                    _changed = True
+                        # Generate per-field CLIP text for canvas tiles
+                        _CF_KEYS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X")
+                        try:
+                            _specs = attrs_mod.inspect_clip_scores(_emb)
+                            _live2 = app.attrs_data.setdefault(_path, {})
+                            _field_txt = {}
+                            for _sp in _specs:
+                                _fk = _sp["field"].upper()
+                                if _fk not in _CF_KEYS:
+                                    continue
+                                _winner = _sp.get("winner")
+                                _lmap = {c: l for c, l, _ in _sp["options"]}
+                                _wlbl = _lmap.get(_winner, "—") if _winner else "below threshold"
+                                _flines = _field_txt.setdefault(_fk, [])
+                                _flines.append(f"pos={_sp['pos']}  thr={_sp['threshold']:.2f}")
+                                _flines.append(f"  -> {_winner or '—'}  {_wlbl}")
+                                for _c, _l, _s in _sp["options"][:6]:
+                                    _flines.append(f"  {'*' if _c == _winner else ' '} {_c}: {_s:.4f}  {_l[:52]}")
+                                _flines.append("")
+                            for _fk in _CF_KEYS:
+                                if _fk in _field_txt:
+                                    _live2[f"CLIP_{_fk}"] = "\n".join(_field_txt[_fk])
+                                    _changed = True
+                        except Exception:
+                            pass
+                        # Face detection — set person_id if not yet assigned
+                        _stored = (app.attrs_data.get(_path) or {}).get("person_id", "")
+                        if not _stored:
+                            _pid = attrs_mod.detect_or_assign_person_id(_path, app.current_project)
+                            if _pid is None:
+                                _pid = "000"
+                            app.attrs_data.setdefault(_path, {})["person_id"] = _pid
+                            _changed = True
+                        if _changed:
+                            attrs_mod.save(app.current_project, app.attrs_data)
+                        # Update per-field canvas tiles
+                        for _fk in _CF_KEYS:
+                            if _fk in _field_txt:
+                                QMetaObject.invokeMethod(
+                                    self, "_update_canvas_text_widget",
+                                    Qt.ConnectionType.QueuedConnection,
+                                    Q_ARG(str, f"CLIP_{_fk}"),
+                                    Q_ARG(str, "\n".join(_field_txt[_fk])))
+                        QMetaObject.invokeMethod(
+                            self, "_refresh_clip_canvas",
+                            Qt.ConnectionType.QueuedConnection)
+                    except Exception:
+                        QMetaObject.invokeMethod(
+                            self, "_set_detect_status",
+                            Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(str, ""))
+                _thr.Thread(target=_run_clip, daemon=True).start()
+
         # Hide the hardcoded Note row when the canvas has a "note" text panel
         _canvas_has_note = _sc is not None and any(
             getattr(w, "key", None) in ("note", "positive_prompt")
@@ -1613,51 +1931,6 @@ class PreviewWindow(QWidget):
         # Apply __hidden_for__ visibility rules based on file type
         self._apply_file_visibility(path)
 
-        # Auto-read embedded file metadata if db has no prompt/seed/speech yet
-        _needs_read = (not entry.get("prompt") and not entry.get("neg_prompt")
-                       and not entry.get("speech") and not entry.get("seed"))
-        if _needs_read:
-            def _auto_read(p=path):
-                data = _read_embedded_meta(p)
-                if not data:
-                    return
-                def _apply(p=p, data=data):
-                    if self._attr_path != p:
-                        return
-                    _changed = False
-                    _entry = attrs_mod.get(self.handler.app.attrs_data, p)
-                    for _db_key in ("prompt", "neg_prompt", "speech"):
-                        if data.get(_db_key) and not _entry.get(_db_key):
-                            _entry[_db_key] = data[_db_key]
-                            _changed = True
-                    if data.get("seed") and not _entry.get("seed"):
-                        self._seed_edit.setText(str(data["seed"]))
-                        _entry["seed"] = str(data["seed"])
-                        _changed = True
-                    if _changed:
-                        _sc = getattr(self, "_soft_canvas", None)
-                        if _sc:
-                            _entry["_project"] = getattr(app, "current_project", None)
-                            _sc.load_file(p, _entry)
-                    if _changed:
-# ────────── MODIFICATION START ──────────
-                        # 1. Force the internal state to Editable (Unchecked)
-                        # We block signals to prevent redundant recursive saves during setup
-                        self._protected_check.blockSignals(True)
-                        self._protected_check.setChecked(False)
-                        self._protected_check.blockSignals(False)
-
-                        # 2. FORCE visual update of the Lock/Unlock icons and colors
-                        # This triggers the text change to "🔓 Editable" and green color
-                        self._apply_protected_lock(False)
-
-                        # 3. Commit to database so it stays unlocked
-                        self._save_attrs()
-                        # ─────────── MODIFICATION END ───────────
-
-                        self._update_bake_btn("ok")   # already baked — file was the source
-                QTimer.singleShot(0, _apply)
-            threading.Thread(target=_auto_read, daemon=True).start()
 
 
         # Info — append to window title bar
@@ -1678,19 +1951,19 @@ class PreviewWindow(QWidget):
             _embedded = ""
         self._raw_meta_edit.setPlainText(_embedded if _embedded else "(no embedded text)")
 
-        # Fill seed/prompt fields from meta if top-level attrs are empty
+        # Fill seed/prompt fields from meta — always update from file
         if meta:
-            if not self._seed_edit.text() and meta.get("Seed"):
+            if meta.get("Seed"):
                 self._seed_edit.blockSignals(True)
                 self._seed_edit.setText(str(meta["Seed"]))
                 self._seed_edit.blockSignals(False)
-        # Fill prompt/neg_prompt into canvas if attrs entry is empty
+        # Fill prompt/neg_prompt into canvas — always from meta
         _sc_meta = getattr(self, "_soft_canvas", None)
         if _sc_meta and meta:
             _entry_meta = attrs_mod.get(self.handler.app.attrs_data, path)
             _meta_updated = False
             for meta_key, db_key in (("Prompt", "prompt"), ("NegPrompt", "neg_prompt")):
-                if meta.get(meta_key) and not _entry_meta.get(db_key):
+                if meta.get(meta_key) and _entry_meta.get(db_key) != meta[meta_key]:
                     _entry_meta[db_key] = meta[meta_key]
                     _meta_updated = True
             if _meta_updated:
@@ -1736,11 +2009,13 @@ class PreviewWindow(QWidget):
         # NOTE: MediaPipe (shot/pose) is intentionally skipped here — use the Scan buttons.
         needs_res    = not any(t in attrs_mod.RESOLUTION_TAGS for t in tags)
         needs_src    = not any(t in attrs_mod.SOURCE_TAGS for t in tags)
-        needs_meta   = not entry.get("meta")
+        needs_meta   = True   # always re-read meta from file
         needs_person = False  # face matching is manual-only (use Detect & Register button)
-        if needs_res or needs_src or needs_meta or needs_person:
+        needs_fn_rules = True  # always apply filename rules — last matching rule wins
+        if needs_res or needs_src or needs_meta or needs_person or needs_fn_rules:
             def _detect(p=path, _needs_res=needs_res, _needs_src=needs_src,
-                        _needs_meta=needs_meta, _needs_person=needs_person):
+                        _needs_meta=needs_meta, _needs_person=needs_person,
+                        _needs_fn=needs_fn_rules):
                 _entry = attrs_mod.get(app.attrs_data, p)
                 _tags  = list(_entry.get("tags", []))
                 _changed = False
@@ -1754,14 +2029,29 @@ class PreviewWindow(QWidget):
                     if src and not any(t in attrs_mod.SOURCE_TAGS for t in _tags):
                         _tags = [t for t in _tags if t not in attrs_mod.SOURCE_TAGS] + [src]
                         _changed = True
-                    if new_prompt and not _entry.get("prompt"):
+                    if new_prompt and _entry.get("prompt") != new_prompt:
                         _entry["prompt"] = new_prompt; _changed = True
-                    if new_seed and not _entry.get("seed"):
+                    if new_seed and _entry.get("seed") != new_seed:
                         _entry["seed"] = new_seed; _changed = True
                 if _needs_meta:
                     meta = attrs_mod.extract_metadata(p)
                     if meta:
                         _entry["meta"] = meta; _changed = True
+                # Filename rule → person_id (one-way rules, e.g. image-*.png → Nastia)
+                if _needs_fn:
+                    try:
+                        _fn_rules = attrs_mod.load_filename_rules(app.current_project)
+                        _ow = [r for r in _fn_rules
+                               if r.get("field") and (r.get("one_way") or r.get("extract"))]
+                        if _ow:
+                            _bn = os.path.basename(p)
+                            _st = os.path.splitext(_bn)[0]
+                            _od = attrs_mod.parse_filename_rules(_st, _ow, basename=_bn, fullpath=p)
+                            if _od.get("P"):
+                                _entry["person_id"] = _od["P"]
+                                _changed = True
+                    except Exception:
+                        pass
                 # Face match — only when faces DB has entries (never auto-assigns new IDs)
                 _matched_pid = None
                 if _needs_person:
@@ -2058,6 +2348,451 @@ class PreviewWindow(QWidget):
         name_label = attrs_mod.get_person_id_label(app.current_project, new_pid)
         self._person_name_edit.setText(name_label if name_label != new_pid else "")
 
+    def _on_inspect(self, overwrite=False):
+        """Run CLIP + face detection and write raw scores into the inspect text box.
+        overwrite=True: clear all CLIP fields and re-detect from scratch (Refresh mode).
+        overwrite=False: only fill empty fields, never touch manual input."""
+        # Guard: skip if a previous inspect is still running (rapid navigation)
+        if getattr(self, '_inspect_running', False):
+            return
+        path = self._attr_path
+        if not path or not os.path.exists(path):
+            return
+        clip_out = getattr(self, "_clip_inspect_edit", None)
+        face_out = getattr(self, "_face_inspect_edit", None)
+        if clip_out is None and face_out is None:
+            return
+        app = self.handler.app
+        if clip_out: clip_out.setPlainText("Computing…")
+        if face_out: face_out.setPlainText("Computing…")
+        self._inspect_running = True
+
+        import threading
+        def _run():
+            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+
+            # ── CLIP ────────────────────────────────────────────────────────
+            clip_txt = []
+            clip_field_txt = {}   # field.upper() → list of lines
+            _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X")
+            _clip_specs = []
+            try:
+                import aisearch_logic as _lg
+                emb = None
+                data = getattr(app, "data", None)
+                if data and "paths" in data and path in data["paths"]:
+                    idx = data["paths"].index(path)
+                    emb = data["embeddings"][idx]
+                if emb is None:
+                    emb = _lg.extract_feature(path)
+                if emb is not None:
+                    _clip_specs = attrs_mod.inspect_clip_scores(emb)
+                    for sp in _clip_specs:
+                        winner = sp["winner"]
+                        label_map = {code: lbl for code, lbl, _ in sp["options"]}
+                        win_label = label_map.get(winner, "—") if winner else "below threshold"
+                        clip_txt.append(f"{sp['field']} pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                        clip_txt.append(f"  -> {winner or '—'}  {win_label}")
+                        for code, lbl, score in sp["options"][:6]:
+                            mark = "*" if code == winner else " "
+                            clip_txt.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
+                        clip_txt.append("")
+                        # Per-field accumulation
+                        _fk = sp["field"].upper()
+                        if _fk in _CLIP_CANVAS_FIELDS:
+                            _flines = clip_field_txt.setdefault(_fk, [])
+                            _flines.append(f"pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                            _flines.append(f"  -> {winner or '—'}  {win_label}")
+                            for code, lbl, score in sp["options"][:6]:
+                                mark = "*" if code == winner else " "
+                                _flines.append(f"  {mark} {code}: {score:.4f}  {lbl[:52]}")
+                            _flines.append("")
+                else:
+                    clip_txt.append("(could not extract embedding)")
+            except Exception as e:
+                clip_txt.append(f"ERROR: {e}")
+            if clip_out:
+                QMetaObject.invokeMethod(clip_out, "setPlainText",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, "\n".join(clip_txt)))
+            # Apply CLIP results to attrs_data
+            if _clip_specs and emb is not None:
+                # Build multi-digit field values by combining all positions
+                # e.g. HC pos1=5, pos2=none, pos3=none → "hc": "005" not "5"
+                _field_digits = {cf[0].lower(): cf[2]
+                                 for cf in attrs_mod.CODED_FIELDS if cf[2] > 0}
+                _working = {}
+                # Track which (field, digit_index) had an actual winner (incl. "0")
+                _detected_indices = {}
+                _entry_pre = attrs_mod.get(app.attrs_data, path)
+                for sp in _clip_specs:
+                    _f = sp["field"].lower()
+                    _pos = sp.get("pos", 1)
+                    _winner = sp.get("winner")
+                    if _f not in _working:
+                        _digits = _field_digits.get(_f, 1)
+                        _cur = (_entry_pre.get(_f) or "").zfill(_digits)
+                        _working[_f] = list(_cur)
+                    if _winner:
+                        _digits = len(_working[_f])
+                        _idx = _digits - _pos  # pos=1 = rightmost
+                        if 0 <= _idx < _digits:
+                            _working[_f][_idx] = _winner
+                            _detected_indices.setdefault(_f, set()).add(_idx)
+                # Apply correction-based overrides (baked examples take priority)
+                _corrections = attrs_mod.load_corrections(getattr(app, "current_project", None))
+                if _corrections and emb is not None:
+                    for sp in _clip_specs:
+                        _f = sp["field"].lower()
+                        _pos = sp.get("pos", 1)
+                        if _f not in _working:
+                            continue
+                        _corr = attrs_mod.detect_from_corrections(emb, _corrections, _f, _pos)
+                        if _corr is not None:
+                            _digits = len(_working[_f])
+                            _idx = _digits - _pos
+                            if 0 <= _idx < _digits:
+                                _working[_f][_idx] = _corr
+                                _detected_indices.setdefault(_f, set()).add(_idx)
+                # Include fields with non-zero digits OR real "0" detections (FA/SK/BG)
+                _updates = {}
+                for _f, _v in _working.items():
+                    _vs = "".join(_v)
+                    if any(c != "0" for c in _vs) or _f in _detected_indices:
+                        _updates[_f] = _vs
+                if _updates:
+                    _entry = attrs_mod.get(app.attrs_data, path)
+                    if overwrite:
+                        # Refresh mode: overwrite all CLIP fields
+                        _entry.update(_updates)
+                    else:
+                        # Normal mode: merge — keep existing non-zero digits, fill zeros
+                        # Allow "0" winners through for zero_is_none=False fields (FA, SK, BG)
+                        for _k, _v in _updates.items():
+                            _digits = _field_digits.get(_k, 1)
+                            _existing = (_entry.get(_k) or "").zfill(_digits)
+                            _merged = list(_existing)
+                            _det_idxs = _detected_indices.get(_k, set())
+                            for _i, _c in enumerate(_v.zfill(_digits)):
+                                # Fill empty position if new value is non-zero OR was detected
+                                if _merged[_i] == "0" and (_c != "0" or _i in _det_idxs):
+                                    _merged[_i] = _c
+                            _result = "".join(_merged)
+                            # Store if any non-zero digit, OR real detections were made
+                            if any(c != "0" for c in _result) or _k in _detected_indices:
+                                _entry[_k] = _result
+                    # Store combined CLIP text and per-field texts for canvas tiles
+                    _entry = attrs_mod.get(app.attrs_data, path)
+                    _entry["CLIP"] = "\n".join(clip_txt)
+                    for _cf in _CLIP_CANVAS_FIELDS:
+                        if _cf in clip_field_txt:
+                            _entry[f"CLIP_{_cf}"] = "\n".join(clip_field_txt[_cf])
+                    attrs_mod.save(app.current_project, app.attrs_data)
+                    QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
+                                             Qt.ConnectionType.QueuedConnection,
+                                             Q_ARG(str, path))
+                    # Update per-field canvas tiles
+                    for _cf in _CLIP_CANVAS_FIELDS:
+                        if _cf in clip_field_txt:
+                            QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
+                                                     Qt.ConnectionType.QueuedConnection,
+                                                     Q_ARG(str, f"CLIP_{_cf}"),
+                                                     Q_ARG(str, "\n".join(clip_field_txt[_cf])))
+            elif clip_txt:
+                # No numeric updates but still have text — store in CLIP canvas tile
+                _entry = attrs_mod.get(app.attrs_data, path)
+                _entry["CLIP"] = "\n".join(clip_txt)
+                for _cf in _CLIP_CANVAS_FIELDS:
+                    if _cf in clip_field_txt:
+                        _entry[f"CLIP_{_cf}"] = "\n".join(clip_field_txt[_cf])
+                attrs_mod.save(app.current_project, app.attrs_data)
+                QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, path))
+                for _cf in _CLIP_CANVAS_FIELDS:
+                    if _cf in clip_field_txt:
+                        QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
+                                                 Qt.ConnectionType.QueuedConnection,
+                                                 Q_ARG(str, f"CLIP_{_cf}"),
+                                                 Q_ARG(str, "\n".join(clip_field_txt[_cf])))
+
+            # ── Face ────────────────────────────────────────────────────────
+            face_txt = []
+            _detected_pid = None
+            try:
+                _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
+                fi = attrs_mod.inspect_face_detection(path, app.current_project)
+                if fi.get("error"):
+                    face_txt.append(f"ERROR: {fi['error']}")
+                else:
+                    face_txt.append(f"Faces found: {fi['num_faces']}")
+                    face_txt.append(f"Stored: {'P' + _stored_pid if _stored_pid else '—'}")
+                    if fi["face_found"]:
+                        registry = attrs_mod.load_person_registry(app.current_project)
+                        if fi["matches"]:
+                            face_txt.append("Top matches:")
+                            for pid, sim in fi["matches"]:
+                                name = registry.get(pid, "")
+                                mark = "*" if pid == fi["assigned_id"] else " "
+                                face_txt.append(f"  {mark} P{pid}  {sim:.3f}  {name}")
+                        else:
+                            face_txt.append("No persons in DB")
+                        _detected_pid = fi["assigned_id"]
+                        _det_str = ('P' + _detected_pid) if _detected_pid else 'no match (thr 0.35)'
+                        _match = " ==" if _detected_pid == _stored_pid else " !="
+                        face_txt.append(f"\n-> {_det_str}{_match} stored")
+                    else:
+                        face_txt.append("No face detected")
+                        _detected_pid = "000"
+            except Exception as e:
+                face_txt.append(f"ERROR: {e}")
+            # Store FACE text for the canvas FACE tile
+            if face_txt:
+                _entry = attrs_mod.get(app.attrs_data, path)
+                _entry["FACE"] = "\n".join(face_txt)
+                attrs_mod.save(app.current_project, app.attrs_data)
+                QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, "FACE"),
+                                         Q_ARG(str, "\n".join(face_txt)))
+            if face_out:
+                QMetaObject.invokeMethod(face_out, "setPlainText",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, "\n".join(face_txt)))
+            # Auto-apply face result to person_id when a real person was detected
+            _stored_pid_now = (app.attrs_data.get(path) or {}).get("person_id", "")
+            if _detected_pid and _detected_pid != "000" and _detected_pid != _stored_pid_now:
+                QMetaObject.invokeMethod(self, "_auto_apply_face",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, path),
+                                         Q_ARG(str, _detected_pid))
+            # Keep Apply button in Raw Data section in sync
+            _apply_btn = getattr(self, "_btn_apply_face", None)
+            if _apply_btn and _detected_pid is not None and _detected_pid != _stored_pid_now:
+                QMetaObject.invokeMethod(_apply_btn, "setEnabled",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(bool, True))
+
+        def _run_guarded():
+            try:
+                _run()
+            finally:
+                self._inspect_running = False
+
+        threading.Thread(target=_run_guarded, daemon=True).start()
+
+    def _apply_detected_face(self):
+        """Apply the face-detection result to the person field and save."""
+        path = self._attr_path
+        if not path:
+            return
+        app = self.handler.app
+        try:
+            fi = attrs_mod.inspect_face_detection(path, app.current_project)
+            pid = fi.get("assigned_id")
+            if not pid:
+                return
+            entry = attrs_mod.get(app.attrs_data, path)
+            old_pid = entry.get("person_id", "")
+            attrs_mod.set_file(app.attrs_data, path,
+                               tags=entry.get("tags", []),
+                               note=entry.get("note", ""),
+                               confirmed=entry.get("confirmed", False),
+                               project=entry.get("project", ""),
+                               scene=entry.get("scene", ""),
+                               prompt=entry.get("prompt", ""),
+                               neg_prompt=entry.get("neg_prompt", ""),
+                               seed=entry.get("seed", ""),
+                               meta=entry.get("meta"),
+                               person_id=pid,
+                               editable=entry.get("editable", True))
+            attrs_mod.save(app.current_project, app.attrs_data)
+            # Correct face DB if old ID was wrong
+            if old_pid and old_pid != pid:
+                import threading as _thr
+                _thr.Thread(target=lambda: attrs_mod.correct_person_id(
+                    path, app.current_project, pid, wrong_id=old_pid), daemon=True).start()
+            # Update person field in UI
+            if self._p_edits:
+                self._p_edits[0].blockSignals(True)
+                self._p_edits[0].setText(pid)
+                self._p_edits[0].blockSignals(False)
+            registry = attrs_mod.load_person_registry(app.current_project)
+            self._person_name_edit.setText(registry.get(pid, ""))
+            _btn = getattr(self, "_btn_apply_face", None)
+            if _btn:
+                _btn.setEnabled(False)
+            self._update_bake_btn("pending")
+        except Exception:
+            pass
+
+    def _save_canvas_layout(self):
+        """Save every canvas tile's current position and size to the DB."""
+        sc = getattr(self, "_soft_canvas", None)
+        if not sc:
+            return
+        from attr_viewer import save_position as _sp, save_size as _ss
+        for w in sc.widgets:
+            _sp(sc.conn, w.key, w.x(), w.y())
+            _ss(sc.conn, w.key, w.width(), w.height())
+        btn = getattr(self, "_btn_save_layout", None)
+        if btn:
+            btn.setText("✓ Saved")
+            QTimer.singleShot(1500, lambda: btn.setText("💾 Layout"))
+
+    def _fit_clip_face_tile(self, w):
+        """Resize a CLIP or FACE FieldWidget to fit its full text content.
+        Only shifts tiles that are in the same column (same x zone) and directly below."""
+        te = getattr(w, "_te", None)
+        if not te:
+            return
+        sc = getattr(self, "_soft_canvas", None)
+        if not sc:
+            return
+        tile_w = max(150, w.width() - 20)
+        te.document().setTextWidth(tile_w)
+        doc_h = int(te.document().size().height()) + te.frameWidth() * 2
+        title_h = w.fontMetrics().height() + 24
+        new_h = max(title_h, doc_h + title_h)
+        old_h = w.height()
+        if new_h == old_h:
+            return
+        w.resize(w.width(), new_h)
+        clip_old_bottom = w.y() + old_h
+        clip_new_bottom = w.y() + new_h
+        # Only push tiles that are:
+        #   (a) in the same column — left edge within CLIP's horizontal span
+        #   (b) were positioned below the old CLIP bottom (would be overlapped)
+        col_right = w.x() + w.width() + 20   # CLIP column right boundary + slack
+        for other in sc.widgets:
+            if other is w:
+                continue
+            if other.x() >= col_right:
+                continue  # different column (attribute combos on the right) — don't touch
+            if other.y() < clip_old_bottom:
+                continue  # above old CLIP bottom — don't touch
+            new_y = max(other.y(), clip_new_bottom + 6)
+            if new_y != other.y():
+                other.move(other.x(), new_y)
+                sc._apply_connections_for(other.key)
+                # Intentionally not saving here — user saves layout explicitly via 💾 Layout
+        canvas = getattr(sc, "canvas", None)
+        if canvas:
+            bottom = max((cw.y() + cw.height() for cw in sc.widgets if cw.isVisible()), default=0)
+            canvas.setMinimumHeight(max(1000, bottom + 40))
+
+    @pyqtSlot(str, str)
+    def _update_canvas_text_widget(self, key: str, text: str):
+        """Set text on a canvas FieldWidget and resize the tile to show full content."""
+        sc = getattr(self, "_soft_canvas", None)
+        if not sc:
+            return
+        for w in getattr(sc, "widgets", []):
+            if w.key == key:
+                te = getattr(w, "_te", None)
+                if te:
+                    te.blockSignals(True)
+                    te.setPlainText(text)
+                    te.blockSignals(False)
+                    # Resize tile and shift tiles below — deferred so widget is laid out first
+                    QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
+
+    @pyqtSlot(str, str)
+    def _auto_apply_face(self, path: str, pid: str):
+        """Slot called from _on_inspect thread to auto-apply detected person_id to P field."""
+        if not path or not pid or pid == "000":
+            return
+        app = self.handler.app
+        if self._attr_path != path:
+            return  # user navigated away
+        entry = attrs_mod.get(app.attrs_data, path)
+        old_pid = entry.get("person_id", "")
+        if old_pid == pid:
+            return
+        entry["person_id"] = pid
+        attrs_mod.save(app.current_project, app.attrs_data)
+        if old_pid and old_pid != pid:
+            import threading as _thr
+            _thr.Thread(target=lambda: attrs_mod.correct_person_id(
+                path, app.current_project, pid, wrong_id=old_pid), daemon=True).start()
+        self._refresh_attrs_inner(path)
+
+    def _on_canvas_action(self, key: str, action: str):
+        """Dispatch action button clicks from canvas FieldWidgets."""
+        if key == "P" and action == "detect_face":
+            self._detect_face_for_canvas()
+
+    def _detect_face_for_canvas(self):
+        """Run face detection in background and update the P box + person_id."""
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        app = self.handler.app
+        # Disable button while running
+        _sc = getattr(self, "_soft_canvas", None)
+        _p_widget = next((w for w in getattr(_sc, "widgets", []) if w.key == "P"), None)
+        _det_btn = getattr(_p_widget, "_detect_btn", None) if _p_widget else None
+        if _det_btn:
+            _det_btn.setEnabled(False)
+            _det_btn.setText("…")
+        QMetaObject.invokeMethod(
+            self, "_set_detect_status",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, "Detecting face…"))
+
+        def _run(_path=path):
+            try:
+                pid = attrs_mod.detect_or_assign_person_id(_path, app.current_project)
+                if pid is None:
+                    pid = "000"
+                entry = attrs_mod.get(app.attrs_data, _path)
+                old_pid = entry.get("person_id", "")
+                app.attrs_data.setdefault(_path, {})["person_id"] = pid
+                attrs_mod.save(app.current_project, app.attrs_data)
+                if old_pid and old_pid != pid and old_pid != "000":
+                    attrs_mod.correct_person_id(_path, app.current_project, pid, wrong_id=old_pid)
+            except Exception:
+                pass
+            QMetaObject.invokeMethod(
+                self, "_finish_detect_face_canvas",
+                Qt.ConnectionType.QueuedConnection)
+
+        import threading as _thr
+        _thr.Thread(target=_run, daemon=True).start()
+
+    @pyqtSlot()
+    def _finish_detect_face_canvas(self):
+        """Re-enable Detect button and refresh the P box after detection completes."""
+        QMetaObject.invokeMethod(
+            self, "_set_detect_status",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, ""))
+        _sc = getattr(self, "_soft_canvas", None)
+        _p_widget = next((w for w in getattr(_sc, "widgets", []) if w.key == "P"), None)
+        _det_btn = getattr(_p_widget, "_detect_btn", None) if _p_widget else None
+        if _det_btn:
+            _det_btn.setEnabled(True)
+            _det_btn.setText("Detect")
+        # Reload P box value
+        path = getattr(self, "_attr_path", None)
+        if path and _p_widget:
+            app = self.handler.app
+            entry = attrs_mod.get(app.attrs_data, path)
+            entry["_project"] = getattr(app, "current_project", None)
+            entry["path"] = path
+            _p_widget.load_soft(set(entry.get("tags", [])), entry)
+        # Sync old-style person edit boxes if present
+        if path:
+            app = self.handler.app
+            entry = attrs_mod.get(app.attrs_data, path)
+            pid = entry.get("person_id", "")
+            if self._p_edits:
+                self._p_edits[0].blockSignals(True)
+                self._p_edits[0].setText(pid)
+                self._p_edits[0].blockSignals(False)
+            registry = attrs_mod.load_person_registry(app.current_project)
+            self._person_name_edit.setText(registry.get(pid, ""))
+
     def _on_pw_changed(self):
         """User manually edited a PW field — trigger filename normalize if auto-rename is on."""
         if not self._attr_path:
@@ -2134,7 +2869,8 @@ class PreviewWindow(QWidget):
             return
         parts[lk] = letter if fe.isChecked() else ""
         _date_first = bool(parts.get("j")) and not parts.get("persons")
-        new_stem = attrs_mod.build_coded_filename(parts, date_first=_date_first)
+        _fo = attrs_mod.get_sync_field_order(getattr(self.handler.app, "current_project", None))
+        new_stem = attrs_mod.build_coded_filename(parts, date_first=_date_first, field_order=_fo)
         if not new_stem or new_stem == stem:
             return
         _, _ext = os.path.splitext(path)
@@ -2193,7 +2929,8 @@ class PreviewWindow(QWidget):
                 parts[letter.lower()] = "1" if fe.isChecked() else ""
             else:
                 parts[letter.lower()] = fe.text().strip().lower()
-        new_stem = attrs_mod.build_coded_filename(parts)
+        _fo2 = attrs_mod.get_sync_field_order(getattr(app, "current_project", None))
+        new_stem = attrs_mod.build_coded_filename(parts, field_order=_fo2)
         if not new_stem:
             return
         _, ext   = os.path.splitext(path)
@@ -2346,12 +3083,12 @@ class PreviewWindow(QWidget):
         # Collect soft-field data from canvas (taglist toggles + text areas)
         _sc = getattr(self, "_soft_canvas", None)
         if _sc:
-            _extra_tags, _text_vals = _sc.collect_soft_data()
+            _extra_tags, _text_vals, _coded_vals = _sc.collect_soft_data()
             # "Our" tags = every tag key the canvas knows about (project-specific config)
             # This is more accurate than attrs_mod.TAGS which uses the general config
             from attr_viewer import _DEDICATED_FIELD_KEYS as _DFK
             _our_tags = {w.key for w in _sc.widgets
-                         if w.style in ("taglist", "boolean", "matrix", "radio")}
+                         if w.style in ("taglist", "boolean", "matrix", "radio", "combo")}
             _our_tags.update(attrs_mod.QUALITY_TAGS)
             # Also include individual button keys from taglist/boolean/radio widgets
             for w in _sc.widgets:
@@ -2364,48 +3101,90 @@ class PreviewWindow(QWidget):
                     _dedicated_btn_keys.update(getattr(w, "_btns", {}).keys())
             # Coded-boolean option keys (e.g. "watermark") — stored in filename, not tags.
             # Also include complement keys from any radio widget that has a positive coded-bool btn.
-            _coded_bool_opts = {lbl.lower() for _, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+            # Build opt_key → letter map (e.g. "watermark" → "wm") from CODED_FIELDS labels.
+            _cb_label_map = {lbl.lower(): letter.lower()
+                             for letter, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+            _coded_bool_opts = set(_cb_label_map)
             for _cw in _sc.widgets:
                 if _cw.style == "radio":
                     _wb = getattr(_cw, '_btns', {})
-                    if any(k.lower() in _coded_bool_opts for k in _wb):
+                    if any(k.lower() in _cb_label_map for k in _wb):
                         _coded_bool_opts.update(k.lower() for k in _wb)
+            # All option keys from combo widgets — these live in the filename, not tags
+            _combo_opt_keys = set()
+            for _cw in _sc.widgets:
+                if _cw.style == "combo":
+                    _combo_opt_keys.update(k for k, _ in (_cw.options or []))
             # Preserve foreign tags we don't own, then add canvas tags
             _preserved = [t for t in entry.get("tags", [])
                           if t not in _our_tags and t not in _dedicated_btn_keys
-                          and t not in _coded_bool_opts]
+                          and t not in _coded_bool_opts and t not in _combo_opt_keys]
             tags.extend(_preserved)
-            # Canvas tags — but strip quality tags, dedicated-field values, coded booleans
+            # Canvas tags — strip quality tags, dedicated-field values, coded booleans, combo keys
             tags.extend(t for t in _extra_tags
                         if t not in attrs_mod.QUALITY_TAGS
                         and t not in _dedicated_btn_keys
-                        and t not in _coded_bool_opts)
+                        and t not in _coded_bool_opts
+                        and t not in _combo_opt_keys)
             tags = list(dict.fromkeys(tags))  # remove duplicates, preserve order
         else:
             _text_vals = {}
-        persons = [_norm_pid(pe.text().strip()) for pe in self._p_edits if pe.text().strip()]
-        if not persons:
-            _combo_fid = self._person_id_combo.currentData()
-            if _combo_fid:
-                persons = [_norm_pid(_combo_fid)]
+            _coded_vals = {}
+        # Canvas P tile has priority when present; fall back to classic p_edits then combo
+        if "person_id" in _text_vals:
+            _canvas_pid = _norm_pid(_text_vals["person_id"])
+            persons = [_canvas_pid] if _canvas_pid else []
+        else:
+            persons = [_norm_pid(pe.text().strip()) for pe in self._p_edits if pe.text().strip()]
+            if not persons:
+                _combo_fid = self._person_id_combo.currentData()
+                if _combo_fid:
+                    persons = [_norm_pid(_combo_fid)]
         attrs_mod.set_file(app.attrs_data, path,
                            tags=tags,
                            note=self._project_edit.text() if self._note_row_widget.isVisible() else _text_vals.get("note", entry.get("note", "")),
                            confirmed=entry.get("confirmed", False),
                            project=entry.get("project", ""),
                            scene=entry.get("scene", ""),
-                           prompt=_text_vals.get("prompt", ""),
-                           neg_prompt=_text_vals.get("neg_prompt", ""),
-                           seed=self._seed_edit.text(),
+                           prompt=_text_vals.get("prompt", entry.get("prompt", "")),
+                           neg_prompt=_text_vals.get("neg_prompt", entry.get("neg_prompt", "")),
+                           seed=self._seed_edit.text() or entry.get("seed", ""),
                            meta=entry.get("meta"),
                            custom=entry.get("custom", ""),
                            person_id=persons[0] if persons else "",
-                           speech=_text_vals.get("speech", ""),
+                           speech=_text_vals.get("speech", entry.get("speech", "")),
                            audio=_text_vals.get("audio", entry.get("audio", "")),
                            editable=not self._protected_check.isChecked())
+        # Write canvas coded-field values (HC, E, FA, SK, etc.) back into attrs_data.
+        # set_file preserves old values via merge; we overwrite with the current canvas state.
+        if _coded_vals and path in app.attrs_data:
+            for _ck, _cv in _coded_vals.items():
+                app.attrs_data[path][_ck] = _cv
         attrs_mod.save(app.current_project, app.attrs_data)
+        # One-way filename tag_group rules: apply detect rules to existing files
+        # (e.g. "Gemini_Generated_Image_" → MDL_img_Table → "03")
+        # Only tag_group rules — boolean coded-field rules go in the filename, not tags.
+        _fn_cfg = attrs_mod.load_filename_config(getattr(app, "current_project", None))
+        _fn_rules_all = attrs_mod.load_filename_rules(getattr(app, "current_project", None))
+        if _fn_rules_all:
+            _name_lc = os.path.basename(path).lower()
+            _fn_tags = [r.get("value", "").strip()
+                        for r in _fn_rules_all
+                        if r.get("tag_group") and r.get("pattern", "").lower() in _name_lc
+                        and r.get("value", "").strip()]
+            if _fn_tags:
+                _cur_entry2 = attrs_mod.get(app.attrs_data, path)
+                _cur_tags2 = list(_cur_entry2.get("tags", []))
+                _fn_changed = False
+                for _ft in _fn_tags:
+                    if _ft not in _cur_tags2:
+                        _cur_tags2.append(_ft)
+                        _fn_changed = True
+                if _fn_changed:
+                    _cur_entry2["tags"] = _cur_tags2
+                    attrs_mod.save(app.current_project, app.attrs_data)
         # Tag ↔ filename sync: apply two-way tag_group rules when auto_rename is on
-        if attrs_mod.load_filename_config(getattr(app, "current_project", None)).get("auto_rename", False):
+        if _fn_cfg.get("auto_rename", False):
             new_path = attrs_mod.apply_tag_sync_rules(app.attrs_data, path, app.current_project)
             if new_path != path:
                 attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
@@ -2465,28 +3244,124 @@ class PreviewWindow(QWidget):
         # Save current UI state to attrs_data first (picks up prompt, seed, person_id etc.)
         if not silent:
             self._save_attrs()
-            # Auto-rename if enabled and person_id is set
-            persons = [pe.text().strip() for pe in self._p_edits if pe.text().strip()]
-            pid = persons[0] if persons else ""
-            if pid and self._chk_auto_rename.isChecked():
-                new_path = attrs_mod.rename_with_person_id(
-                    app.attrs_data, path, pid,
-                    flush_stores=True,
-                    project=app.current_project,
-                    skip_uncoded=False)
-                if new_path != path:
-                    if (app.data and "paths" in app.data and path in app.data["paths"]):
-                        app.data["paths"][app.data["paths"].index(path)] = new_path
+            path = self._attr_path  # refresh — _save_attrs may have renamed the file
+            if not os.path.exists(path): return
+            if self._chk_auto_rename.isChecked():
+                pid = _norm_pid(attrs_mod.get(app.attrs_data, path).get("person_id", "") or "")
+                if not pid:
+                    persons = [pe.text().strip() for pe in self._p_edits if pe.text().strip()]
+                    pid = persons[0] if persons else "000"
+                orig_stem = os.path.splitext(os.path.basename(path))[0]
+
+                def _apply_rename(old_p, new_p):
+                    if (app.data and "paths" in app.data and old_p in app.data["paths"]):
+                        app.data["paths"][app.data["paths"].index(old_p)] = new_p
                     for row in range(app.table.rowCount()):
-                        if app.table.get_row_path(row) == path:
-                            app.table.set_row_path(row, new_path)
+                        if app.table.get_row_path(row) == old_p:
+                            app.table.set_row_path(row, new_p)
                             name_item = app.table.item(row, 2)
                             if name_item:
-                                name_item.setText(os.path.basename(new_path))
+                                name_item.setText(os.path.basename(new_p))
                             break
-                    self._attr_path = new_path
-                    self.handler.current_path = new_path
-                    path = new_path
+                    self._attr_path = new_p
+                    self.handler.current_path = new_p
+
+                # Coded combo values (O/R/K) — apply to filename on bake
+                _sc2 = getattr(self, "_soft_canvas", None)
+                if _sc2:
+                    try:
+                        _, _, _coded_vals2 = _sc2.collect_soft_data()
+                        if _coded_vals2:
+                            _ork_stem, _ork_ext = os.path.splitext(os.path.basename(path))
+                            _ork_parts = attrs_mod.parse_coded_filename(_ork_stem)
+                            if _ork_parts is None:
+                                _ork_parts = {"persons": [], "persons_with": [],
+                                              "j": attrs_mod.julian_id_for_file(path)}
+                            _ork_chg = False
+                            for _fk, _fv in _coded_vals2.items():
+                                if _ork_parts.get(_fk, "") != _fv:
+                                    _ork_parts[_fk] = _fv; _ork_chg = True
+                            if _ork_chg:
+                                _ork_df = not bool(_ork_parts.get("persons"))
+                                _ork_fo = attrs_mod.get_sync_field_order(app.current_project)
+                                _ork_ns = attrs_mod.build_coded_filename(_ork_parts, date_first=_ork_df, field_order=_ork_fo)
+                                if _ork_ns and _ork_ns != _ork_stem:
+                                    _ork_np = attrs_mod.unique_path(
+                                        os.path.join(os.path.dirname(path), _ork_ns + _ork_ext))
+                                    if _ork_np != path:
+                                        os.rename(path, _ork_np)
+                                        if path in app.attrs_data:
+                                            app.attrs_data[_ork_np] = app.attrs_data.pop(path)
+                                        attrs_mod.update_path_in_all_stores(
+                                            path, _ork_np, app.current_project)
+                                        _apply_rename(path, _ork_np)
+                                        path = _ork_np
+                                        attrs_mod.save(app.current_project, app.attrs_data)
+                    except Exception:
+                        pass
+                if pid and pid != "000":
+                    try:
+                        new_path = attrs_mod.rename_with_person_id(
+                            app.attrs_data, path, pid,
+                            flush_stores=True,
+                            project=app.current_project,
+                            skip_uncoded=False)
+                        if new_path != path:
+                            _apply_rename(path, new_path)
+                            path = new_path
+                    except Exception:
+                        pass
+                try:
+                    new_path = attrs_mod.apply_boolean_sync_rules(
+                        app.attrs_data, path, app.current_project,
+                        orig_stem=orig_stem)
+                    if new_path != path:
+                        _apply_rename(path, new_path)
+                        path = new_path
+                except Exception:
+                    pass
+                # Coded boolean flags from radio widgets (WM, ED) — apply to coded filename
+                _sc = getattr(self, "_soft_canvas", None)
+                if _sc:
+                    try:
+                        _cb_map = {lbl.lower(): letter.lower()
+                                   for letter, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+                        _bool_flags = {}
+                        for _cw in _sc.widgets:
+                            if _cw.style == "radio":
+                                _wb = getattr(_cw, "_btns", {})
+                                _pk = next((k for k in _wb if k.lower() in _cb_map), None)
+                                if _pk:
+                                    _bool_flags[_cb_map[_pk.lower()]] = bool(_wb[_pk].isChecked())
+                        if _bool_flags:
+                            _stem2, _ext2 = os.path.splitext(os.path.basename(path))
+                            _parts2 = attrs_mod.parse_coded_filename(_stem2)
+                            if _parts2 is not None:
+                                _chg = False
+                                for _lk, _on in _bool_flags.items():
+                                    _cur = bool(_parts2.get(_lk, ""))
+                                    if _on and not _cur:
+                                        _parts2[_lk] = _lk.upper(); _chg = True
+                                    elif not _on and _cur:
+                                        _parts2[_lk] = "";           _chg = True
+                                if _chg:
+                                    _ns = attrs_mod.build_coded_filename(
+                                        _parts2, date_first=not bool(_parts2.get("persons")),
+                                        field_order=attrs_mod.get_sync_field_order(app.current_project))
+                                    if _ns and _ns != _stem2:
+                                        _np = attrs_mod.unique_path(
+                                            os.path.join(os.path.dirname(path), _ns + _ext2))
+                                        if _np != path:
+                                            os.rename(path, _np)
+                                            if path in app.attrs_data:
+                                                app.attrs_data[_np] = app.attrs_data.pop(path)
+                                            attrs_mod.update_path_in_all_stores(
+                                                path, _np, app.current_project)
+                                            _apply_rename(path, _np)
+                                            path = _np
+                                            attrs_mod.save(app.current_project, app.attrs_data)
+                    except Exception:
+                        pass
         # Embed synchronously so we can report success/error
         entry = attrs_mod.get(app.attrs_data, path)
         # Never bake an empty entry — it would write AItan{} and erase recovered filename data.
@@ -2513,6 +3388,30 @@ class PreviewWindow(QWidget):
             _baked_path = getattr(self, '_attr_path', path)
             self._raw_meta_edit.setPlainText(
                 attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)")
+            # Record as correction example for future CLIP detection
+            try:
+                import torch as _torch
+                _proj = getattr(app, "current_project", None)
+                _cemb = None
+                _data = getattr(app, "data", None)
+                if _data and "paths" in _data and path in _data["paths"]:
+                    _ci = _data["paths"].index(path)
+                    _cemb = _data["embeddings"][_ci]
+                if _cemb is None:
+                    # Fallback: load embedding from features file on disk
+                    _ft_path = os.path.join(
+                        attrs_mod.DATA_DIR,
+                        f"features_{_proj}.pt" if _proj else "features_default.pt")
+                    if os.path.exists(_ft_path):
+                        _ft = _torch.load(_ft_path, map_location="cpu", weights_only=False)
+                        if "paths" in _ft and path in _ft["paths"]:
+                            _fi = _ft["paths"].index(path)
+                            _cemb = _ft["embeddings"][_fi]
+                if _cemb is not None:
+                    _centry = attrs_mod.get(app.attrs_data, path)
+                    attrs_mod.add_correction(_proj, path, _cemb, _centry)
+            except Exception:
+                pass
         else:
             if not silent:
                 self._update_bake_btn("error")

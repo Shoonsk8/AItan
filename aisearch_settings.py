@@ -11,7 +11,7 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "1.96"
+VERSION = "1.961"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
@@ -89,15 +89,18 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         last = self.tabs.count() - 1
         lbl = self.tabs.tabText(last)
         widget = self.tabs.widget(last)
-        self.tabs.setUpdatesEnabled(False)
+        # Block signals so currentChanged callbacks don't fire mid-swap,
+        # then set the correct index before unblocking so the first repaint
+        # already shows the right tab (avoids the MetaMap flash).
+        self.tabs.blockSignals(True)
         self.tabs.removeTab(last)
-        self.tabs.removeTab(index)  # Qt auto-switches away from current tab here
+        self.tabs.removeTab(index)
         self.tabs.insertTab(index, widget, lbl)
         if placeholder is not None:
             placeholder.deleteLater()
-        # Restore selection — removeTab(index) above switches Qt to a different tab
         self.tabs.setCurrentIndex(index)
-        self.tabs.setUpdatesEnabled(True)
+        self.tabs.blockSignals(False)
+        self.tabs.update()
         self._tabs_ready.add(index)
         # If tab 0 just finished building, run the sync that showEvent couldn't
         if index == 0:

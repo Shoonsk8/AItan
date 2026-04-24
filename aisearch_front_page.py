@@ -7,7 +7,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_attrs as _attrs_mod
 
 # Ver 1.65 - Enhanced Rename/Delete sync and UI masking
-VERSION = "1.96"
+VERSION = "1.961"
 
 
 def get_thumbnail_pixmap(path, size=(350, 350)):

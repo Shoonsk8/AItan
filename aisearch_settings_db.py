@@ -1,4 +1,4 @@
-import os, queue, threading, time, torch
+import os, queue, threading, time, torch, shutil
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QGroupBox, QCheckBox,
                               QProgressBar, QComboBox, QMessageBox,
@@ -245,7 +245,9 @@ class _DbMixin:
         gw.addWidget(QLabel("New files dropped here are added to the DB automatically:"))
         self._watch_dir_list = QListWidget()
         self._watch_dir_list.setFixedHeight(80)
-        for d in self.app.config.get("watch_dirs", []):
+        # watch_dirs is global — always read from global config
+        _g_watch = cfg.load_config().get("watch_dirs", [])
+        for d in _g_watch:
             self._watch_dir_list.addItem(d)
         gw.addWidget(self._watch_dir_list)
         wr = QHBoxLayout()
@@ -348,6 +350,11 @@ class _DbMixin:
                 data["base_dirs"]       = list(dirs)
                 data["base_dirs_nosub"] = list(no_subs)
 
+                # Backup attrs before scan so data loss is always recoverable
+                _attrs_path = os.path.join(attrs_mod.DATA_DIR, f"attrs_{name}.json")
+                if os.path.exists(_attrs_path):
+                    shutil.copy2(_attrs_path, _attrs_path + ".bak")
+
                 # Load attrs once — worker owns a local copy
                 attrs_data   = dict(attrs_mod.load(name))
                 scan_renames = {}
@@ -437,6 +444,8 @@ class _DbMixin:
                         self._scan_queue.put(("stopped", (removed, added, failed, attrs_data, faces_found, face_errors))); return
 
                     fname = os.path.basename(p)
+                    if not os.path.exists(p):
+                        failed.append((p, "not found / moved")); continue
                     if os.path.getsize(p) == 0:
                         failed.append((p, "0 bytes")); continue
 
@@ -578,7 +587,7 @@ class _DbMixin:
                     self.lbl_scan.setText(f"Face err: {payload[:80]}")
                 elif msg == "stopped":
                     removed, added, failed, attrs_data, faces_found, face_errors = payload
-                    self.app.attrs_data = attrs_data
+                    self.app.attrs_data = attrs_mod.load(name)
                     self._refresh_list()
                     self.proj_combo.setCurrentText(name)
                     self.app.set_project(name)
@@ -594,7 +603,7 @@ class _DbMixin:
                     self._scan_done(); return
                 elif msg == "done":
                     removed, added, failed, attrs_data, faces_found, face_errors = payload
-                    self.app.attrs_data = attrs_data
+                    self.app.attrs_data = attrs_mod.load(name)
                     self._refresh_list()
                     self.proj_combo.setCurrentText(name)
                     self.app.set_project(name)
@@ -1348,8 +1357,12 @@ class _DbMixin:
                     for i in range(self._watch_dir_list.count())]
         if d in existing: return
         self._watch_dir_list.addItem(d)
-        self.app.config["watch_dirs"] = existing + [d]
-        cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+        dirs = existing + [d]
+        # watch_dirs is global — save to global config so all projects share it
+        _g = cfg.load_config()
+        _g["watch_dirs"] = dirs
+        cfg.save_config(_g)
+        self.app.config["watch_dirs"] = dirs
         self.app._apply_watch_dirs()
 
     def _remove_watch_dir(self):
@@ -1358,8 +1371,11 @@ class _DbMixin:
         self._watch_dir_list.takeItem(row)
         dirs = [self._watch_dir_list.item(i).text()
                 for i in range(self._watch_dir_list.count())]
+        # watch_dirs is global — save to global config so all projects share it
+        _g = cfg.load_config()
+        _g["watch_dirs"] = dirs
+        cfg.save_config(_g)
         self.app.config["watch_dirs"] = dirs
-        cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
         self.app._apply_watch_dirs()
 
     # --- directory helpers ---

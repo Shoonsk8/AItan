@@ -157,6 +157,7 @@ class _AttrsMixin:
         self._attr_col_names   = {}   # prefix → [QLineEdit, ...]  (per-digit attr names)
         self._attr_parent_names  = {}  # prefix → QLineEdit  (human parent name e.g. "hair")
         self._attr_section_styles = {}  # prefix → style string (for all sections incl. coded)
+        self._attr_deleted_sections = set()  # sections explicitly deleted by the user
         self._attr_groups      = {}   # group_name → _WsGroup widget
 
         # ── Input bar ─────────────────────────────────────────────────────────
@@ -175,7 +176,8 @@ class _AttrsMixin:
                         ("taglist","Tag List  (key · label)"),
                         ("radio","Radio  (single-select tag list)"),
                         ("text","Text Field  (prompt / notes)"),
-                        ("id","ID  (structural marker)")]:
+                        ("id","ID  (structural marker)"),
+                        ]:
             self._attr_style_cb.addItem(_ln, _s)
         self._attr_style_cb.setFixedWidth(195)
         inp_bar.addWidget(self._attr_style_cb)
@@ -263,7 +265,7 @@ class _AttrsMixin:
                          for letter, label, _ in _am_ref._DEFAULT_CODED_FIELDS}
         _CODED_LABELS["P"] = "Person ID"
 
-        def _build_ws_section(prefix, force_style=None, group=None, text_label=None, text_placeholder=None, initial_pairs=None, col_defs=None):
+        def _build_ws_section(prefix, force_style=None, group=None, text_label=None, text_placeholder=None, initial_pairs=None, col_defs=None, saved_parent_name=None, saved_col_names=None, readonly=False, saved_field_name=None, _traw=None):
             if prefix in self._attr_ws_loaded:
                 return
             # Resolve style + cols
@@ -289,7 +291,14 @@ class _AttrsMixin:
             self._attr_section_styles[prefix] = style
             pad = _WSPAD.get(style, 2)
             # Basic (coded field) sections → blue; custom (tag/text/boolean) → yellow
-            _sec_color = "#6ea6f0" if prefix in FIELD_DEFS else "#f0c040"
+            # Exception: if user has saved their own data for any column's tag group → yellow
+            _is_coded_dig = (prefix in FIELD_DEFS and style in ("1dig", "2dig", "3dig", "id"))
+            if _is_coded_dig and _traw:
+                _fd_cols = FIELD_DEFS.get(prefix, (None, []))[1]
+                _has_user_col_data = any(_traw.get(tg) for _, _, tg in _fd_cols if tg)
+                if _has_user_col_data:
+                    _is_coded_dig = False
+            _sec_color = "#6ea6f0" if (_is_coded_dig or readonly) else "#f0c040"
 
             def _add_to_target(widget):
                 if group:
@@ -303,6 +312,10 @@ class _AttrsMixin:
                 _sec_title_prefix = f"{_lbl}  [{prefix}]"
             elif _lbl:
                 _sec_title_prefix = _lbl
+            elif saved_field_name:
+                _sec_title_prefix = saved_field_name
+            elif prefix in _am_ref._DEFAULT_FIELD_NAMES:
+                _sec_title_prefix = _am_ref._DEFAULT_FIELD_NAMES[prefix]
             else:
                 _sec_title_prefix = prefix
 
@@ -325,7 +338,7 @@ class _AttrsMixin:
                 return
 
             if style == "matrix":
-                _saved_name = (_am_ref.TAG_GROUPS.get("__col_names__", {}).get(prefix) or [None])[0]
+                _saved_name = (saved_col_names or _am_ref.TAG_GROUPS.get("__col_names__", {}).get(prefix) or [None])[0]
                 _disp_title = (_saved_name or _sec_title_prefix)
                 _sec_title = f"{_disp_title}   │   16×16 matrix"
             else:
@@ -338,6 +351,7 @@ class _AttrsMixin:
             def _on_del_any(checked=False, pfx=prefix, s=sec):
                 s._build_cb = None   # prevent deferred build after delete
                 self._attr_ws_loaded.discard(pfx)
+                self._attr_deleted_sections.add(pfx)
                 self._attr_section_styles.pop(pfx, None)  # clear stale style
                 for _key in [k for k in self._attr_ws_entries if k.startswith(pfx)]:
                     self._attr_ws_entries.pop(_key, None)
@@ -346,11 +360,15 @@ class _AttrsMixin:
                 self._attr_col_names.pop(pfx, None)
                 self._attr_parent_names.pop(pfx, None)
                 s.setParent(None); s.deleteLater()
-            sec._del_btn.clicked.connect(_on_del_any)
+            if readonly:
+                sec._del_btn.setVisible(False)
+            else:
+                sec._del_btn.clicked.connect(_on_del_any)
 
             # ── Defer content build to first expand via _build_cb ─────────
             def _build_content(s=sec, pfx=prefix, sty=style, c=cols, p=pad,
-                                tl=text_label, tp=text_placeholder, ip=initial_pairs):
+                                tl=text_label, tp=text_placeholder, ip=initial_pairs,
+                                _tr=_traw):
                 if sty == "boolean":
                     # ── Boolean — section key IS the flag; just show Label ──
                     bl_lay = QVBoxLayout(s.content)
@@ -422,14 +440,15 @@ class _AttrsMixin:
                     tx_lay.addWidget(type_note)
                     self._attr_text_fields[pfx] = (lbl_e, ph_e, key_e)
 
-                elif sty in ("taglist", "radio"):
-                    # ── Tag list / Radio — arbitrary key=label rows ───────
+                elif sty in ("taglist", "radio", "combo"):
+                    # ── Tag list / Radio / Combo — arbitrary key=label rows ──
                     row_lay = QVBoxLayout(s.content)
                     row_lay.setContentsMargins(6, 3, 6, 5); row_lay.setSpacing(2)
                     self._attr_tag_groups[pfx] = []
 
-                    # Style selector — lets user change taglist ↔ radio in-place
-                    if sty in ("taglist", "radio"):
+
+                    # Style selector — lets user change taglist ↔ radio in-place (hidden for readonly)
+                    if sty in ("taglist", "radio") and not readonly:
                         _sty_row = QHBoxLayout(); _sty_row.setSpacing(4)
                         _sty_row.addWidget(QLabel("Style:", styleSheet="color:#888; font-size:8pt;"))
                         _sty_cb = QComboBox()
@@ -449,27 +468,42 @@ class _AttrsMixin:
                         _sty_row.addStretch()
                         row_lay.addLayout(_sty_row)
 
-                    def _make_tag_row(grp=pfx, rl=row_lay, k_val="", l_val=""):
+                    _ro = readonly
+                    def _make_tag_row(grp=pfx, rl=row_lay, k_val="", l_val="", _readonly=_ro):
                         rw = QWidget()
                         rl2 = QHBoxLayout(rw); rl2.setContentsMargins(0, 0, 0, 0); rl2.setSpacing(4)
-                        rl2.addWidget(QLabel("Key:", styleSheet="color:#888; font-size:8pt;"))
-                        k_e = QLineEdit(k_val); k_e.setFixedWidth(90); k_e.setStyleSheet(_les)
-                        k_e.setPlaceholderText("tag_key")
-                        rl2.addWidget(k_e)
-                        rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
-                        l_e = QLineEdit(l_val); l_e.setMinimumWidth(120); l_e.setStyleSheet(_les)
-                        l_e.setPlaceholderText("Display Name")
+                        _lbl_ro_ss = ("color:#4a9eff; background:#1a1a2e; border:1px solid #333; "
+                                      "padding:2px 4px;")
+                        if _readonly:
+                            k_e = QLabel(k_val); k_e.setFixedWidth(90)
+                            k_e.setStyleSheet(_lbl_ro_ss)
+                            rl2.addWidget(k_e)
+                            rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                            l_e = QLabel(l_val); l_e.setMinimumWidth(120)
+                            l_e.setStyleSheet(_lbl_ro_ss)
+                        else:
+                            rl2.addWidget(QLabel("Key:", styleSheet="color:#888; font-size:8pt;"))
+                            k_e = QLineEdit(k_val); k_e.setFixedWidth(90)
+                            k_e.setStyleSheet(_les)
+                            k_e.setPlaceholderText("tag_key")
+                            rl2.addWidget(k_e)
+                            rl2.addWidget(QLabel("Label:", styleSheet="color:#888; font-size:8pt;"))
+                            l_e = QLineEdit(l_val); l_e.setMinimumWidth(120)
+                            l_e.setStyleSheet(_les)
+                            l_e.setPlaceholderText("Display Name")
                         rl2.addWidget(l_e, stretch=1)
-                        btn_x = QPushButton("✕"); btn_x.setFixedWidth(26)
-                        btn_x.setStyleSheet("background:transparent; color:#884444; border:none; font-size:10pt;")
-                        rl2.addWidget(btn_x)
+                        if not _readonly:
+                            btn_x = QPushButton("✕"); btn_x.setFixedWidth(26)
+                            btn_x.setStyleSheet("background:transparent; color:#884444; border:none; font-size:10pt;")
+                            rl2.addWidget(btn_x)
                         rl.addWidget(rw)
                         entry = (k_e, l_e, rw)
                         self._attr_tag_groups[grp].append(entry)
-                        def _del_row(checked=False, e=entry, g=grp):
-                            self._attr_tag_groups[g].remove(e)
-                            e[2].setParent(None); e[2].deleteLater()
-                        btn_x.clicked.connect(_del_row)
+                        if not _readonly:
+                            def _del_row(checked=False, e=entry, g=grp):
+                                self._attr_tag_groups[g].remove(e)
+                                e[2].setParent(None); e[2].deleteLater()
+                            btn_x.clicked.connect(_del_row)
                         return entry
 
                     # Priority: initial_pairs from project file > TAG_GROUPS > {pfx}_Preset
@@ -481,15 +515,16 @@ class _AttrsMixin:
                             existing_pairs = list(_am_ref._DEFAULT_TAG_GROUPS.get(f"{pfx}_Preset", []))
                     for _k, _l in existing_pairs:
                         _make_tag_row(k_val=_k, l_val=_l)
-                    if not existing_pairs:
+                    if not existing_pairs and not readonly:
                         _make_tag_row()
-                    btn_add_row = QPushButton("+ Add")
-                    btn_add_row.setFixedWidth(60)
-                    btn_add_row.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "border:none; border-radius:2px;"))
-                    btn_add_row.clicked.connect(lambda checked=False, g=pfx: _make_tag_row(grp=g))
-                    add_h = QHBoxLayout(); add_h.addWidget(btn_add_row)
-                    add_h.addStretch()
-                    row_lay.addLayout(add_h)
+                    if not readonly:
+                        btn_add_row = QPushButton("+ Add")
+                        btn_add_row.setFixedWidth(60)
+                        btn_add_row.setStyleSheet(cfg.btn_ss("btn_add", self.app.config, "border:none; border-radius:2px;"))
+                        btn_add_row.clicked.connect(lambda checked=False, g=pfx: _make_tag_row(grp=g))
+                        add_h = QHBoxLayout(); add_h.addWidget(btn_add_row)
+                        add_h.addStretch()
+                        row_lay.addLayout(add_h)
 
                 else:
                     # ── Hex grid / Matrix ─────────────────────────────────
@@ -540,20 +575,26 @@ class _AttrsMixin:
                                 gl.addWidget(le, _r + 1, _c + 1)
                                 self._attr_ws_entries[json_key] = {"expression": le}
                     else:
-                        _saved_parent = _am_ref.TAG_GROUPS.get(
-                            "__parent_names__", {}).get(pfx, pfx.lower())
+                        _saved_parent = (saved_parent_name
+                            or _am_ref.TAG_GROUPS.get("__parent_names__", {}).get(pfx)
+                            or pfx.lower())
                         _pr_row = QHBoxLayout(); _pr_row.setSpacing(6)
                         _pr_row.addWidget(QLabel("Parent:", styleSheet="color:#888; font-size:8pt;"))
-                        _parent_e = QLineEdit(_saved_parent)
-                        _parent_e.setFixedWidth(140); _parent_e.setStyleSheet(_les)
+                        _is_coded_field = pfx in FIELD_DEFS
+                        _parent_e = QLineEdit(_CODED_LABELS.get(pfx, _saved_parent) if _is_coded_field else _saved_parent)
+                        _parent_e.setFixedWidth(140)
                         _parent_e.setPlaceholderText("e.g. hair")
+                        if _is_coded_field:
+                            _parent_e.setEnabled(False)
+                        else:
+                            _parent_e.setStyleSheet(_les)
                         _pr_row.addWidget(_parent_e); _pr_row.addStretch()
                         cl.addLayout(_pr_row)
                         self._attr_parent_names[pfx] = _parent_e
                         _hdr_ss = ("background:#1a2a1a; color:#f0c040; font-weight:bold; "
                                    "border:1px solid #446644; padding:1px 4px; font-size:8pt;")
                         col_name_edits = []
-                        _saved_cols = _am_ref.TAG_GROUPS.get("__col_names__", {}).get(pfx, [])
+                        _saved_cols = (saved_col_names or _am_ref.TAG_GROUPS.get("__col_names__", {}).get(pfx, []))
                         _col_bases = []
                         _n_cols = len(c)
                         # Columns are ordered right-to-left in FIELD_DEFS (ci=0 = rightmost digit)
@@ -562,11 +603,14 @@ class _AttrsMixin:
                             _base = col_lbl.split()[0].rstrip("s").lower()
                             _col_bases.append(_base)
                             saved_name = _saved_cols[ci] if ci < len(_saved_cols) else ""
-                            default_name = f"{_saved_parent}_{_base}"
+                            _clean_parent = _CODED_LABELS.get(pfx, _saved_parent) if _is_coded_field else _saved_parent
+                            default_name = f"{_clean_parent}_{_base}"
                             col_e = QLineEdit(saved_name or default_name)
                             col_e.setFixedHeight(22); col_e.setMinimumWidth(110)
                             col_e.setStyleSheet(_hdr_ss)
                             col_e.setPlaceholderText("Attr name")
+                            if _is_coded_field:
+                                col_e.setEnabled(False)
                             gl.addWidget(col_e, 0, _n_cols - ci)  # ci=0 → rightmost col
                             col_name_edits.append(col_e)
                         self._attr_col_names[pfx] = col_name_edits
@@ -574,7 +618,22 @@ class _AttrsMixin:
                             _p = text.strip() or _pfx.lower()
                             for col_e, base in zip(edits, bases):
                                 col_e.setText(f"{_p}_{base}")
-                        _parent_e.textChanged.connect(_on_parent_change)
+                        if not _is_coded_field:
+                            _parent_e.textChanged.connect(_on_parent_change)
+
+                        # Build default-value lookup: json_field → {hex_code → label}
+                        _default_lookup = {}
+                        for ci, (col_lbl, json_field, _tg) in enumerate(c):
+                            _def_pairs = _am_ref._DEFAULT_TAG_GROUPS.get(_tg, [])
+                            _default_lookup[json_field] = {
+                                str(pair[0]): str(pair[1])
+                                for pair in _def_pairs
+                                if isinstance(pair, (list, tuple)) and len(pair) >= 2
+                            }
+                        _ro_cell_ss = ("QLineEdit { color:#4a9eff; background:#1a1a2e; "
+                                       "border:1px solid #333; font-size:8pt; }"
+                                       "QLineEdit:disabled { color:#4a9eff; background:#1a1a2e; "
+                                       "border:1px solid #333; font-size:8pt; }")
                         _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
                         for i, ch in enumerate(_B36):
                             row_key = f"{pfx}{'0' * (p - 1)}{ch}"
@@ -583,12 +642,29 @@ class _AttrsMixin:
                             gl.addWidget(_rl, i + 1, 0)
                             row_wids = {}
                             for ci, (col_lbl, json_field, _tg) in enumerate(c):
-                                le = QLineEdit()
-                                le.setMinimumWidth(130); le.setFixedHeight(22)
-                                le.setStyleSheet(_les)
-                                le.setText(stored.get(json_field, ""))
-                                gl.addWidget(le, i + 1, _n_cols - ci)  # ci=0 → rightmost col
-                                row_wids[json_field] = le
+                                # Sub-tables are indexed by single hex digit (ch)
+                                _def_val = _default_lookup.get(json_field, {}).get(ch, "")
+                                # Show as blue label only if there is a Python default AND
+                                # the user has NOT saved their own JSON data for this column.
+                                _col_has_json = bool(_tr and _tg and _tr.get(_tg))
+                                if _def_val and not _col_has_json:
+                                    # Default value — show as label, no input box
+                                    lbl = QLabel(_def_val)
+                                    lbl.setMinimumWidth(130); lbl.setFixedHeight(22)
+                                    lbl.setStyleSheet("color:#4a9eff; background:#1a1a2e; "
+                                                      "border:1px solid #333; font-size:8pt; padding:2px 4px;")
+                                    gl.addWidget(lbl, i + 1, _n_cols - ci)
+                                    # Store a disabled dummy so save loop can skip it
+                                    _dummy = QLineEdit(_def_val); _dummy.setEnabled(False)
+                                    _dummy.setVisible(False)
+                                    row_wids[json_field] = _dummy
+                                else:
+                                    le = QLineEdit()
+                                    le.setMinimumWidth(130); le.setFixedHeight(22)
+                                    le.setStyleSheet(_les)
+                                    le.setText(stored.get(json_field, "") or _def_val)
+                                    gl.addWidget(le, i + 1, _n_cols - ci)
+                                    row_wids[json_field] = le
                             self._attr_ws_entries[row_key] = row_wids
 
             sec._build_cb = _build_content
@@ -604,6 +680,8 @@ class _AttrsMixin:
 
             _section_order  = _tags_raw.get("__section_order__", [])
             _section_styles = _tags_raw.get("__section_styles__", {})
+            _deleted_set = set(_tags_raw.get("__deleted_sections__", []))
+            self._attr_deleted_sections = _deleted_set
             # group_map: prefix → group_name (or None)
             _group_map = {}
             _saved_groups = _tags_raw.get("__section_groups__", {})
@@ -628,9 +706,10 @@ class _AttrsMixin:
                         _section_order.append(_k)
             else:
                 # Append any FIELD_DEFS keys missing from saved order (e.g. newly added P)
+                # Skip keys the user has explicitly deleted (_deleted_set).
                 _loaded_set = set(_section_order)
                 for _fd_key in FIELD_DEFS:
-                    if _fd_key not in _loaded_set:
+                    if _fd_key not in _loaded_set and _fd_key not in _deleted_set:
                         _section_order.append(_fd_key)
                 # Append any TAG_GROUPS keys (taglist/boolean) not yet in order
                 # Sub-table keys: end in _Table, or start with any existing section prefix + "_"
@@ -641,12 +720,13 @@ class _AttrsMixin:
                         if k.startswith(_p + "_") and len(k) > len(_p) + 1:
                             return True
                     return False
-                _LEGACY_REPLACED = {"Audio"}  # replaced by audio (lowercase radio field)
+                _LEGACY_REPLACED = {"Audio"}  # uppercase Audio replaced by lowercase audio radio field
                 _all_tg = {**_am_ref._DEFAULT_TAG_GROUPS, **_am_ref.TAG_GROUPS}
                 for _tg_key in _all_tg:
                     if (_tg_key not in _loaded_set
                             and not _tg_key.startswith("__")
                             and _tg_key not in _LEGACY_REPLACED
+                            and _tg_key not in _deleted_set
                             and not _is_subtable(_tg_key)):
                         _section_order.append(_tg_key)
                         _loaded_set.add(_tg_key)
@@ -690,11 +770,26 @@ class _AttrsMixin:
                     _raw_pairs = (_am_ref.TAG_GROUPS.get(f"{_pfx}_Preset")
                                   or _am_ref._DEFAULT_TAG_GROUPS.get(f"{_pfx}_Preset"))
                 _init_pairs = _raw_pairs if isinstance(_raw_pairs, list) else None
+                # readonly if values come purely from _DEFAULT_TAG_GROUPS (not overridden in project JSON)
+                _eff_style = _fstyle or (FIELD_DEFS[_pfx][0] if _pfx in FIELD_DEFS else None)
+                _is_readonly = (
+                    (
+                        _tags_raw.get(_pfx) is None
+                        and _pfx in _am_ref._DEFAULT_TAG_GROUPS
+                        and _eff_style in ("taglist", "radio", "boolean", "combo")
+                    )
+                    or (_pfx in FIELD_DEFS and _eff_style == "text")
+                )
                 _build_ws_section(_pfx, force_style=_fstyle,
                                   group=_group_map.get(_pfx),
                                   text_label=_saved_lbl, text_placeholder=_saved_ph,
                                   initial_pairs=_init_pairs,
-                                  col_defs=_tags_raw.get("__col_defs__", {}).get(_pfx, []))
+                                  col_defs=_tags_raw.get("__col_defs__", {}).get(_pfx, []),
+                                  saved_parent_name=_tags_raw.get("__parent_names__", {}).get(_pfx),
+                                  saved_col_names=_tags_raw.get("__col_names__", {}).get(_pfx),
+                                  readonly=_is_readonly,
+                                  saved_field_name=_tags_raw.get("__field_names__", {}).get(_pfx),
+                                  _traw=_tags_raw)
 
             tf_data = _tags_raw.get("__text_fields__", {})
             if isinstance(tf_data, dict):
@@ -841,7 +936,9 @@ class _AttrsMixin:
         for pfx in ordered_prefixes:
             pfx_keys = [k for k in self._attr_ws_entries.keys() if k.startswith(pfx)]
             for key in sorted(pfx_keys):
-                row_data = {field: le.text() for field, le in self._attr_ws_entries[key].items()}
+                row_data = {field: le.text()
+                            for field, le in self._attr_ws_entries[key].items()
+                            if le.isEnabled()}  # skip hardcoded default cells
                 if any(v.strip() for v in row_data.values()):
                     new_ws[key] = row_data
         try:
@@ -911,12 +1008,17 @@ class _AttrsMixin:
         # 4b. Taglist/boolean/text sections
         for pfx in ordered_prefixes:
             sk = _save_key(pfx)
+            # Skip hardcoded defaults — their values live in _DEFAULT_TAG_GROUPS, not in JSON
+            if pfx in _am_ref._DEFAULT_TAG_GROUPS and pfx not in _existing_raw_for_col_defs:
+                continue
             if pfx in self._attr_tag_groups:
                 pairs = [[k_e.text().strip(), l_e.text().strip()]
                          for k_e, l_e, _ in self._attr_tag_groups[pfx]
                          if k_e.text().strip()]
                 result[sk] = pairs
             elif pfx in self._attr_text_fields:
+                if pfx in FIELD_DEFS:
+                    continue  # hardcoded text field — never save to JSON
                 if "__text_fields__" not in result:
                     result["__text_fields__"] = {}
                 tf_tuple = self._attr_text_fields[pfx]
@@ -930,12 +1032,15 @@ class _AttrsMixin:
         section_styles = {}
         for pfx in ordered_prefixes:
             sk = _save_key(pfx)
+            # Skip hardcoded defaults from styles too
+            if pfx in _am_ref._DEFAULT_TAG_GROUPS and pfx not in _existing_raw_for_col_defs:
+                continue
             # Read style from widget (most reliable) then fall back to dict
             _sec_w = _pfx_sec_map.get(pfx)
             _sty_from_widget = getattr(_sec_w, '_section_style', None)
             if pfx in self._attr_tag_groups:
                 orig_sty = _sty_from_widget or self._attr_section_styles.get(pfx, "taglist")
-                if orig_sty in ("taglist", "radio", "boolean"):
+                if orig_sty in ("taglist", "radio", "boolean", "combo"):
                     section_styles[sk] = orig_sty
                 else:
                     pairs = self._attr_tag_groups[pfx]
@@ -988,6 +1093,14 @@ class _AttrsMixin:
         if parent_names:
             result["__parent_names__"] = parent_names
 
+        # Write workspace (row-data) to per-project workspace file
+        try:
+            with open(_save_ws_file, "w", encoding="utf-8") as f:
+                json.dump(new_ws, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Workspace write failed: {e}")
+            return
+
         try:
             existing = {}
             if os.path.exists(_save_tags_file):
@@ -999,7 +1112,13 @@ class _AttrsMixin:
                 final_json[k] = v
             _internal = {"__text_fields__", "__field_names__", "__col_names__",
                          "__section_order__", "__section_styles__", "__section_groups__",
-                         "__group_order__", "__parent_names__", "__col_defs__"}
+                         "__group_order__", "__parent_names__", "__col_defs__",
+                         "__deleted_sections__"}
+            # Persist deleted sections — merge with any previously saved ones
+            _prev_deleted = set(existing.get("__deleted_sections__", []))
+            _all_deleted  = _prev_deleted | self._attr_deleted_sections
+            if _all_deleted:
+                final_json["__deleted_sections__"] = sorted(_all_deleted)
             # Any key that has ever appeared in __section_order__ (old OR new) is
             # "owned by the UI" — never merge from existing (the UI state is authoritative).
             # Only orphan keys such as coded sub-tables (E_Color, HC_Color, …) are preserved.
