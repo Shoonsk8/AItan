@@ -342,6 +342,7 @@ class FieldWidget(QGroupBox):
         self._exclusive   = exclusive                 # single-select taglist (radio)
         self._cfg_path    = None   # set by _build so we can save back to JSON
         self._conditions  = []     # [{"source": key, "op": op, "value": val}, ...]
+        self._selected    = False  # Ctrl+A selection for move-together
         self.setMouseTracking(True)
 
         self._apply_color(self._bg_color)
@@ -527,7 +528,11 @@ class FieldWidget(QGroupBox):
                        if self._sort_freq else (kv[1],))
         self._cb.blockSignals(True)
         self._cb.clear()
-        self._cb.addItem("—", "")
+        # Skip the "—" (no selection) placeholder when the option list already
+        # contains a null-equivalent entry (e.g. "none" for audio, "0" for coded fields).
+        _keys = {str(k).lower() for k, _ in self.options}
+        if not (_keys & {"none", "0"}):
+            self._cb.addItem("—", "")
         for k, lbl in items:
             self._cb.addItem(_lang_label(lbl), k)
         if cur:
@@ -630,15 +635,25 @@ class FieldWidget(QGroupBox):
                                 val = _coded_val
                     except Exception:
                         pass
-                # Fall back to auto-detected cf_ value (set by auto_set_all)
+                # Fall back to auto-detected value — watch-scan writes to
+                # entry[field_key] (e.g. "o"), auto_set_all writes to entry["cf_<key>"]
                 if not val:
-                    _cf_val = entry.get(f"cf_{_field_key}", "")
+                    _cf_val = (entry.get(_field_key, "")
+                               or entry.get(f"cf_{_field_key}", ""))
                     if _cf_val and any(k == _cf_val for k, _ in self.options):
                         val = _cf_val
             cb = getattr(self, "_cb", None)
             if cb:
                 cb.blockSignals(True)
-                cb.setCurrentIndex(max(0, cb.findData(val)))
+                _idx = cb.findData(val)
+                if _idx < 0:
+                    # No stored value — prefer a null-equivalent option (e.g. "none"
+                    # for audio, "0" for coded) over alphabetically-first AAC etc.
+                    for _null_key in ("none", "0", ""):
+                        _idx = cb.findData(_null_key)
+                        if _idx >= 0:
+                            break
+                cb.setCurrentIndex(max(0, _idx))
                 cb.blockSignals(False)
         elif self.style == "id" and self.key == "J":
             import aisearch_attrs as _am
@@ -780,12 +795,21 @@ class FieldWidget(QGroupBox):
         # Darken border slightly relative to background
         c = QColor(hex_color)
         border = QColor(max(0, c.red()-40), max(0, c.green()-40), max(0, c.blue()-40))
+        if getattr(self, "_selected", False):
+            border_color, border_width = "#4a9eff", 3   # blue highlight on select
+        else:
+            border_color, border_width = border.name(), 1
         self.setStyleSheet(
-            f"QGroupBox{{background:{hex_color};border:1px solid {border.name()};"
+            f"QGroupBox{{background:{hex_color};border:{border_width}px solid {border_color};"
             "border-radius:2px;margin-top:0px;padding-top:16px;"
             "color:#fff;font-size:9pt;font-weight:bold;}"
             "QGroupBox::title{subcontrol-origin:padding;subcontrol-position:top left;"
             "top:2px;left:6px;padding:0 2px;}")
+
+    def set_selected(self, on: bool):
+        """Toggle selection state + blue border indicator."""
+        self._selected = bool(on)
+        self._apply_color(self._bg_color)
 
     def _pick_color(self, _pos=None):
         grp_label = f"group: {self._group}" if self._group else self.key
@@ -862,7 +886,6 @@ class FieldWidget(QGroupBox):
         pos = e.position().toPoint()
         mode = self._resize_mode(pos) if self.edit_mode else None
         if mode or self.drag_mode:
-            # Push undo snapshot before any move/resize
             cv = getattr(self, "_canvas_ref", None)
             viewer = getattr(cv, "_viewer", None)
             if viewer:
@@ -903,13 +926,28 @@ class FieldWidget(QGroupBox):
             dy = self.y() - old_y
             if dx or dy:
                 cv = getattr(self, "_canvas_ref", None)
-                if cv and cv._connections:
+                if cv:
                     wmap = {w.key: w for w in cv.widgets}
-                    for k in self._connected_group_keys(cv):
-                        if k != self.key:
-                            w = wmap.get(k)
-                            if w:
-                                w.move(w.x() + dx, w.y() + dy)
+                    peers = set()
+                    # Move connected-group peers with us (existing behavior)
+                    if cv._connections:
+                        peers.update(self._connected_group_keys(cv))
+                    # Move all Ctrl+A-selected peers with us (only when self is selected)
+                    if self._selected:
+                        peers.update(w.key for w in cv.widgets if w._selected)
+                    # Suppress moveEvent → moved → snap cascade on every peer so
+                    # connected children that are ALSO in the selection don't get
+                    # moved twice (once by this loop, once by the cascade).
+                    to_move = [(wmap[k], wmap[k].x() + dx, wmap[k].y() + dy)
+                               for k in peers if k != self.key and k in wmap]
+                    for w, _nx, _ny in to_move:
+                        w._snapping = True
+                    try:
+                        for w, nx, ny in to_move:
+                            w.move(nx, ny)
+                    finally:
+                        for w, _nx, _ny in to_move:
+                            w._snapping = False
         # Cursor
         mode = self._resize_mode(pos)
         if mode == "both": self.setCursor(Qt.CursorShape.SizeFDiagCursor)
@@ -931,6 +969,9 @@ class FieldWidget(QGroupBox):
         self._drag_pos          = None
 
         if resize_was_active:
+            # Always re-emit resized — even a bare click on the resize edge
+            # is treated as a "re-snap connected chain" gesture, which the user
+            # relies on to flush misaligned tiles back into place.
             try:
                 save_size(self.conn, self.key, w, h)
                 self.resized.emit(self.key)
@@ -951,6 +992,28 @@ class FieldWidget(QGroupBox):
             except Exception:
                 pass
 
+    def resizeEvent(self, e):
+        """Emit resized on every geometry change (not just user drag) so
+        connected child tiles re-snap when Qt's layout auto-resizes us
+        (e.g. when a text box grows to fit longer detection output)."""
+        super().resizeEvent(e)
+        try:
+            self.resized.emit(self.key)
+        except Exception:
+            pass
+
+    def moveEvent(self, e):
+        """Emit moved on every position change — catches programmatic .move()
+        calls from _snap_child, so multi-level chains (A→B→C→D) fully cascade
+        when an ancestor moves. The `_snapping` flag avoids re-entrant loops."""
+        super().moveEvent(e)
+        if getattr(self, "_snapping", False):
+            return
+        try:
+            self.moved.emit(self.key, self.x(), self.y())
+        except Exception:
+            pass
+
     def contextMenuEvent(self, e):
         # Clear any stuck drag/resize state
         self._resize_pos = self._resize_start_size = self._resize_dir = self._drag_pos = None
@@ -961,39 +1024,63 @@ class FieldWidget(QGroupBox):
             "QMenu::item:selected{background:#4a7a4e;}"
             "QMenu::separator{background:#555;height:1px;margin:2px 0;}")
 
-        act_color = menu.addAction("🎨 Change Color…")
-        menu.addSeparator()
+        # "Show" — reveal the debug tile without re-running detection
+        # "Update" — re-detect CLIP for this single field + reveal its debug tile
+        _CLIP_FIELDS = {"E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "P"}
+        act_show = act_update = None
+        if self.key in _CLIP_FIELDS:
+            act_show   = menu.addAction("👁 Show")
+            act_update = menu.addAction("🔄 Update")
 
-        # ── Disconnect options ────────────────────────────────────────────────────
+        # Everything below requires Editable (canvas edit_mode) to be on
+        act_color = act_disc_this = act_disc_box = act_disc_all = act_cond = None
+        mode_actions = {}
         cv = getattr(self, "_canvas_ref", None)
-        act_disc_this = act_disc_box = act_disc_all = None
-        if cv:
-            my_conns = [r for r in cv._connections if r[1] == self.key or r[3] == self.key]
-            all_conns = cv._connections
-            if my_conns:
-                act_disc_this = menu.addAction("Disconnect this dot")
-                act_disc_box  = menu.addAction("Disconnect all on this box")
-            if all_conns:
-                act_disc_all = menu.addAction("Disconnect all")
-            if my_conns or all_conns:
+        my_conns = []
+        if self.edit_mode:
+            if act_update:
                 menu.addSeparator()
 
-        # Hide for … checkable actions
-        modes = ["Image", "Video"]
-        hidden_for = self._hidden_for or []
-        mode_actions = {}
-        for m in modes:
-            a = QAction(f"Hide for {m}", menu, checkable=True)
-            a.setChecked(m.lower() in [x.lower() for x in hidden_for])
-            menu.addAction(a)
-            mode_actions[m] = a
+            act_color = menu.addAction("🎨 Change Color…")
+            menu.addSeparator()
 
-        menu.addSeparator()
-        cond_label = f"Hide when… ({len(self._conditions)})" if self._conditions else "Hide when…"
-        act_cond = menu.addAction(cond_label)
+            # ── Disconnect options ────────────────────────────────────────
+            if cv:
+                my_conns = [r for r in cv._connections if r[1] == self.key or r[3] == self.key]
+                all_conns = cv._connections
+                if my_conns:
+                    act_disc_this = menu.addAction("Disconnect this dot")
+                    act_disc_box  = menu.addAction("Disconnect all on this box")
+                if all_conns:
+                    act_disc_all = menu.addAction("Disconnect all")
+                if my_conns or all_conns:
+                    menu.addSeparator()
+
+            # Hide for … checkable actions
+            modes = ["Image", "Video"]
+            hidden_for = self._hidden_for or []
+            for m in modes:
+                a = QAction(f"Hide for {m}", menu, checkable=True)
+                a.setChecked(m.lower() in [x.lower() for x in hidden_for])
+                menu.addAction(a)
+                mode_actions[m] = a
+
+            menu.addSeparator()
+            cond_label = f"Hide when… ({len(self._conditions)})" if self._conditions else "Hide when…"
+            act_cond = menu.addAction(cond_label)
+
+        # Nothing to show — skip the empty menu popup
+        if menu.isEmpty():
+            return
 
         chosen = menu.exec(e.globalPos())
-        if chosen == act_color:
+        if chosen is None:
+            return   # user dismissed menu without selecting
+        if chosen == act_show:
+            self.action_triggered.emit(self.key, "show_clip")
+        elif chosen == act_update:
+            self.action_triggered.emit(self.key, "update_clip")
+        elif chosen == act_color:
             self._pick_color()
         elif chosen == act_disc_this and cv and my_conns:
             cv._remove_connection(my_conns[0][0])   # single — lets _remove_connection push
@@ -1252,6 +1339,14 @@ class _AnchorCanvas(QWidget):
         return result  # (widget, port) or None
 
     def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            # Left-click on empty canvas (not on a tile) → deselect all.
+            # Tiles intercept clicks within their own geometry, so reaching
+            # the canvas means the click landed on empty space.
+            viewer = getattr(self, "_viewer", None)
+            if viewer and any(w._selected for w in getattr(viewer, "widgets", [])):
+                viewer._deselect_all()
+            # Fall through so existing port/connection click logic still runs.
         if e.button() == Qt.MouseButton.RightButton:
             if self._pending:
                 self._pending = None
@@ -1385,7 +1480,7 @@ class AttrViewerWidget(QWidget):
         self._snap_cb = QCheckBox("Editable")
         self._snap_cb.setStyleSheet("color:#ccc;")
         self._snap_cb.setToolTip("Editable mode: show dots, connect boxes")
-        self._snap_cb.setChecked(True)   # on by default
+        self._snap_cb.setChecked(False)   # off by default
         bar.addWidget(self._snap_cb)
 
         self._drag_cb = QCheckBox("Drag Mode")
@@ -1394,29 +1489,15 @@ class AttrViewerWidget(QWidget):
         self._snap_cb.stateChanged.connect(self._set_snap)
         bar.addWidget(self._drag_cb)
 
-        btn_align_left = QPushButton("⬛← Left")
-        btn_align_top  = QPushButton("⬛↑ Top")
-        for b in (btn_align_left, btn_align_top):
-            b.setStyleSheet(
-                "QPushButton{background:#383838;color:#ccc;border:1px solid #555;"
-                "border-radius:3px;padding:2px 8px;font-size:8pt;}"
-                "QPushButton:hover{background:#4a4a4a;}")
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn_align_left.setToolTip("Align all panels to same left edge")
-        btn_align_top.setToolTip("Align all panels to same top edge")
-        btn_gather = QPushButton("⚑ Gather")
-        btn_gather.setToolTip("Move any off-screen boxes back into view")
-        btn_gather.setStyleSheet(
+        btn_auto_grid = QPushButton("▦ Auto Grid")
+        btn_auto_grid.setToolTip("Arrange tiles in a clean group-separated grid")
+        btn_auto_grid.setStyleSheet(
             "QPushButton{background:#383838;color:#ccc;border:1px solid #555;"
             "border-radius:3px;padding:2px 8px;font-size:8pt;}"
             "QPushButton:hover{background:#4a4a4a;}")
-        btn_gather.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn_gather.clicked.connect(self._gather_lost)
-        btn_align_left.clicked.connect(self._align_left)
-        btn_align_top.clicked.connect(self._align_top)
-        bar.addWidget(btn_gather)
-        bar.addWidget(btn_align_left)
-        bar.addWidget(btn_align_top)
+        btn_auto_grid.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn_auto_grid.clicked.connect(self._auto_grid_layout)
+        bar.addWidget(btn_auto_grid)
         self._toolbar_widget = QWidget()
         self._toolbar_widget.setLayout(bar)
         main.addWidget(self._toolbar_widget)
@@ -1436,12 +1517,29 @@ class AttrViewerWidget(QWidget):
 
         self._build(load_positions(self.conn), load_group_colors(self.conn),
                     load_sizes(self.conn), load_collapsed(self.conn))
-        # Apply initial edit state (default ON)
-        self._set_snap(True)
+        # Apply initial edit state from the checkbox (default OFF)
+        self._set_snap(self._snap_cb.isChecked())
 
         from PyQt6.QtGui import QShortcut, QKeySequence
         _undo_sc = QShortcut(QKeySequence("Ctrl+Z"), self)
         _undo_sc.activated.connect(self._do_undo)
+        _selall_sc = QShortcut(QKeySequence("Ctrl+A"), self)
+        _selall_sc.activated.connect(self._select_all)
+        _desel_sc = QShortcut(QKeySequence("Esc"), self)
+        _desel_sc.activated.connect(self._deselect_all)
+
+    def _select_all(self):
+        """Mark every visible tile as selected (Ctrl+A) so dragging any one of
+        them moves the whole group together."""
+        for w in self.widgets:
+            if w.isVisible():
+                w.set_selected(True)
+
+    def _deselect_all(self):
+        """Clear all selections (Esc)."""
+        for w in self.widgets:
+            if w._selected:
+                w.set_selected(False)
 
     def reload(self, config_path):
         """Destroy current panels and rebuild from a new config file."""
@@ -1469,12 +1567,37 @@ class AttrViewerWidget(QWidget):
 
     def _build(self, positions, group_colors=None, sizes=None, collapsed_state=None):
         cfg         = self.cfg
-        sec_order   = cfg.get("__section_order__", [k for k in cfg if not k.startswith("__")])
-        sec_styles  = cfg.get("__section_styles__", {})
+        sec_order   = list(cfg.get("__section_order__", [k for k in cfg if not k.startswith("__")]))
+        sec_styles  = dict(cfg.get("__section_styles__", {}))
         text_fields = cfg.get("__text_fields__", {})
         sec_groups   = cfg.get("__section_groups__", {})
         col_names    = cfg.get("__col_names__", {})
         parent_names = cfg.get("__parent_names__", {})
+
+        # Auto-fill for universal built-ins (FIELD_DEFS):
+        #  1. Append any that aren't in saved order (unless explicitly deleted)
+        #  2. Fill missing style entries in sec_styles (older project files saved
+        #     section_order but no style → canvas rendered as plain text box)
+        #  3. Coded fields with a {key}_Preset map → "combo" (dropdown of hex codes)
+        try:
+            from attribute_manager import FIELD_DEFS as _FD
+            import aisearch_attrs as _am_mod
+            _deleted = set(cfg.get("__deleted_sections__", []))
+            _present = set(sec_order)
+            for _fd_key, (_fd_style, _) in _FD.items():
+                # Append if missing
+                if _fd_key not in _present and _fd_key not in _deleted:
+                    sec_order.append(_fd_key)
+                # Fill style if missing
+                if _fd_key not in sec_styles and _fd_key not in _deleted:
+                    _eff_style = _fd_style
+                    _preset_key = f"{_fd_key}_Preset"
+                    if (cfg.get(_preset_key) or
+                            _am_mod._DEFAULT_TAG_GROUPS.get(_preset_key)):
+                        _eff_style = "combo"
+                    sec_styles[_fd_key] = _eff_style
+        except Exception:
+            pass
 
         # Build reverse map: field key → group name
         key_to_group  = {k: grp for grp, keys in sec_groups.items() for k in keys}
@@ -1575,6 +1698,18 @@ class AttrViewerWidget(QWidget):
                 _pid_edit.textChanged.connect(lambda _: self.data_changed.emit())
             # Bubble action buttons (e.g. Detect on P box)
             w.action_triggered.connect(self.action_triggered)
+            # CLIP_*/FACE debug tiles are hidden by default — revealed via a
+            # per-field Update action. Left-click-release on the debug tile
+            # itself hides it (but drag/resize still works).
+            if key.startswith("CLIP_") or key == "CLIP" or key == "FACE":
+                w.hide()
+                _orig_release = w.mouseReleaseEvent
+                def _hide_on_release(ev, _w=w, _orig=_orig_release):
+                    was_drag = (_w._drag_pos is not None) or (_w._resize_pos is not None)
+                    _orig(ev)
+                    if ev.button() == Qt.MouseButton.LeftButton and not was_drag:
+                        _w.hide()
+                w.mouseReleaseEvent = _hide_on_release
             self.widgets.append(w)
 
             x += col_w
@@ -1601,6 +1736,26 @@ class AttrViewerWidget(QWidget):
             if ba in keys and bb in keys:
                 self._connections.append(row)
 
+        # Auto-wire CLIP_*/FACE debug tiles to their parent field tile (parent BL
+        # → debug TL, so the debug panel anchors directly below the parent).
+        # Only created if no connection already exists between the pair — user's
+        # manual wiring is preserved.
+        _DEBUG_PARENT = {
+            "CLIP_E":  "E",  "CLIP_HC": "HC", "CLIP_FA": "FA", "CLIP_SK": "SK",
+            "CLIP_PM": "PM", "CLIP_CS": "CS", "CLIP_BG": "BG", "CLIP_X":  "X",
+            "FACE":    "P",
+        }
+        for _dbg, _par in _DEBUG_PARENT.items():
+            if _dbg not in keys or _par not in keys:
+                continue
+            _already = any(
+                {r[1], r[3]} == {_dbg, _par} for r in self._connections
+            )
+            if _already:
+                continue
+            _cid = save_connection(self.conn, _par, "BL", _dbg, "TL")
+            self._connections.append((_cid, _par, "BL", _dbg, "TL"))
+
         # Re-snap all connections (parents first, then children transitively)
         snapped = set()
         def _snap_chain(key):
@@ -1622,6 +1777,15 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             w.moved.connect(lambda k, _x, _y: self._apply_connections_for(k))
             w.resized.connect(lambda k: self._apply_connections_for(k))
+
+        # Defer a second snap pass until after Qt finishes laying out widgets —
+        # initial _snap_chain runs before Qt resolves final tile sizes, which
+        # leaves children misaligned. Same effect as user clicking the resize
+        # edge to fire resized → cascade.
+        def _final_snap(_rk=root_keys):
+            for rk in _rk:
+                self._apply_connections_for(rk)
+        QTimer.singleShot(0, _final_snap)
 
         # Expand canvas to fit all placed tiles (saved positions may exceed 1000px default)
         if self.widgets:
@@ -1709,7 +1873,13 @@ class AttrViewerWidget(QWidget):
         # Move child so its corner sits exactly on parent's corner — no gap
         new_x = pp.x() - cx_off
         new_y = pp.y() - cy_off
-        cw.move(new_x, new_y)
+        # Flag prevents moveEvent from re-emitting moved while we're mid-snap —
+        # the outer _apply_connections_for cascade will iterate children explicitly.
+        cw._snapping = True
+        try:
+            cw.move(new_x, new_y)
+        finally:
+            cw._snapping = False
         save_position(self.conn, child_key, new_x, new_y)
 
     def _apply_connections_for(self, key, _visited=None):
@@ -1752,14 +1922,16 @@ class AttrViewerWidget(QWidget):
             self.canvas._pending = (key, port)
         else:
             # Second click on a different box — create connection.
-            # Parent = box with lower Y (higher on canvas); child = lower box (snaps when parent moves).
+            # Parent = more top-left tile (smaller x+y); child snaps to parent.
+            # Using x+y (instead of just y) resolves ties when tiles are roughly
+            # level — the one closer to origin stays put.
             self.canvas._pending = None
             key_a, port_a = pending
             key_b, port_b = key, port
             wmap = {w.key: w for w in self.widgets}
             wa = wmap.get(key_a)
             wb = wmap.get(key_b)
-            if wa and wb and wa.y() <= wb.y():
+            if wa and wb and (wa.x() + wa.y()) <= (wb.x() + wb.y()):
                 parent_key, parent_port = key_a, port_a
                 child_key,  child_port  = key_b, port_b
             else:
@@ -1788,6 +1960,10 @@ class AttrViewerWidget(QWidget):
         """Show/hide panels based on each widget's own _hidden_for list."""
         mode_lower = mode.lower()   # "all", "image", "video"
         for w in self.widgets:
+            # CLIP_*/FACE debug tiles start hidden and only appear on explicit
+            # Update; mode switches should not force-show them.
+            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"):
+                continue
             if mode_lower == "all":
                 w.setVisible(True)
             else:
@@ -1810,6 +1986,72 @@ class AttrViewerWidget(QWidget):
             w.move(w.x(), min_y)
             save_position(self.conn, w.key, w.x(), w.y())
             self._apply_connections_for(w.key)
+
+    def _auto_grid_layout(self):
+        """Disconnect everything and lay visible tiles out in a flowing grid,
+        grouped by __section_groups__ — each group starts on a fresh row
+        with extra vertical padding so groups are visually separated.
+        Within a group tiles flow left-to-right; wide tiles wrap to the next
+        line. CLIP_*/FACE debug tiles are skipped (they stay hidden and
+        anchor to their parents when re-shown)."""
+        if not self.widgets:
+            return
+        self._push_undo()
+        # 1. Drop all connections
+        for row in list(self._connections):
+            self._remove_connection(row[0], _push=False)
+        # 2. Build group → keys mapping, honoring __group_order__
+        sec_order = list(self.cfg.get("__section_order__", []))
+        order_idx = {k: i for i, k in enumerate(sec_order)}
+        sec_groups = self.cfg.get("__section_groups__", {}) or {}
+        group_order = list(self.cfg.get("__group_order__") or sec_groups.keys())
+        key_to_group = {k: g for g, keys in sec_groups.items() for k in keys}
+        # Only currently-visible tiles get laid out — tiles hidden by mode
+        # (Image/Video/__hidden_for__) shouldn't reserve grid slots and leave
+        # vertical gaps. CLIP_*/FACE debug tiles are also skipped (always hidden
+        # by default; revealed via right-click Show/Update with their own anchor).
+        layoutable = [w for w in self.widgets
+                      if w.isVisible()
+                      and not (w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"))]
+        # Bucket tiles by group; ungrouped tiles land in "__none__" at the end
+        buckets = {g: [] for g in group_order}
+        buckets["__none__"] = []
+        for w in layoutable:
+            g = key_to_group.get(w.key, "__none__")
+            buckets.setdefault(g, []).append(w)
+        for g in buckets:
+            buckets[g].sort(key=lambda w: (order_idx.get(w.key, 10_000),
+                                           w.y(), w.x()))
+        # 3. Layout — each group starts a new row with extra gap
+        pad_x, pad_y = 12, 12
+        group_gap   = 24   # extra vertical space between groups
+        start_x, start_y = 20, 20
+        canvas_w = max(self.canvas.width(), 1200)
+        cur_y = start_y
+        for g in list(group_order) + ["__none__"]:
+            tiles = buckets.get(g) or []
+            if not tiles:
+                continue
+            cur_x, row_h = start_x, 0
+            for w in tiles:
+                ww, wh = w.width(), w.height()
+                if cur_x + ww > canvas_w - start_x and cur_x > start_x:
+                    cur_x = start_x
+                    cur_y += row_h + pad_y
+                    row_h = 0
+                w.move(cur_x, cur_y)
+                save_position(self.conn, w.key, cur_x, cur_y)
+                cur_x += ww + pad_x
+                if wh > row_h:
+                    row_h = wh
+            cur_y += row_h + group_gap
+        # 4. Resize canvas to fit the new grid
+        if layoutable:
+            bottom = max(w.y() + w.height() for w in layoutable)
+            right  = max(w.x() + w.width()  for w in layoutable)
+            self.canvas.setMinimumHeight(max(1000, bottom + 40))
+            self.canvas.setMinimumWidth(max(1400, right + 40))
+        self.canvas.update()
 
     # ── Preview data binding ──────────────────────────────────────────────────
 
@@ -1863,6 +2105,10 @@ class AttrViewerWidget(QWidget):
         hidden_keys = self._eval_conditions(meta_with_tags)
         cur_mode = self._mode_cb.currentText().lower()
         for w in self.widgets:
+            # CLIP_*/FACE debug tiles only appear via right-click → Show/Update —
+            # condition + mode logic must not force-show them.
+            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"):
+                continue
             if w.key in hidden_keys:
                 w.setVisible(False)
             else:

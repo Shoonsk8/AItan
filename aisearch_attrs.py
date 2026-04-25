@@ -317,6 +317,7 @@ _DEFAULT_TAG_GROUPS = {
     "HC_Length": [
         ["0", "(none)"],      ["1", "Very Short"],  ["2", "Short"],
         ["3", "Medium"],      ["4", "Long"],        ["5", "Very Long"],
+        ["6", "Bald"],        ["7", "Partially Bald"],
     ],
 
     # ── Face Angle  FA[vertical][direction]  ─────────────────────────────────
@@ -402,26 +403,46 @@ _DEFAULT_TAG_GROUPS = {
         ["6", "Night"],
     ],
 
-    # ── Preset lookups (for O/R/K coded-field combos on the canvas) ──────────
-    # These are still defaults because they map digit codes to human labels
-    # for the blue coded fields — not user-editable tag groups.
+    # ── Universal built-in taglists (blue) — standard, same for everyone ─────
+    "O": [
+        ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
+        ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
+        ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
+    ],
     "O_Preset": [
         ["f1", "15:1"], ["73", "21:9"], ["09", "16:9"],
         ["32", "3:2"],  ["43", "4:3"],  ["11", "1:1"],
         ["34", "3:4"],  ["23", "2:3"],  ["90", "9:16"],
+    ],
+    "R": [
+        ["36", "360p"], ["48", "480p"],  ["72", "720p"],
+        ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
+        ["08", "8K"],
     ],
     "R_Preset": [
         ["36", "360p"], ["48", "480p"],  ["72", "720p"],
         ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
         ["08", "8K"],
     ],
+    "K": [
+        ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
+    ],
     "K_Preset": [
         ["24", "24 fps"], ["30", "30 fps"], ["60", "60 fps"], ["b0", "120 fps"],
     ],
+    "audio": [
+        ["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
+        ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
+        ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"],
+    ],
+    "audio_Preset": [
+        ["none", "None"], ["aac", "AAC"], ["mp3", "MP3"],
+        ["opus", "Opus"], ["vorbis", "Vorbis"], ["flac", "FLAC"],
+        ["ac3", "AC3"], ["eac3", "E-AC3"], ["sound", "Sound"],
+    ],
 
-    # Removed from defaults (user decides): Background, O, R, K (plain),
-    # Watermark, Audio, audio, audio_Preset, Variant.
-    # User tables must live entirely in per-project attrs_tags_<project>.json.
+    # Kept user-editable (yellow, no hardcode): Background, Variant, Watermark.
+    # User tables live entirely in per-project attrs_tags_<project>.json.
 }
 
 # Display names for hardcoded sections (shown in Attributes tab title when no custom name saved)
@@ -2247,6 +2268,8 @@ CLIP_AUTO_DETECT = [
         ("3", "a person with hair ending at or just touching the shoulders"),
         ("4", "a person with long hair clearly past the shoulders reaching mid-back"),
         ("5", "a person with very long hair reaching the waist hips or lower"),
+        ("6", "a person who is fully bald with a completely shaved or smooth head and no visible hair"),
+        ("7", "a person with partially bald receding hairline or thinning hair on top of the head"),
     ]},
     # ── Face direction ────────────────────────────────────────────────────────
     {"field": "fa", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [

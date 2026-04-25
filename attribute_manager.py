@@ -44,6 +44,7 @@ FIELD_DEFS = {
     "note":            ("text",     []),
     "positive_prompt": ("text",     []),
     "negative_prompt": ("text",     []),
+    "seed":            ("text",     []),
     "speech":          ("text",     []),
 }
 

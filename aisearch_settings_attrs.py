@@ -293,15 +293,15 @@ class _AttrsMixin:
             self._attr_ws_loaded.add(prefix)
             self._attr_section_styles[prefix] = style
             pad = _WSPAD.get(style, 2)
-            # Basic (coded field) sections → blue; custom (tag/text/boolean) → yellow
-            # Exception: if user has saved their own data for any column's tag group → yellow
-            _is_coded_dig = (prefix in FIELD_DEFS and style in ("1dig", "2dig", "3dig", "id"))
-            if _is_coded_dig and _traw:
+            # Built-in sections (anything in FIELD_DEFS) → blue; user tables → yellow
+            # Exception: if user has saved their own data for a coded-dig column's tag group → yellow
+            _is_builtin = prefix in FIELD_DEFS
+            if _is_builtin and style in ("1dig", "2dig", "3dig", "id") and _traw:
                 _fd_cols = FIELD_DEFS.get(prefix, (None, []))[1]
                 _has_user_col_data = any(_traw.get(tg) for _, _, tg in _fd_cols if tg)
                 if _has_user_col_data:
-                    _is_coded_dig = False
-            _sec_color = "#6ea6f0" if (_is_coded_dig or readonly) else "#f0c040"
+                    _is_builtin = False
+            _sec_color = "#6ea6f0" if (_is_builtin or readonly) else "#f0c040"
 
             def _add_to_target(widget):
                 if group:

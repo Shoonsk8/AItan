@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.971"
+VERSION = "1.98"
 
 
 def _read_embedded_meta(path):
@@ -645,7 +645,7 @@ class PreviewWindow(QWidget):
         elif key == Qt.Key.Key_T:
             self.handler._toggle_always_on_top(
                 not bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
-        elif key == Qt.Key.Key_A:
+        elif key == Qt.Key.Key_A and (mods & Qt.KeyboardModifier.ShiftModifier):
             self._toggle_attrs()
         elif key == Qt.Key.Key_Home:
             self.handler.app._go_to_first_row()
@@ -1175,14 +1175,6 @@ class PreviewWindow(QWidget):
                              getattr(self.handler.app, "current_project", None))
         self._chk_auto_bake.toggled.connect(_on_ab_toggle)
         r_bake.addWidget(self._chk_auto_bake)
-        self._btn_gather = QPushButton(_t("⚑ Gather / ⚑ 集約"))
-        self._btn_gather.setToolTip(_t("Move any off-screen canvas tiles back into view / 画面外のキャンバスタイルを表示内に戻す"))
-        self._btn_gather.setStyleSheet(
-            "QPushButton { background:#2a2a2a; color:#ccaa66; border:1px solid #554433; padding:2px 6px; }"
-            "QPushButton:hover { background:#3a3a2a; color:#eedd88; }")
-        self._btn_gather.clicked.connect(
-            lambda: getattr(self._soft_canvas, "_gather_lost", lambda: None)())
-        r_bake.addWidget(self._btn_gather)
         self._btn_apply_clip = QPushButton(_t("🔄 Refresh CLIP / 🔄 CLIP再検出"))
         self._btn_apply_clip.setToolTip(_t("Clear all CLIP fields and re-detect from scratch / 全CLIPフィールドをクリアして最初から再検出"))
         self._btn_apply_clip.setStyleSheet(
@@ -1255,50 +1247,17 @@ class PreviewWindow(QWidget):
         self._raw_meta_edit.setPlaceholderText(_t("No data. / データなし。"))
         _raw_lay.addWidget(self._raw_meta_edit)
 
-        # ── CLIP + Face side by side (CLIP 2/3, Face 1/3) ────────────────
-        _inspect_row = QHBoxLayout()
-        _inspect_row.setSpacing(4)
-
-        _clip_col = QVBoxLayout()
-        _clip_col.setSpacing(2)
-        _clip_hdr = QHBoxLayout()
-        _clip_hdr.addWidget(QLabel(_t("CLIP: / CLIPスコア：")))
-        _clip_hdr.addStretch()
-        _clip_col.addLayout(_clip_hdr)
+        # CLIP/Face debug text boxes replaced by per-field debug panels on the canvas.
+        # Keep stub QTextEdit attributes so legacy code that calls
+        # self._clip_inspect_edit.setPlainText(...) / .toPlainText() still works.
         self._clip_inspect_edit = QTextEdit()
-        self._clip_inspect_edit.setReadOnly(True)
-        self._clip_inspect_edit.setStyleSheet(
-            "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
-            "font-family: monospace; font-size: 8pt;")
-        self._clip_inspect_edit.setPlaceholderText(_t("CLIP scores will appear here. / CLIPスコアがここに表示されます。"))
-        _clip_col.addWidget(self._clip_inspect_edit)
-        _inspect_row.addLayout(_clip_col, stretch=2)
-
-        _face_col = QVBoxLayout()
-        _face_col.setSpacing(2)
-        _face_hdr = QHBoxLayout()
-        _face_hdr.addWidget(QLabel(_t("Face: / 顔：")))
-        self._btn_apply_face = QPushButton(_t("Apply / 適用"))
-        self._btn_apply_face.setEnabled(False)
-        self._btn_apply_face.setFixedHeight(18)
-        self._btn_apply_face.setStyleSheet(
-            "background:#2a4a2a; color:#88cc88; border:1px solid #466; padding:0 6px; font-size:8pt;")
-        self._btn_apply_face.setToolTip(_t("Apply detected person ID to this file / 検出された人物IDをこのファイルに適用"))
-        self._btn_apply_face.clicked.connect(self._apply_detected_face)
-        _face_hdr.addWidget(self._btn_apply_face)
-        _face_hdr.addStretch()
-        _face_col.addLayout(_face_hdr)
+        self._clip_inspect_edit.hide()
         self._face_inspect_edit = QTextEdit()
-        self._face_inspect_edit.setReadOnly(True)
-        self._face_inspect_edit.setFixedHeight(260)
-        self._face_inspect_edit.setStyleSheet(
-            "background-color: #111122; color: #b0b0cc; border: 1px solid #334; "
-            "font-family: monospace; font-size: 8pt;")
-        self._face_inspect_edit.setPlaceholderText(_t("Face scores will appear here. / 顔スコアがここに表示されます。"))
-        _face_col.addWidget(self._face_inspect_edit)
-        _inspect_row.addLayout(_face_col, stretch=1)
-
-        _raw_lay.addLayout(_inspect_row)
+        self._face_inspect_edit.hide()
+        # _btn_apply_face still referenced elsewhere (e.g. _apply_detected_face enabling)
+        self._btn_apply_face = QPushButton(_t("Apply / 適用"))
+        self._btn_apply_face.hide()
+        self._btn_apply_face.clicked.connect(self._apply_detected_face)
 
         # Re-read from disk whenever the Raw Data section is expanded
         def _on_raw_expand():
@@ -1681,6 +1640,14 @@ class PreviewWindow(QWidget):
             if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
                 self._bake_to_file(silent=True)
         _same_file = (self._attr_path == path)
+        # Navigating to a new file — hide all AI debug tiles (CLIP_*/CLIP/FACE).
+        # They only appear on explicit right-click Show / Update.
+        if not _same_file:
+            _sc = getattr(self, "_soft_canvas", None)
+            if _sc:
+                for _w in getattr(_sc, "widgets", []):
+                    if _w.key.startswith("CLIP_") or _w.key in ("CLIP", "FACE"):
+                        _w.hide()
         self._attr_path = path
         # Only reset bake state when navigating to a new file — preserve state on same-file refresh
         if not _same_file:
@@ -2859,7 +2826,9 @@ class PreviewWindow(QWidget):
 
     @pyqtSlot(str, str)
     def _update_canvas_text_widget(self, key: str, text: str):
-        """Set text on a canvas FieldWidget and resize the tile to show full content."""
+        """Set text on a canvas FieldWidget and resize the tile to show full content.
+        If the text is an 'ignored — already set' stub, hide the tile instead —
+        the field already has a value, so the debug view would just be noise."""
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
@@ -2870,6 +2839,9 @@ class PreviewWindow(QWidget):
                     te.blockSignals(True)
                     te.setPlainText(text)
                     te.blockSignals(False)
+                    if "ignored — already set" in text:
+                        w.hide()
+                        return
                     # Resize tile and shift tiles below — deferred so widget is laid out first
                     QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
 
@@ -2896,6 +2868,65 @@ class PreviewWindow(QWidget):
         """Dispatch action button clicks from canvas FieldWidgets."""
         if key == "P" and action == "detect_face":
             self._detect_face_for_canvas()
+        elif action == "update_clip":
+            self._update_clip_for_field(key)
+        elif action == "show_clip":
+            self._show_clip_tile_for_field(key)
+
+    def _show_clip_tile_for_field(self, key: str):
+        """Right-click → Show: reveal the debug tile without re-running detection.
+        Repositions the tile flush under its parent (BL→TL) so it stays
+        attached even after Auto Grid disconnected it."""
+        _target = key.lower()
+        _dbg_key = "FACE" if _target == "p" else f"CLIP_{_target.upper()}"
+        _sc = getattr(self, "_soft_canvas", None)
+        if not _sc:
+            return
+        widgets = getattr(_sc, "widgets", [])
+        _parent = next((w for w in widgets if w.key == key), None)
+        _dbg = next((w for w in widgets if w.key == _dbg_key), None)
+        if _dbg is None:
+            return
+        if _parent is not None:
+            _dbg.move(_parent.x(), _parent.y() + _parent.height())
+        _dbg.show()
+        _dbg.raise_()
+
+    def _update_clip_for_field(self, key: str):
+        """Right-click → Update: re-detect CLIP for just `key`, reveal its debug tile."""
+        _ALL = {"hc", "fa", "sk", "pm", "e", "cs", "bg", "x"}
+        _target = key.lower()
+        _skip = set()
+        if _target == "p":
+            # Person: skip all CLIP fields, only run face detection
+            _skip = set(_ALL)
+        elif _target in _ALL:
+            _skip = _ALL - {_target}
+            _skip.add("person_id")
+        else:
+            return
+        # Clear stored value for this field so the detect actually runs
+        _path = getattr(self, "_attr_path", None)
+        if _path:
+            _entry = self.handler.app.attrs_data.setdefault(_path, {})
+            if _target != "p":
+                _entry.pop(_target, None)
+                _entry.pop(f"cf_{_target}", None)
+        # Reveal the debug tile ahead of the detect so the user sees it populate.
+        # Reposition flush under its parent — Auto Grid may have disconnected
+        # and dragged it elsewhere.
+        _sc = getattr(self, "_soft_canvas", None)
+        _dbg_key = "FACE" if _target == "p" else f"CLIP_{_target.upper()}"
+        if _sc:
+            widgets = getattr(_sc, "widgets", [])
+            _parent = next((w for w in widgets if w.key == key), None)
+            _dbg = next((w for w in widgets if w.key == _dbg_key), None)
+            if _dbg is not None:
+                if _parent is not None:
+                    _dbg.move(_parent.x(), _parent.y() + _parent.height())
+                _dbg.show()
+                _dbg.raise_()
+        self._on_inspect(overwrite=True, skip_fields=_skip)
 
     def _detect_face_for_canvas(self):
         """Run face detection in background and update the P box + person_id."""
@@ -3327,7 +3358,7 @@ class PreviewWindow(QWidget):
                            scene=entry.get("scene", ""),
                            prompt=_text_vals.get("prompt", entry.get("prompt", "")),
                            neg_prompt=_text_vals.get("neg_prompt", entry.get("neg_prompt", "")),
-                           seed=self._seed_edit.text() or entry.get("seed", ""),
+                           seed=_text_vals.get("seed", self._seed_edit.text() or entry.get("seed", "")),
                            meta=entry.get("meta"),
                            custom=entry.get("custom", ""),
                            person_id=persons[0] if persons else "",
@@ -3442,6 +3473,17 @@ class PreviewWindow(QWidget):
         path = self._attr_path
         if not path or not os.path.exists(path): return
         app = self.handler.app
+        # Pause the watch-folder scanner so the file rename + metadata write
+        # we're about to do isn't picked up as a "new file" arrival, which
+        # would pop another preview window.
+        _was_paused = getattr(app, "_watcher_paused", False)
+        app._watcher_paused = True
+        try:
+            self._bake_to_file_inner(path, app, silent)
+        finally:
+            app._watcher_paused = _was_paused
+
+    def _bake_to_file_inner(self, path, app, silent):
         # Save current UI state to attrs_data first (picks up prompt, seed, person_id etc.)
         if not silent:
             self._save_attrs()
