@@ -241,10 +241,42 @@ def _restore_terminal():
 
 
 if __name__ == "__main__":
-    import atexit, signal
+    import atexit, signal, fcntl, tempfile
     atexit.register(_restore_terminal)
     signal.signal(signal.SIGINT, lambda *_: (_restore_terminal(), sys.exit(0)))
     signal.signal(signal.SIGTERM, lambda *_: (_restore_terminal(), sys.exit(0)))
+
+    # ── Single-instance via lockfile + drop file ────────────────────────────
+    # New launch with file args: append paths to a drop file and exit, IF
+    # another instance is already running (detected via fcntl lock on a pid
+    # file). The running instance polls the drop file and consumes paths.
+    _LOCK_FILE = os.path.join(tempfile.gettempdir(), f"aisearch-{os.getuid()}.lock")
+    _DROP_FILE = os.path.join(tempfile.gettempdir(), f"aisearch-{os.getuid()}.drop")
+    _file_args = [a for a in sys.argv[1:] if os.path.exists(a)]
+
+    # Try to grab an exclusive lock — succeeds only if no other instance holds it
+    _lock_fd = open(_LOCK_FILE, "w")
+    try:
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _is_first_instance = True
+    except (BlockingIOError, OSError):
+        _is_first_instance = False
+
+    if not _is_first_instance:
+        # Another instance is running — append paths to the drop file and exit
+        if _file_args:
+            try:
+                with open(_DROP_FILE, "a", encoding="utf-8") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)
+                    f.write("\n".join(_file_args) + "\n")
+                    fcntl.flock(f, fcntl.LOCK_UN)
+            except Exception:
+                pass
+        sys.exit(0)
+
+    # First instance — keep the lockfile open for the duration of the process.
+    # On exit (clean or crash), the OS releases the flock automatically.
+    _lock_fd.write(str(os.getpid())); _lock_fd.flush()
 
     import aisearch_config as _cfg
     app = QApplication(sys.argv)
@@ -259,4 +291,30 @@ if __name__ == "__main__":
 
     window = AISearchApp()
     window.show()
+
+    # Poll the drop file every 500ms — when paths show up, hand them to the
+    # window and clear the file. Same handler as drag-and-drop.
+    from PyQt6.QtCore import QTimer as _QT
+    def _poll_drops():
+        if not os.path.exists(_DROP_FILE):
+            return
+        try:
+            with open(_DROP_FILE, "r+", encoding="utf-8") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                content = f.read()
+                f.seek(0); f.truncate()
+                fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception:
+            return
+        paths = [p for p in content.splitlines() if p and os.path.exists(p)]
+        if paths and hasattr(window, "handle_external_paths"):
+            window.handle_external_paths(paths)
+    _drop_timer = _QT()
+    _drop_timer.timeout.connect(_poll_drops)
+    _drop_timer.start(100)
+
+    # Initial files from this launch's CLI args
+    if _file_args and hasattr(window, "handle_external_paths"):
+        _QT.singleShot(0, lambda: window.handle_external_paths(_file_args))
+
     sys.exit(app.exec())

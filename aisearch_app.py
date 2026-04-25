@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.98"
+VERSION = "1.981"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -3593,6 +3593,25 @@ class AISearchApp(QMainWindow):
         layout.addLayout(bf)
         dlg.exec()
         return result[0]
+
+    def handle_external_paths(self, paths):
+        """Called when another launch attempt sends file paths via the IPC
+        socket (e.g. right-click → Open with AISearch). Same flow as a
+        drag-and-drop onto the window: bring window to front and run CLIP
+        search using the file as the query (populates the results table)."""
+        # Bring window to front
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show(); self.raise_(); self.activateWindow()
+        # Filter to media files
+        _exts = (logic.EXT_IMG + logic.EXT_VID) if hasattr(logic, "EXT_IMG") else (
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".avif",
+            ".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm")
+        media = [p for p in paths if p.lower().endswith(_exts) and os.path.isfile(p)]
+        if not media:
+            return
+        # Reuse the existing drag-and-drop entry point — it handles search,
+        # table population, and preview opening with the right side effects.
+        self.on_drop(media[0])
 
     def delete_file(self):
         # Don't fire if focus is in an input widget
