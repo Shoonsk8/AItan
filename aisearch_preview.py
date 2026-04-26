@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.981"
+VERSION = "1.99"
 
 
 def _read_embedded_meta(path):
@@ -213,7 +213,14 @@ class PreviewLabel(QLabel):
         if not urls: return
         path = urls[0].toLocalFile()
         if os.path.exists(path):
-            self.handler.show(path)
+            # Delegate to the main app so a drop on the preview behaves the
+            # same as a drop on the main thumbnail: runs a search using the
+            # dropped file as the query and updates the table.
+            app = getattr(self.handler, "app", None)
+            if app and hasattr(app, "on_drop"):
+                app.on_drop(path)
+            else:
+                self.handler.show(path)
             event.acceptProposedAction()
 
     def keyPressEvent(self, event):
@@ -595,7 +602,13 @@ class PreviewWindow(QWidget):
                 if urls:
                     path = urls[0].toLocalFile()
                     if os.path.exists(path):
-                        self.handler.show(path)
+                        # Same delegation as PreviewLabel.dropEvent — runs a
+                        # search via the main app so the table + thumb update.
+                        app = getattr(self.handler, "app", None)
+                        if app and hasattr(app, "on_drop"):
+                            app.on_drop(path)
+                        else:
+                            self.handler.show(path)
                         event.acceptProposedAction()
                         return True
         return super().eventFilter(obj, event)
@@ -778,6 +791,10 @@ class PreviewWindow(QWidget):
                 "PM": [("PM_Motion", 1, "Motion"),  ("PM_Posture", 2, "Posture")],
                 "CS": [("CS_Light", 1, "Light"),    ("CS_Angle", 2, "Angle"), ("CS_Shot", 3, "Shot")],
                 "BG": [("Background", 3, "Major")],
+                "CL": [("CL_Bot",      1, "Bot. Type"),
+                       ("CL_BotColor", 2, "Bot. Color"),
+                       ("CL_Top",      3, "Top Type"),
+                       ("CL_TopColor", 4, "Top Color")],
             }
 
         # Helper: decode a coded field value to human-readable string
@@ -811,8 +828,13 @@ class PreviewWindow(QWidget):
             cb.setMaximumWidth(148)
             cb.setStyleSheet("background:#3a3a3a; color:#e0e0e0; border:1px solid #555;")
             cb.addItem("—", "")
+            _yellow = QColor("#f0c040")
             for key, val_lbl in attrs_mod.TAG_GROUPS.get(sub_grp, []):
                 cb.addItem(f"{key}: {val_lbl}", key)
+                # Highlight the "f = Custom" entry yellow so it visually stands
+                # out as user-editable / non-canonical across all 4-digit fields.
+                if str(key).lower() == "f" and str(val_lbl).strip().lower() == "custom":
+                    cb.setItemData(cb.count() - 1, _yellow, Qt.ItemDataRole.ForegroundRole)
             return cb
 
         def _add_combo_field(sec_layout, letter, hidden_edit):
@@ -920,9 +942,9 @@ class PreviewWindow(QWidget):
         _COMBO_ALIAS  = {"H": "HC"}
         # Coded styles → rendered in the group coded-section widget
         # Soft styles  → rendered in the soft sections area (taglist/combo/text)
-        _CODED_STYLES = {"id", "1dig", "2dig", "3dig"}
+        _CODED_STYLES = {"id", "1dig", "2dig", "3dig", "4dig"}
         _SKIP_STYLES  = {"matrix", "boolean", "taglist", "text", ""}  # skip in coded widget
-        _STYLE_DIGITS = {"1dig": 1, "2dig": 2, "3dig": 3}
+        _STYLE_DIGITS = {"1dig": 1, "2dig": 2, "3dig": 3, "4dig": 4}
 
         def _add_id_field(sec_layout, key):
             """Small labeled text input for an id-style section."""
@@ -1120,9 +1142,13 @@ class PreviewWindow(QWidget):
         self._seed_edit.editingFinished.connect(lambda: self._update_bake_btn("pending"))
 
         # ── Dynamic sections driven by attrs_tags.json ──────────────────────
+        # Reduced from 800ms → 200ms so a quick navigation after typing still
+        # has time to fire the save before _refresh_attrs_inner resets the
+        # canvas. The flush in _refresh_attrs_inner is the belt; this is
+        # the suspenders.
         self._text_save_timer = QTimer()
         self._text_save_timer.setSingleShot(True)
-        self._text_save_timer.setInterval(800)
+        self._text_save_timer.setInterval(200)
         self._text_save_timer.timeout.connect(self._save_attrs)
         self._text_save_timer.timeout.connect(lambda: self._update_bake_btn("pending"))
 
@@ -1268,6 +1294,8 @@ class PreviewWindow(QWidget):
                     _txt = attrs_mod.read_raw_embedded_text(_p)
                 except Exception:
                     _txt = ""
+                if _txt and len(_txt) > 16384:
+                    _txt = _txt[:16384] + "\n…(truncated)"
                 self._raw_meta_edit.setPlainText(_txt or _t("(no embedded text) / （埋め込みテキストなし）"))
                 # Honour clip_inspect_mode — don't run inspect at all in
                 # 'never', and skip already-set fields in 'when_empty'.
@@ -1275,7 +1303,7 @@ class PreviewWindow(QWidget):
                 if _mode == "never":
                     return
                 _entry = attrs_mod.get(self.handler.app.attrs_data, _p)
-                _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
+                _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
                 _skip = set()
                 if _mode == "when_empty":
                     _skip = {f for f in _clip_fields if _entry.get(f)}
@@ -1415,6 +1443,13 @@ class PreviewWindow(QWidget):
         self.setWindowTitle(f"{base}    {info}" if info else base)
 
     def _refresh_attrs(self, path):
+        import time as _time
+        _t0 = _time.time()
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"refresh_attrs START {os.path.basename(path) if path else None}")
+        except Exception:
+            pass
         if not self._attr_panel_built:
             self._attr_panel_pending_path = path
             return
@@ -1425,17 +1460,39 @@ class PreviewWindow(QWidget):
         elif self._text_save_timer.isActive():
             self._text_save_timer.stop()
         # Rebuild attr panel if attrs_tags.json changed (new attributes added via Settings)
+        _t1 = _time.time()
         self._maybe_rebuild_attr_panel()
+        try:
+            _dbg(f"  maybe_rebuild_attr_panel: {(_time.time()-_t1)*1000:.1f}ms")
+        except Exception:
+            pass
         # Block editingFinished on note/seed so setEnabled(False) in _apply_protected_lock
         # doesn't fire _save_attrs with stale widget values for the new image's path.
         # Use try/finally to guarantee these are always unblocked even if something throws.
         self._project_edit.blockSignals(True)
         self._seed_edit.blockSignals(True)
         try:
+            _t2 = _time.time()
             self._refresh_attrs_inner(path)
+            try:
+                _dbg(f"  refresh_attrs_inner: {(_time.time()-_t2)*1000:.1f}ms")
+            except Exception:
+                pass
         finally:
             self._project_edit.blockSignals(False)
             self._seed_edit.blockSignals(False)
+            try:
+                if os.environ.get("AISEARCH_MEM_TRACE"):
+                    import psutil as _ps
+                    rss = _ps.Process().memory_info().rss / (1024 * 1024)
+                    from aisearch_debug import dbg as _dbgx
+                    _dbgx(f"    [attr_inner exit] rss={rss:.1f}MB")
+            except Exception:
+                pass
+        try:
+            _dbg(f"refresh_attrs END   total={(_time.time()-_t0)*1000:.1f}ms")
+        except Exception:
+            pass
         # Auto-run CLIP + face inspect based on clip_inspect_mode setting.
         #   "never"      → no detection
         #   "when_empty" → detect only fields that are empty; mark filled ones
@@ -1445,7 +1502,7 @@ class PreviewWindow(QWidget):
         _mode = self.handler.app.config.get("clip_inspect_mode", "never")
         if _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
-            _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x")
+            _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
                 # (for matrix fields like X, Background). Read X_Table /
@@ -1635,6 +1692,34 @@ class PreviewWindow(QWidget):
 
     def _refresh_attrs_inner(self, path):
         app = self.handler.app
+        # Granular memory checkpoints — set AISEARCH_MEM_TRACE=1 to enable
+        try:
+            from aisearch_debug import dbg as _dbg
+        except Exception:
+            _dbg = lambda *a, **kw: None
+        _trace_mem = bool(os.environ.get("AISEARCH_MEM_TRACE"))
+        def _mark(label):
+            if not _trace_mem:
+                return
+            try:
+                import psutil
+                rss = psutil.Process().memory_info().rss / (1024 * 1024)
+                _dbg(f"    [{label}] rss={rss:.1f}MB")
+            except Exception:
+                pass
+        _mark("attr_inner enter")
+        # CRITICAL: flush any pending text-edit save BEFORE we navigate away.
+        # The text-save timer is 800ms debounced; navigating within that window
+        # would otherwise lose what the user just typed (the canvas reset on
+        # the new file overwrites the still-unsaved widget contents).
+        if self._attr_path and self._attr_path != path:
+            _tst = getattr(self, '_text_save_timer', None)
+            if _tst is not None and _tst.isActive():
+                _tst.stop()
+                try:
+                    self._save_attrs()
+                except Exception:
+                    pass
         # Auto-bake previous file when navigating to a different one
         if self._attr_path and self._attr_path != path:
             if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
@@ -1684,7 +1769,9 @@ class PreviewWindow(QWidget):
             _emb_scanned = app._emb_meta_scanned
         if path not in _emb_scanned:
             _emb_scanned.add(path)
+            _mark("before _read_embedded_meta")
             _emb_pre = _read_embedded_meta(path)
+            _mark("after _read_embedded_meta")
             if _emb_pre:
                 if path not in app.attrs_data:
                     app.attrs_data[path] = {}
@@ -1855,7 +1942,9 @@ class PreviewWindow(QWidget):
             # Pass raw metadata so canvas conditions can evaluate (e.g. hide Speech when no audio)
             _raw_meta = {}
             try:
+                _mark("before extract_metadata")
                 _raw_meta = attrs_mod.extract_metadata(path) if path else {}
+                _mark("after extract_metadata")
             except Exception:
                 pass
             # Merge filename-rule tags (e.g. -watermark → watermark boolean) into
@@ -1863,7 +1952,9 @@ class PreviewWindow(QWidget):
             _fn_rules = attrs_mod.load_filename_rules(
                 getattr(self.handler.app, "current_project", None))
             if _fn_rules and path:
-                _fn_tags = attrs_mod.detect_tags_from_filename(path, _fn_rules)
+                _fn_tags = attrs_mod.detect_tags_from_filename(
+                    path, _fn_rules,
+                    existing_tags=entry.get("tags", []))
                 if _fn_tags:
                     entry = dict(entry)
                     _merged = list(entry.get("tags", []))
@@ -1903,7 +1994,7 @@ class PreviewWindow(QWidget):
 
             # If key CLIP fields are absent, run detection in background and refresh canvas.
             # Skip entirely in "No inspection" mode — the user chose never to run AI.
-            _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
+            _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg", "cl"}
             _inspect_mode = self.handler.app.config.get("clip_inspect_mode", "never")
             if _inspect_mode != "never" and not any(entry.get(f) for f in _clip_fields):
                 import threading as _thr
@@ -2026,6 +2117,8 @@ class PreviewWindow(QWidget):
             _embedded = attrs_mod.read_raw_embedded_text(path)
         except Exception:
             _embedded = ""
+        if _embedded and len(_embedded) > 16384:
+            _embedded = _embedded[:16384] + "\n…(truncated)"
         self._raw_meta_edit.setPlainText(_embedded if _embedded else "(no embedded text)")
 
         # Fill seed/prompt fields from meta — always update from file
@@ -2083,23 +2176,17 @@ class PreviewWindow(QWidget):
 
         # Auto-detect tags (resolution, audio, AI source) in background if incomplete.
         # NOTE: MediaPipe (shot/pose) is intentionally skipped here — use the Scan buttons.
-        needs_res    = not any(t in attrs_mod.RESOLUTION_TAGS for t in tags)
         needs_src    = not any(t in attrs_mod.SOURCE_TAGS for t in tags)
         needs_meta   = True   # always re-read meta from file
         needs_person = False  # face matching is manual-only (use Detect & Register button)
         needs_fn_rules = True  # always apply filename rules — last matching rule wins
-        if needs_res or needs_src or needs_meta or needs_person or needs_fn_rules:
-            def _detect(p=path, _needs_res=needs_res, _needs_src=needs_src,
+        if needs_src or needs_meta or needs_person or needs_fn_rules:
+            def _detect(p=path, _needs_src=needs_src,
                         _needs_meta=needs_meta, _needs_person=needs_person,
                         _needs_fn=needs_fn_rules):
                 _entry = attrs_mod.get(app.attrs_data, p)
                 _tags  = list(_entry.get("tags", []))
                 _changed = False
-                if _needs_res:
-                    tag = attrs_mod.detect_resolution_tag(p)
-                    if tag:
-                        _tags = [t for t in _tags if t not in attrs_mod.RESOLUTION_TAGS] + [tag]
-                        _changed = True
                 if _needs_src:
                     src, new_prompt, new_seed = attrs_mod.detect_ai_source(p)
                     if src and not any(t in attrs_mod.SOURCE_TAGS for t in _tags):
@@ -2452,12 +2539,22 @@ class PreviewWindow(QWidget):
                       '(ignored — already set)' in their canvas debug tile
                       instead of full score dumps, and are not re-computed
                       into the entry."""
+        # Diagnostic killswitch: AISEARCH_NO_INSPECT=1 disables CLIP+face
+        # detection entirely. Use to A/B test whether the inspect thread is
+        # the source of slow navigation / memory growth.
+        if os.environ.get("AISEARCH_NO_INSPECT"):
+            return
         # Guard: skip if a previous inspect is still running (rapid navigation)
         if getattr(self, '_inspect_running', False):
             return
         path = self._attr_path
         if not path or not os.path.exists(path):
             return
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"_on_inspect START overwrite={overwrite} skip={skip_fields}")
+        except Exception:
+            pass
         clip_out = getattr(self, "_clip_inspect_edit", None)
         face_out = getattr(self, "_face_inspect_edit", None)
         if clip_out is None and face_out is None:
@@ -2467,11 +2564,17 @@ class PreviewWindow(QWidget):
         if face_out: face_out.setPlainText("Computing…")
         self._inspect_running = True
 
-        import threading
+        import threading, time as _time
         def _run():
             from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+            try:
+                from aisearch_debug import dbg as _dbg
+            except Exception:
+                _dbg = lambda *a, **kw: None
 
             # ── CLIP ────────────────────────────────────────────────────────
+            _t_clip = _time.time()
+            _dbg("    CLIP START")
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
             _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X")
@@ -2484,7 +2587,9 @@ class PreviewWindow(QWidget):
                     idx = data["paths"].index(path)
                     emb = data["embeddings"][idx]
                 if emb is None:
+                    _t_emb = _time.time()
                     emb = _lg.extract_feature(path)
+                    _dbg(f"      CLIP extract_feature: {(_time.time()-_t_emb)*1000:.1f}ms")
                 if emb is not None:
                     _clip_specs = attrs_mod.inspect_clip_scores(emb)
                     _shown_skip_label = set()   # don't repeat "ignored" per spec position
@@ -2530,9 +2635,12 @@ class PreviewWindow(QWidget):
             except Exception as e:
                 clip_txt.append(f"ERROR: {e}")
             if clip_out:
+                _clip_full = "\n".join(clip_txt)
+                if len(_clip_full) > 16384:
+                    _clip_full = _clip_full[:16384] + "\n…(truncated)"
                 QMetaObject.invokeMethod(clip_out, "setPlainText",
                                          Qt.ConnectionType.QueuedConnection,
-                                         Q_ARG(str, "\n".join(clip_txt)))
+                                         Q_ARG(str, _clip_full))
             # Apply CLIP results to attrs_data
             if _clip_specs and emb is not None:
                 # Build multi-digit field values by combining all positions
@@ -2621,11 +2729,16 @@ class PreviewWindow(QWidget):
                             if any(c != "0" for c in _result) or _k in _detected_indices:
                                 _entry[_k] = _result
                     # Store combined CLIP text and per-field texts for canvas tiles
+                    # _cap keeps any single string under 8KB so Qt's text layout
+                    # never sees an oversize document (avoids QTextCursor-out-of-
+                    # range warnings + the segfault chain they cause).
+                    def _cap(s, n=8192):
+                        return s if len(s) <= n else s[:n] + "\n…(truncated)"
                     _entry = attrs_mod.get(app.attrs_data, path)
-                    _entry["CLIP"] = "\n".join(clip_txt)
+                    _entry["CLIP"] = _cap("\n".join(clip_txt))
                     for _cf in _CLIP_CANVAS_FIELDS:
                         if _cf in clip_field_txt:
-                            _entry[f"CLIP_{_cf}"] = "\n".join(clip_field_txt[_cf])
+                            _entry[f"CLIP_{_cf}"] = _cap("\n".join(clip_field_txt[_cf]))
                     attrs_mod.save(app.current_project, app.attrs_data)
                     QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
                                              Qt.ConnectionType.QueuedConnection,
@@ -2636,14 +2749,16 @@ class PreviewWindow(QWidget):
                             QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
                                                      Qt.ConnectionType.QueuedConnection,
                                                      Q_ARG(str, f"CLIP_{_cf}"),
-                                                     Q_ARG(str, "\n".join(clip_field_txt[_cf])))
+                                                     Q_ARG(str, _cap("\n".join(clip_field_txt[_cf]))))
             elif clip_txt:
                 # No numeric updates but still have text — store in CLIP canvas tile
+                def _cap(s, n=8192):
+                    return s if len(s) <= n else s[:n] + "\n…(truncated)"
                 _entry = attrs_mod.get(app.attrs_data, path)
-                _entry["CLIP"] = "\n".join(clip_txt)
+                _entry["CLIP"] = _cap("\n".join(clip_txt))
                 for _cf in _CLIP_CANVAS_FIELDS:
                     if _cf in clip_field_txt:
-                        _entry[f"CLIP_{_cf}"] = "\n".join(clip_field_txt[_cf])
+                        _entry[f"CLIP_{_cf}"] = _cap("\n".join(clip_field_txt[_cf]))
                 attrs_mod.save(app.current_project, app.attrs_data)
                 QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
                                          Qt.ConnectionType.QueuedConnection,
@@ -2653,14 +2768,19 @@ class PreviewWindow(QWidget):
                         QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
                                                  Qt.ConnectionType.QueuedConnection,
                                                  Q_ARG(str, f"CLIP_{_cf}"),
-                                                 Q_ARG(str, "\n".join(clip_field_txt[_cf])))
+                                                 Q_ARG(str, _cap("\n".join(clip_field_txt[_cf]))))
+
+            _dbg(f"    CLIP END   total={(_time.time()-_t_clip)*1000:.1f}ms")
 
             # ── Face ────────────────────────────────────────────────────────
+            _t_face = _time.time()
+            _dbg("    FACE START")
             face_txt = []
             _detected_pid = None
             # Skip face detection if person_id is in skip_fields (already set).
             if skip_fields and "person_id" in skip_fields:
                 face_txt.append("(ignored — already set)")
+                _dbg("      FACE skipped (person_id already set)")
             else:
                 try:
                     _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
@@ -2699,9 +2819,12 @@ class PreviewWindow(QWidget):
                                          Q_ARG(str, "FACE"),
                                          Q_ARG(str, "\n".join(face_txt)))
             if face_out:
+                _face_full = "\n".join(face_txt)
+                if len(_face_full) > 16384:
+                    _face_full = _face_full[:16384] + "\n…(truncated)"
                 QMetaObject.invokeMethod(face_out, "setPlainText",
                                          Qt.ConnectionType.QueuedConnection,
-                                         Q_ARG(str, "\n".join(face_txt)))
+                                         Q_ARG(str, _face_full))
             # Auto-apply face result to person_id when a real person was detected
             _stored_pid_now = (app.attrs_data.get(path) or {}).get("person_id", "")
             if _detected_pid and _detected_pid != "000" and _detected_pid != _stored_pid_now:
@@ -2715,12 +2838,41 @@ class PreviewWindow(QWidget):
                 QMetaObject.invokeMethod(_apply_btn, "setEnabled",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(bool, True))
+            _dbg(f"    FACE END   total={(_time.time()-_t_face)*1000:.1f}ms")
 
+        _inspect_t0 = _time.time()
         def _run_guarded():
+            # Serialize against extract_feature / watch-scan / mediapipe to
+            # prevent native-side heap corruption when concurrent threads hit
+            # cv2 / FFmpeg / ONNX simultaneously.
             try:
+                import aisearch_logic as _lg_lock
+                with _lg_lock.NATIVE_VISION_LOCK:
+                    _run()
+            except Exception:
                 _run()
             finally:
                 self._inspect_running = False
+                # Force GC + drop torch CUDA cache. Inspect threads create
+                # large numpy/PIL/tensor temporaries; without a forced sweep
+                # Python defers collection (especially across thread bounds)
+                # and RSS climbs each navigation.
+                try:
+                    import gc as _gc
+                    _gc.collect()
+                    try:
+                        import torch as _torch
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                try:
+                    from aisearch_debug import dbg as _dbg
+                    _dbg(f"_on_inspect END   total={(_time.time()-_inspect_t0)*1000:.1f}ms")
+                except Exception:
+                    pass
 
         threading.Thread(target=_run_guarded, daemon=True).start()
 
@@ -2806,19 +2958,9 @@ class PreviewWindow(QWidget):
         # Only push tiles that are:
         #   (a) in the same column — left edge within CLIP's horizontal span
         #   (b) were positioned below the old CLIP bottom (would be overlapped)
-        col_right = w.x() + w.width() + 20   # CLIP column right boundary + slack
-        for other in sc.widgets:
-            if other is w:
-                continue
-            if other.x() >= col_right:
-                continue  # different column (attribute combos on the right) — don't touch
-            if other.y() < clip_old_bottom:
-                continue  # above old CLIP bottom — don't touch
-            new_y = max(other.y(), clip_new_bottom + 6)
-            if new_y != other.y():
-                other.move(other.x(), new_y)
-                sc._apply_connections_for(other.key)
-                # Intentionally not saving here — user saves layout explicitly via 💾 Layout
+        # No push: CLIP/FACE tiles are auto-connected to their parent in the
+        # connection chain, so the parent's resize cascade re-snaps them
+        # naturally. Manual shifting was a one-way ratchet causing drift.
         canvas = getattr(sc, "canvas", None)
         if canvas:
             bottom = max((cw.y() + cw.height() for cw in sc.widgets if cw.isVisible()), default=0)
@@ -2832,6 +2974,12 @@ class PreviewWindow(QWidget):
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
+        # Cap text size — long debug strings (25k+ chars seen on combined CLIP
+        # output) trigger QTextCursor out-of-range warnings and have been
+        # implicated in segfaults during layout. 8KB is plenty for the user
+        # to read the highest scoring options.
+        if isinstance(text, str) and len(text) > 8192:
+            text = text[:8192] + "\n…(truncated)"
         for w in getattr(sc, "widgets", []):
             if w.key == key:
                 te = getattr(w, "_te", None)
@@ -3293,7 +3441,12 @@ class PreviewWindow(QWidget):
         # Collect soft-field data from canvas (taglist toggles + text areas)
         _sc = getattr(self, "_soft_canvas", None)
         if _sc:
-            _extra_tags, _text_vals, _coded_vals = _sc.collect_soft_data()
+            _matrix_vals = {}
+            _collected = _sc.collect_soft_data()
+            if len(_collected) == 4:
+                _extra_tags, _text_vals, _coded_vals, _matrix_vals = _collected
+            else:
+                _extra_tags, _text_vals, _coded_vals = _collected
             # "Our" tags = every tag key the canvas knows about (project-specific config)
             # This is more accurate than attrs_mod.TAGS which uses the general config
             from attr_viewer import _DEDICATED_FIELD_KEYS as _DFK
@@ -3325,10 +3478,20 @@ class PreviewWindow(QWidget):
             for _cw in _sc.widgets:
                 if _cw.style == "combo":
                     _combo_opt_keys.update(k for k, _ in (_cw.options or []))
+            # All option keys from matrix widgets — single-select, so the old
+            # value MUST be stripped before adding the canvas's current pick.
+            # Without this, clicking ModelVideo=07 (Veo) leaves a previous
+            # ModelVideo=05 (Real Motion) in tags, and the matrix display picks
+            # whichever sorts first in option order — the old one wins.
+            _matrix_opt_keys = set()
+            for _cw in _sc.widgets:
+                if _cw.style == "matrix":
+                    _matrix_opt_keys.update(k for k, _ in (_cw.options or []))
             # Preserve foreign tags we don't own, then add canvas tags
             _preserved = [t for t in entry.get("tags", [])
                           if t not in _our_tags and t not in _dedicated_btn_keys
-                          and t not in _coded_bool_opts and t not in _combo_opt_keys]
+                          and t not in _coded_bool_opts and t not in _combo_opt_keys
+                          and t not in _matrix_opt_keys]
             tags.extend(_preserved)
             # Canvas tags — strip quality tags, dedicated-field values, coded booleans, combo keys
             tags.extend(t for t in _extra_tags
@@ -3340,6 +3503,7 @@ class PreviewWindow(QWidget):
         else:
             _text_vals = {}
             _coded_vals = {}
+            _matrix_vals = {}
         # Canvas P tile has priority when present; fall back to classic p_edits then combo
         if "person_id" in _text_vals:
             _canvas_pid = _norm_pid(_text_vals["person_id"])
@@ -3370,6 +3534,15 @@ class PreviewWindow(QWidget):
         if _coded_vals and path in app.attrs_data:
             for _ck, _cv in _coded_vals.items():
                 app.attrs_data[path][_ck] = _cv
+        # Write matrix-field values (ModelVideo, ModelImage, X, Tool, Background)
+        # to entry[widget_key]. These used to live in tags, but the tags namespace
+        # was shared across matrix groups so codes collided.
+        if _matrix_vals and path in app.attrs_data:
+            for _mk, _mv in _matrix_vals.items():
+                if _mv:
+                    app.attrs_data[path][_mk] = _mv
+                else:
+                    app.attrs_data[path].pop(_mk, None)
         attrs_mod.save(app.current_project, app.attrs_data)
 
         # Teach the AI from user edits — record (embedding, saved-entry) as
@@ -3379,7 +3552,7 @@ class PreviewWindow(QWidget):
             if app.config.get("clip_inspect_mode", "never") != "never":
                 _saved = attrs_mod.get(app.attrs_data, path)
                 _has_coded = any(_saved.get(f) for f in
-                                 ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x"))
+                                 ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl"))
                 if _has_coded:
                     _data = getattr(app, "data", None)
                     _emb = None
@@ -3466,7 +3639,10 @@ class PreviewWindow(QWidget):
             return
         # Only refresh if still viewing the same file
         if getattr(self, '_attr_path', None) == path:
-            _ed.setPlainText(attrs_mod.read_raw_embedded_text(path) or "(no embedded text)")
+            _t_emb = attrs_mod.read_raw_embedded_text(path) or "(no embedded text)"
+            if len(_t_emb) > 16384:
+                _t_emb = _t_emb[:16384] + "\n…(truncated)"
+            _ed.setPlainText(_t_emb)
 
     def _bake_to_file(self, silent=False):
         """Embed all attrs (tags, prompt, seed, etc.) into the physical file as AItan{} block."""
@@ -3617,8 +3793,10 @@ class PreviewWindow(QWidget):
             self._update_bake_btn("ok")
             self._bake_err_label.setText("")
             QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
-            self._raw_meta_edit.setPlainText(
-                attrs_mod.read_raw_embedded_text(path) or "(no embedded text)")
+            _t_rm = attrs_mod.read_raw_embedded_text(path) or "(no embedded text)"
+            if len(_t_rm) > 16384:
+                _t_rm = _t_rm[:16384] + "\n…(truncated)"
+            self._raw_meta_edit.setPlainText(_t_rm)
             return
         ok = attrs_mod.embed_aitan_meta(path, entry)
         if not ok:
@@ -3630,8 +3808,10 @@ class PreviewWindow(QWidget):
             self._bake_err_label.setText("")
             QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
             _baked_path = getattr(self, '_attr_path', path)
-            self._raw_meta_edit.setPlainText(
-                attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)")
+            _t_rm2 = attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)"
+            if len(_t_rm2) > 16384:
+                _t_rm2 = _t_rm2[:16384] + "\n…(truncated)"
+            self._raw_meta_edit.setPlainText(_t_rm2)
             # Record as correction example for future CLIP detection — skipped
             # in "No inspection" mode since that mode means no AI activity.
             try:
@@ -3783,6 +3963,29 @@ class PreviewHandler:
 
     def show(self, path):
         if not path or not os.path.exists(path): return
+        import time as _time
+        _t0 = _time.time()
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"preview.show START {os.path.basename(path)}")
+            # Memory probe — log RSS + sizes of common growable buffers
+            try:
+                import psutil, sys, gc
+                _proc = psutil.Process()
+                rss_mb = _proc.memory_info().rss / (1024 * 1024)
+                _app = self.app
+                _attr_n = len(getattr(_app, 'attrs_data', {}) or {})
+                _path_n = len((getattr(_app, 'data', {}) or {}).get('paths', []))
+                _embs   = (getattr(_app, 'data', {}) or {}).get('embeddings')
+                _emb_mb = (_embs.element_size() * _embs.nelement() / (1024 * 1024)) if _embs is not None and hasattr(_embs, 'nelement') else 0
+                _qobj_n = len(gc.get_objects())
+                _dbg(f"  MEM rss={rss_mb:.1f}MB attrs={_attr_n} paths={_path_n} emb={_emb_mb:.1f}MB pyobj={_qobj_n}")
+            except Exception as _e:
+                _dbg(f"  MEM probe failed: {_e}")
+        except Exception:
+            pass
+        # Time-tracked sub-steps reported at the end of show()
+        self._show_t0 = _t0
         if path != self.current_path:
             self.zoom_factor = 1.0
             # Only clear cache if it doesn't already match the incoming path
@@ -3833,11 +4036,33 @@ class PreviewHandler:
 
         self.current_path = path
         # Defer render FIRST — image appears before the slow attr panel build
-        QTimer.singleShot(0, lambda: self._render(path, is_video))
-        QTimer.singleShot(0, lambda: self.window._refresh_attrs(path))
+        import time as _time
+        def _timed_render():
+            _t = _time.time()
+            self._render(path, is_video)
+            try:
+                from aisearch_debug import dbg as _dbg
+                _dbg(f"  _render: {(_time.time()-_t)*1000:.1f}ms")
+            except Exception:
+                pass
+        def _timed_refresh():
+            _t = _time.time()
+            self.window._refresh_attrs(path)
+            try:
+                from aisearch_debug import dbg as _dbg
+                _dbg(f"  _refresh_attrs (deferred): {(_time.time()-_t)*1000:.1f}ms")
+            except Exception:
+                pass
+        QTimer.singleShot(0, _timed_render)
+        QTimer.singleShot(0, _timed_refresh)
         # Build attr panel only once (on first window creation), AFTER render
         if _new_window:
             QTimer.singleShot(0, self.window._deferred_build_attr_panel)
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"preview.show DISPATCHED total_setup={(_time.time()-self._show_t0)*1000:.1f}ms")
+        except Exception:
+            pass
         # Note: _render() already calls setMaximumHeight(nh) synchronously,
         # so no deferred _auto_fit_splitter needed here.
 
@@ -4141,34 +4366,12 @@ class PreviewHandler:
             # Load and cache the source pixmap — invalidate if path changed
             if _needs_load:
                 if is_video:
-                    import numpy as np
-                    cap = cv2.VideoCapture(path)
-                    ret1, frame1 = cap.read()
-                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    if total > 1:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, total - 1)
-                        ret2, frame2 = cap.read()
-                    else:
-                        ret2, frame2 = False, None
-                    cap.release()
-                    if not ret1:
+                    import aisearch_logic as _lg
+                    rgb = _lg.get_video_thumbnail_rgb(path)
+                    if rgb is None:
                         self.window.label.setText("⚠ Could not read video frame")
                         return
-                    if ret2 and frame2 is not None:
-                        h, w = frame1.shape[:2]
-                        if w > h:  # landscape → stack top/bottom
-                            div_h = max(8, h // 48)
-                            div = np.zeros((div_h, w, 3), dtype=np.uint8)
-                            div[:, :] = [0, 200, 0]  # BGR green
-                            combined = np.concatenate([frame1, div, frame2], axis=0)
-                        else:  # portrait / square → side by side
-                            div_w = max(8, w // 48)
-                            div = np.zeros((h, div_w, 3), dtype=np.uint8)
-                            div[:, :] = [0, 200, 0]  # BGR green
-                            combined = np.concatenate([frame1, div, frame2], axis=1)
-                    else:
-                        combined = frame1
-                    img = Image.fromarray(cv2.cvtColor(combined, cv2.COLOR_BGR2RGB))
+                    img = Image.fromarray(rgb)
                     self._cached_pixmap = _pil_to_pixmap(img)
                 else:
                     # Load via PIL thumbnail — decodes only at display resolution.

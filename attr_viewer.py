@@ -364,6 +364,24 @@ class FieldWidget(QGroupBox):
             self._te.setPlaceholderText(placeholder or f"{label}…")
             self._te.setStyleSheet(
                 "background:#3a3a3a;color:#fff;border:1px solid #555;font-size:10pt;")
+            # Save-on-focus-out: when the user clicks away from the text
+            # field, immediately fire data_changed and a dedicated commit
+            # signal so the parent saves *now* rather than after the
+            # debounce timer. Defends against navigation losing typed text.
+            _orig_focus_out = self._te.focusOutEvent
+            def _focus_out_save(ev, _self=self, _orig=_orig_focus_out):
+                _orig(ev)
+                # Find the AttrViewerWidget ancestor and emit data_changed
+                # so its _text_save_timer triggers and saves immediately.
+                try:
+                    p = _self.parent()
+                    while p is not None and not hasattr(p, "data_changed"):
+                        p = p.parent()
+                    if p is not None:
+                        p.data_changed.emit()
+                except Exception:
+                    pass
+            self._te.focusOutEvent = _focus_out_save
             vlay.addWidget(self._te)
 
         elif style in ("taglist", "boolean", "radio"):
@@ -389,7 +407,7 @@ class FieldWidget(QGroupBox):
                 grid.addWidget(btn, i // COLS, i % COLS)
             vlay.addLayout(grid)
 
-        elif style in ("1dig", "2dig", "3dig") and self._cfg:
+        elif style in ("1dig", "2dig", "3dig", "4dig") and self._cfg:
             # Coded field — one freq-sorted combo per sub-table, auto-detected by prefix
             self._coded_combos = []   # [(sub_key, QComboBox), ...]
             sub_tables = [(k, v) for k, v in self._cfg.items()
@@ -618,8 +636,15 @@ class FieldWidget(QGroupBox):
                             btn.setStyleSheet(_BTN_ON)
                             btn.blockSignals(False)
                             break
-        elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "id")):
-            val = next((k for k, _ in self.options if k in tags_set), "")
+        elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "4dig", "id")):
+            # Matrix value lives in entry[widget_key] (per-field, not in tags).
+            # Fall back to the legacy tag-based lookup if entry hasn't been
+            # migrated yet — preserves backwards-compat with old saves.
+            val = entry.get(self.key, "")
+            if val and not any(k == val for k, _ in self.options):
+                val = ""
+            if not val:
+                val = next((k for k, _ in self.options if k in tags_set), "")
             # For "combo" coded fields (O/R/K), also check the coded filename then cf_ entry
             if self.style == "combo" and not val:
                 _field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
@@ -697,7 +722,7 @@ class FieldWidget(QGroupBox):
                 else:
                     val = _parsed.get(self.key.lower(), "")
                 lbl.setText(val if val else "—")
-        elif self.style in ("1dig", "2dig", "3dig"):
+        elif self.style in ("1dig", "2dig", "3dig", "4dig"):
             # Resolve which key this field is stored under (e.g. section "H" → "hc")
             _field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
             # Prefer attrs_data (manual input), fall back to filename
@@ -749,7 +774,7 @@ class FieldWidget(QGroupBox):
             return ("tag", checked)
         elif self.style in ("taglist", "boolean"):
             return ("tags", {k for k, btn in getattr(self, "_btns", {}).items() if btn.isChecked()})
-        elif self.style in ("1dig", "2dig", "3dig"):
+        elif self.style in ("1dig", "2dig", "3dig", "4dig"):
             combos = getattr(self, "_coded_combos", [])
             hex_edit = getattr(self, "_hex_edit", None)
             field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
@@ -772,9 +797,13 @@ class FieldWidget(QGroupBox):
             val = cb.currentData() or "" if cb else ""
             field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
             return ("coded", field_key, val)
-        elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "id", "radio")):
+        elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "4dig", "id", "radio")):
             cb = getattr(self, "_cb", None)
-            return ("tag", cb.currentData() or "" if cb else "")
+            # Matrix selections write to entry[widget_key] (e.g. entry["ModelVideo"])
+            # NOT to entry["tags"] — tags namespace is shared across widgets so
+            # matrix codes (e.g. "05") were colliding between ModelVideo /
+            # ModelImage / X. Per-field storage avoids the ambiguity.
+            return ("matrix_field", self.key, cb.currentData() or "" if cb else "")
         elif self.style == "id" and self.key == "P":
             _pe = getattr(self, "_pid_edit", None)
             return ("text", "person_id", _pe.text().strip() if _pe else "")
@@ -1649,7 +1678,7 @@ class AttrViewerWidget(QWidget):
                     label = key
             if style == "text":
                 tmeta = dict(text_fields.get(key) or {})
-            elif style in ("1dig", "2dig", "3dig"):
+            elif style in ("1dig", "2dig", "3dig", "4dig"):
                 tmeta = {"__config__": cfg}
             else:
                 tmeta = None
@@ -1679,7 +1708,10 @@ class AttrViewerWidget(QWidget):
             if sz:
                 w.resize(sz[0], sz[1])
             w.show()
-            w.moved.connect(lambda k, nx, ny, conn=self.conn: save_position(conn, k, nx, ny))
+            # Don't save_position on every moved signal — that fires for
+            # programmatic moves (Qt layout, snap cascades) too, which over
+            # time drifts widgets in the DB. Only mouseReleaseEvent saves
+            # positions for user-driven drags (already handled in FieldWidget).
             # Wire soft-field changes to data_changed signal
             for _btn in getattr(w, "_btns", {}).values():
                 _btn.toggled.connect(lambda _checked, _w=w: self.data_changed.emit())
@@ -1775,8 +1807,12 @@ class AttrViewerWidget(QWidget):
 
         # Wire signals → connection propagation + canvas repaint
         for w in self.widgets:
-            w.moved.connect(lambda k, _x, _y: self._apply_connections_for(k))
-            w.resized.connect(lambda k: self._apply_connections_for(k))
+            # Coalesce many move/resize events within a single Qt tick into a
+            # single cascade — without this, a layout pass that touches N
+            # widgets fires N×N snap_child calls (each event runs the whole
+            # chain). _schedule_snap batches them and runs one cascade.
+            w.moved.connect(lambda k, _x, _y: self._schedule_snap(k))
+            w.resized.connect(lambda k: self._schedule_snap(k))
 
         # Defer a second snap pass until after Qt finishes laying out widgets —
         # initial _snap_chain runs before Qt resolves final tile sizes, which
@@ -1787,12 +1823,8 @@ class AttrViewerWidget(QWidget):
                 self._apply_connections_for(rk)
         QTimer.singleShot(0, _final_snap)
 
-        # Expand canvas to fit all placed tiles (saved positions may exceed 1000px default)
-        if self.widgets:
-            bottom = max(w.y() + w.height() for w in self.widgets)
-            right  = max(w.x() + w.width()  for w in self.widgets)
-            self.canvas.setMinimumHeight(max(1000, bottom + 40))
-            self.canvas.setMinimumWidth(max(1400, right + 40))
+        # Size the canvas exactly to fit current visible tiles + small margin.
+        self._fit_canvas_to_widgets()
 
     # ── Undo ─────────────────────────────────────────────────────────────────
 
@@ -1880,7 +1912,52 @@ class AttrViewerWidget(QWidget):
             cw.move(new_x, new_y)
         finally:
             cw._snapping = False
-        save_position(self.conn, child_key, new_x, new_y)
+        # Don't persist — child position is fully derived from connections, so
+        # _snap_chain recomputes it on next load. Skipping the SQLite commit
+        # here saves ~5ms per snap (30 snaps × 5ms = 150ms per cascade).
+
+    def _schedule_snap(self, key):
+        """Add `key` to the pending snap-cascade set and schedule a single
+        flush on the next event loop tick. Coalesces many move/resize events
+        from the same layout pass into one cascade with a shared visited set,
+        avoiding the N² explosion of redundant snap_child calls."""
+        if not hasattr(self, "_pending_snap_keys"):
+            self._pending_snap_keys = set()
+            self._pending_snap_scheduled = False
+        self._pending_snap_keys.add(key)
+        if not self._pending_snap_scheduled:
+            self._pending_snap_scheduled = True
+            QTimer.singleShot(0, self._flush_snap)
+
+    def _flush_snap(self):
+        keys = self._pending_snap_keys
+        self._pending_snap_keys = set()
+        self._pending_snap_scheduled = False
+        if not keys:
+            return
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"flush_snap keys={sorted(keys)}")
+        except Exception:
+            pass
+        # Single shared visited set: any key already touched by an earlier
+        # cascade in this batch won't be processed again.
+        visited = set()
+        for k in keys:
+            self._apply_connections_for(k, visited)
+        # Tighten canvas size to the new tile bounds (no leftover empty area).
+        self._fit_canvas_to_widgets()
+
+    def _fit_canvas_to_widgets(self):
+        """Resize the canvas to exactly contain visible tiles plus a small
+        margin. Prevents the canvas from staying tall after widgets move up,
+        and grows it when widgets move down/right."""
+        visible = [w for w in self.widgets if w.isVisible()]
+        if not visible:
+            return
+        bottom = max(w.y() + w.height() for w in visible)
+        right  = max(w.x() + w.width()  for w in visible)
+        self.canvas.setFixedSize(max(right + 40, 200), max(bottom + 40, 200))
 
     def _apply_connections_for(self, key, _visited=None):
         """Reposition all boxes connected as child to `key` (parent moved/resized)."""
@@ -2142,12 +2219,18 @@ class AttrViewerWidget(QWidget):
 
     def collect_soft_data(self):
         """Collect current canvas widget values.
-        Returns (extra_tags: set, text_dict: {db_key: str}, coded_dict: {field_key: val}).
-        coded_dict holds O/R/K-style combo values that live in the coded filename.
+        Returns (extra_tags, text_dict, coded_dict, matrix_dict).
+        - extra_tags : set of tag keys (taglist/boolean/radio)
+        - text_dict  : {db_key: str} for text fields
+        - coded_dict : {field_key: val} for O/R/K-style combos
+        - matrix_dict: {widget_key: val} for matrix widgets — written to
+                        entry[widget_key] so codes don't share the tags namespace
+                        across matrix groups.
         """
-        extra_tags = set()
-        text_dict  = {}
-        coded_dict = {}
+        extra_tags  = set()
+        text_dict   = {}
+        coded_dict  = {}
+        matrix_dict = {}
         for w in self.widgets:
             result = w.collect_soft()
             if result is None:
@@ -2160,7 +2243,10 @@ class AttrViewerWidget(QWidget):
                 text_dict[result[1]] = result[2]
             elif result[0] == "coded" and result[2]:
                 coded_dict[result[1]] = result[2]
-        return extra_tags, text_dict, coded_dict
+            elif result[0] == "matrix_field":
+                # Always include — empty value means "cleared selection"
+                matrix_dict[result[1]] = result[2]
+        return extra_tags, text_dict, coded_dict, matrix_dict
 
     def refresh_language(self):
         """Re-populate all combo labels and tile titles after a language change."""

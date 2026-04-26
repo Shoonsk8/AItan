@@ -459,7 +459,7 @@ class _DbMixin:
                     # ── Step 2: CLIP auto-detect attributes (always-on for FIELD_DEFS fields) ─────
                     self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "attrs")))
                     try:
-                        _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg"}
+                        _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg", "cl"}
                         clip_updates = attrs_mod.auto_detect_clip_attrs(
                             emb, attrs_data.get(p, {}), allowed_fields=_clip_fields)
                         if clip_updates:

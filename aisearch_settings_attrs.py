@@ -19,7 +19,7 @@ class _AttrsMixin:
             sep.setStyleSheet("background-color: #555;")
             return sep
 
-        from attribute_manager import AttributeManager, FIELD_DEFS, _STYLE_PAD as _WSPAD
+        from attribute_manager import AttributeManager, FIELD_DEFS, _STYLE_PAD as _WSPAD, is_blue_prefix
 
         tab_attrs = QWidget()
         al = QVBoxLayout(tab_attrs)
@@ -175,6 +175,7 @@ class _AttrsMixin:
         for _s, _ln in [("1dig", _t("1-digit / 1桁")),
                         ("2dig", _t("2-digit independent / 2桁独立")),
                         ("3dig", _t("3-digit independent / 3桁独立")),
+                        ("4dig", _t("4-digit independent / 4桁独立")),
                         ("matrix", _t("16×16 matrix / 16×16マトリックス")),
                         ("taglist", _t("Tag List  (key · label) / タグリスト（キー・ラベル）")),
                         ("radio",   _t("Radio  (single-select tag list) / ラジオ（単一選択）")),
@@ -219,6 +220,7 @@ class _AttrsMixin:
             "1dig":    "1-digit",
             "2dig":    "2-digit independent",
             "3dig":    "3-digit independent",
+            "4dig":    "4-digit independent",
             "matrix":  "16×16 matrix",
             "id":      "ID",
             "taglist": "Tag List",
@@ -236,6 +238,8 @@ class _AttrsMixin:
             "2dig":   [("2nd digit",  "digit_2nd",  None), ("1st digit", "digit_1st", None)],
             "3dig":   [("3rd digit",  "digit_3rd",  None), ("2nd digit", "digit_2nd", None),
                        ("1st digit",  "digit_1st",  None)],
+            "4dig":   [("4th digit",  "digit_4th",  None), ("3rd digit", "digit_3rd", None),
+                       ("2nd digit",  "digit_2nd",  None), ("1st digit", "digit_1st", None)],
             "matrix": [("Expression", "expression", None)],
         }
 
@@ -262,7 +266,7 @@ class _AttrsMixin:
             grp._del_btn.clicked.connect(_on_del_group)
             return grp
 
-        _BASIC_STYLES = {"1dig", "2dig", "3dig", "matrix", "id"}
+        _BASIC_STYLES = {"1dig", "2dig", "3dig", "4dig", "matrix", "id"}
         # Map coded-field prefix → human label (from CODED_FIELDS)
         _CODED_LABELS = {letter: label
                          for letter, label, _ in _am_ref._DEFAULT_CODED_FIELDS}
@@ -293,15 +297,10 @@ class _AttrsMixin:
             self._attr_ws_loaded.add(prefix)
             self._attr_section_styles[prefix] = style
             pad = _WSPAD.get(style, 2)
-            # Built-in sections (anything in FIELD_DEFS) → blue; user tables → yellow
-            # Exception: if user has saved their own data for a coded-dig column's tag group → yellow
-            _is_builtin = prefix in FIELD_DEFS
-            if _is_builtin and style in ("1dig", "2dig", "3dig", "id") and _traw:
-                _fd_cols = FIELD_DEFS.get(prefix, (None, []))[1]
-                _has_user_col_data = any(_traw.get(tg) for _, _, tg in _fd_cols if tg)
-                if _has_user_col_data:
-                    _is_builtin = False
-            _sec_color = "#6ea6f0" if (_is_builtin or readonly) else "#f0c040"
+            # Color rule (single source of truth: attribute_manager.is_blue_prefix):
+            #   blue   = label values are locked (cannot change)
+            #   yellow = user can edit / add / remove values
+            _sec_color = "#6ea6f0" if (is_blue_prefix(prefix) or readonly) else "#f0c040"
 
             def _add_to_target(widget):
                 if group:
@@ -969,7 +968,7 @@ class _AttrsMixin:
             if _cpfx in FIELD_DEFS:
                 continue
             _csty = self._attr_section_styles.get(_cpfx, "")
-            if _csty not in ("1dig", "2dig", "3dig"):
+            if _csty not in ("1dig", "2dig", "3dig", "4dig"):
                 continue
             _col_defs_pfx = _custom_col_defs.get(_cpfx, [])
             if not _col_defs_pfx:
@@ -1080,7 +1079,7 @@ class _AttrsMixin:
             if pfx in FIELD_DEFS:
                 continue
             sty = self._attr_section_styles.get(pfx, "")
-            if sty not in ("1dig", "2dig", "3dig"):
+            if sty not in ("1dig", "2dig", "3dig", "4dig"):
                 continue
             # Read col defs from the existing JSON (cols aren't editable via UI yet)
             if pfx in _existing_col_defs:

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                               QMessageBox, QDialog, QCheckBox, QApplication,
                               QLineEdit, QSpinBox, QProgressBar, QComboBox, QTextEdit,
                               QGridLayout)
-from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent
+from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent, pyqtSignal
 from PyQt6.QtGui import QPixmap, QShortcut, QKeySequence, QIcon, QCursor, QDrag, QColor, QFont
 
 from sentence_transformers import util as st_util
@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.981"
+VERSION = "1.99"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -77,12 +77,74 @@ def _url_drop_handler(event, callback):
             break
     event.accept()
 
+class _ThresholdCombo(QComboBox):
+    """QComboBox of a few discrete dup-similarity thresholds, with a SpinBox-
+    compatible API (value/setValue/valueChanged) so existing callers don't
+    need to know the underlying widget changed."""
+    valueChanged = pyqtSignal(int)
+
+    _VALUES = [100, 99, 95, 90, 80, 70]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.wheelEvent = lambda e: e.ignore()
+        for v in self._VALUES:
+            self.addItem(f"{v}%", v)
+        self.currentIndexChanged.connect(
+            lambda _: self.valueChanged.emit(self.value()))
+
+    def value(self) -> int:
+        d = self.currentData()
+        return int(d) if d is not None else self._VALUES[0]
+
+    def setValue(self, v: int):
+        try:
+            v = int(v)
+        except Exception:
+            return
+        # snap to the nearest allowed value
+        v = min(self._VALUES, key=lambda x: abs(x - v))
+        idx = self._VALUES.index(v)
+        if idx != self.currentIndex():
+            self.setCurrentIndex(idx)
+
+
 class DropZoneLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(_t("DROP IMAGE / 画像をドロップ"), parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Allow the label to shrink/grow with its container; without this the
+        # pixmap's size drives sizeHint and creates a layout feedback loop.
+        from PyQt6.QtWidgets import QSizePolicy as _QSP
+        self.setSizePolicy(_QSP.Policy.Ignored, _QSP.Policy.Ignored)
+        self.setMinimumSize(1, 1)
+        self._raw_pixmap = None   # full-resolution source; rescaled on resize
         self._drop_callback = None
+
+    def setPixmap(self, px):
+        # Keep the original around so we can rescale to current size on resize
+        # without losing quality and without triggering layout feedback.
+        from PyQt6.QtGui import QPixmap as _QPx
+        if isinstance(px, _QPx) and not px.isNull():
+            self._raw_pixmap = px
+            self._render_scaled()
+        else:
+            self._raw_pixmap = None
+            super().setPixmap(_QPx())
+
+    def _render_scaled(self):
+        if self._raw_pixmap is None or self._raw_pixmap.isNull():
+            return
+        w, h = max(self.width(), 1), max(self.height(), 1)
+        scaled = self._raw_pixmap.scaled(w, h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+        super().setPixmap(scaled)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._render_scaled()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls(): event.accept()
@@ -355,41 +417,51 @@ class AISearchApp(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Header
+        # Header — 4 horizontal sections in a QSplitter so each is resizable.
+        from PyQt6.QtWidgets import QSplitter as _QSplitter
         self.header = QFrame()
-        self.header.setMinimumHeight(380)
         h_layout = QHBoxLayout(self.header)
-        h_layout.setContentsMargins(15, 15, 15, 15)
+        h_layout.setContentsMargins(15, 10, 15, 10)
+        self._header_splitter = _QSplitter(Qt.Orientation.Horizontal)
+        self._header_splitter.setChildrenCollapsible(False)
+        self._header_splitter.setHandleWidth(6)
+        h_layout.addWidget(self._header_splitter)
 
-        # Thumbnail — DropZoneFrame so border-area drops also work on Linux/xcb
+        # Section 1 — Primary thumbnail (drop zone for the search query)
+        # Section 1 — combined thumbnail area. Holds the drop-target label
+        # ("DROP IMAGE") AND a dynamic grid for showing multiple selected
+        # thumbnails (dup pair, search top+selected, dup grid, etc.).
+        from PyQt6.QtWidgets import QGridLayout as _QGrid
         thumb_outer = DropZoneFrame()
-        thumb_outer.setFixedSize(350, 350)
-        thumb_layout = QVBoxLayout(thumb_outer)
+        thumb_outer.setMinimumSize(150, 150)
+        thumb_layout = _QGrid(thumb_outer)
         thumb_layout.setContentsMargins(0, 0, 0, 0)
+        thumb_layout.setSpacing(2)
         self.drop_zone = DropZoneLabel()
         self.drop_zone._drop_callback = self.on_drop
         thumb_outer._drop_callback     = self.on_drop
-        thumb_layout.addWidget(self.drop_zone)
+        thumb_layout.addWidget(self.drop_zone, 0, 0)
         self.thumb_outer = thumb_outer
-        h_layout.addWidget(thumb_outer)
+        self._strip_layout = thumb_layout
+        self._strip_cells  = []
+        self._header_splitter.addWidget(thumb_outer)
 
         # Info panel
         self.info_widget = QWidget()
         info_layout = QVBoxLayout(self.info_widget)
-        info_layout.setContentsMargins(20, 0, 0, 0)
+        info_layout.setContentsMargins(15, 0, 15, 0)
 
+        # Section 4 — Settings + logo (built later after info section).
+        # Construct the widgets here, place into section 4 below.
         self.btn_settings = QPushButton(_t("⚙ SETTINGS / ⚙ 設定"))
         self.btn_settings.setStyleSheet(
             "background-color: #6c757d; color: white; font-weight: bold; padding: 6px 12px;")
         self.btn_settings.clicked.connect(self._open_settings)
-        info_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # Logo — under the settings button, right-aligned
         self._lbl_logo = QLabel()
         self._lbl_logo.setFixedSize(160, 160)
         self._lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_logo.setStyleSheet("background: transparent;")
-        info_layout.addWidget(self._lbl_logo, alignment=Qt.AlignmentFlag.AlignRight)
         # Load logo once (PNG with transparency — no dark/light swap needed)
         _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aisearch_logo.png")
         if os.path.exists(_logo_path):
@@ -398,6 +470,9 @@ class AISearchApp(QMainWindow):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
             self._lbl_logo.setPixmap(_px)
+        # Stub _reposition_logo so older code that calls it doesn't crash
+        # (logo is now in its own section, no overlay positioning needed).
+        self._reposition_logo = lambda: None
 
         self.lbl_proj_hdr = QLabel(_t("PROJECT: / プロジェクト："))
         self.lbl_proj_hdr.setStyleSheet("color: #00ff00; font-weight: bold;")
@@ -442,17 +517,6 @@ class AISearchApp(QMainWindow):
         self.btn_browse.clicked.connect(lambda: self._enter_browse_mode())
         mode_col.addWidget(self.btn_browse)
 
-        self._btn_back = QPushButton(_t("⏮ Back / ⏮ 戻る"))
-        self._btn_back.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
-        self._btn_back.setStyleSheet(
-            "QPushButton { background-color: #4a4a6a; color: white; font-weight: bold; "
-            "padding: 6px 10px; border: 2px solid #6a6a9a; }"
-            "QPushButton:hover { background-color: #5a5a8a; }"
-            "QPushButton:pressed { background-color: #2a2a4a; }"
-            "QPushButton:disabled { background-color: #2a2a2a; color: #555; border-color: #333; }")
-        self._btn_back.clicked.connect(self._go_back)
-        mode_col.addWidget(self._btn_back)
-
         mode_and_dup.addLayout(mode_col)
 
         # Dup-specific controls (hidden unless in dup mode)
@@ -479,11 +543,8 @@ class AISearchApp(QMainWindow):
         # Row 2: Threshold | status
         dup_row2 = QHBoxLayout()
         dup_row2.addWidget(QLabel(_t("Threshold: / 閾値：")))
-        self.spin_threshold = QSpinBox()
-        self.spin_threshold.wheelEvent = lambda e: e.ignore()
-        self.spin_threshold.setRange(70, 100)
+        self.spin_threshold = _ThresholdCombo()
         self.spin_threshold.setValue(self.config.get("dup_threshold", 95))
-        self.spin_threshold.setSuffix("%")
         self.spin_threshold.setFixedWidth(70)
         self.spin_threshold.setToolTip(_t("Higher = only near-exact duplicates\nLower = similar images too / 高い＝ほぼ完全一致のみ\n低い＝類似画像も含む"))
         self.spin_threshold.valueChanged.connect(self._on_threshold_changed)
@@ -499,15 +560,30 @@ class AISearchApp(QMainWindow):
 
         # Row 3: Scan | Hide confirmed
         dup_row3 = QHBoxLayout()
-        btn_scan = QPushButton(_t("⟳ Scan / ⟳ スキャン"))
-        btn_scan.setToolTip(_t("Force rescan (clear cache) / 強制再スキャン（キャッシュ消去）"))
-        btn_scan.clicked.connect(self._force_rescan)
-        btn_scan.setStyleSheet(
+        self.btn_scan = QPushButton(_t("⟳ Scan / ⟳ スキャン"))
+        self.btn_scan.setToolTip(_t("Force rescan (clear cache) / 強制再スキャン（キャッシュ消去）"))
+        self.btn_scan.clicked.connect(self._force_rescan)
+        self.btn_scan.setStyleSheet(
             "QPushButton { background-color: #6f42c1; color: white; font-weight: bold; "
             "padding: 4px 14px; border: 2px solid #9b6dff; border-radius: 3px; }"
             "QPushButton:hover { background-color: #9b6dff; border-color: white; }"
             "QPushButton:pressed { background-color: #4a2a8a; }")
-        dup_row3.addWidget(btn_scan)
+        dup_row3.addWidget(self.btn_scan)
+        # Resume + Rescan buttons — only visible after Stop has paused a scan.
+        self.btn_dup_resume = QPushButton(_t("▶ Resume / ▶ 再開"))
+        self.btn_dup_resume.setStyleSheet(
+            "QPushButton { background-color: #2e7a2e; color: white; font-weight: bold; "
+            "padding: 4px 14px; border: 2px solid #5fbb5f; border-radius: 3px; }"
+            "QPushButton:hover { background-color: #3d8d3d; border-color: white; }")
+        self.btn_dup_resume.hide()
+        dup_row3.addWidget(self.btn_dup_resume)
+        self.btn_dup_rescan = QPushButton(_t("✕ Cancel / ✕ 中止"))
+        self.btn_dup_rescan.setStyleSheet(
+            "QPushButton { background-color: #c14242; color: white; font-weight: bold; "
+            "padding: 4px 14px; border: 2px solid #ff6b6b; border-radius: 3px; }"
+            "QPushButton:hover { background-color: #d65a5a; border-color: white; }")
+        self.btn_dup_rescan.hide()
+        dup_row3.addWidget(self.btn_dup_rescan)
         self.btn_hide_confirmed = QPushButton(_t("👁 Hide confirmed / 👁 確認済を隠す"))
         self.btn_hide_confirmed.setCheckable(True)
         self.btn_hide_confirmed.setToolTip(_t("Hide files already confirmed as variants/different / バリアント・異なると確認済みのファイルを隠す"))
@@ -530,16 +606,23 @@ class AISearchApp(QMainWindow):
                 _item.widget().setMinimumWidth(0)
         info_layout.addLayout(mode_and_dup)
 
-        # Search progress bar (hidden by default)
+        # Search progress + status: created here but added to main_layout
+        # later (between the splitter and the table) so they're always
+        # visible regardless of section sizing.
+        self.search_status_label = QLabel("")
+        self.search_status_label.setStyleSheet(
+            "color: #4a90d9; font-weight: bold; font-size: 10pt; padding: 2px 4px;")
+        self.search_status_label.hide()
+
         self.search_progress = QProgressBar()
         self.search_progress.setRange(0, 0)   # indeterminate animation while searching
-        self.search_progress.setFixedHeight(4)
+        self.search_progress.setFixedHeight(14)
         self.search_progress.setTextVisible(False)
         self.search_progress.setStyleSheet(
-            "QProgressBar { border: none; background: transparent; }"
+            "QProgressBar { border: 1px solid #4a90d9; border-radius: 2px; "
+            "  background: #1a1a1a; }"
             "QProgressBar::chunk { background: #4a90d9; }")
         self.search_progress.hide()
-        info_layout.addWidget(self.search_progress)
 
         undo_row = QHBoxLayout()
         self.btn_undo = QPushButton(_t("↩ Undo / ↩ 元に戻す"))
@@ -563,9 +646,90 @@ class AISearchApp(QMainWindow):
 
         info_layout.addStretch()
         self.info_widget.setMinimumWidth(0)
-        h_layout.addWidget(self.info_widget, stretch=1)
+        self.info_widget.setMinimumHeight(0)
+        from PyQt6.QtWidgets import QSizePolicy as _QSizePolicy
+        self.info_widget.setSizePolicy(_QSizePolicy.Policy.Preferred,
+                                       _QSizePolicy.Policy.Ignored)
+        self.header.setMinimumHeight(0)
+        self.header.setSizePolicy(_QSizePolicy.Policy.Preferred,
+                                  _QSizePolicy.Policy.Ignored)
+        # Section 3 — info_widget (PROJECT info + mode buttons + Undo)
+        self._header_splitter.addWidget(self.info_widget)
 
-        main_layout.addWidget(self.header)
+        # Section 4 — settings button + logo + "disable preview window" checkbox
+        _section4 = QWidget()
+        _section4.setMinimumWidth(120)
+        _s4_layout = QVBoxLayout(_section4)
+        _s4_layout.setContentsMargins(0, 0, 0, 0)
+        _s4_layout.setSpacing(4)
+        _s4_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
+        _s4_layout.addWidget(self._lbl_logo, alignment=Qt.AlignmentFlag.AlignRight)
+        self._chk_disable_preview = QCheckBox(_t("Disable preview / プレビュー無効"))
+        self._chk_disable_preview.setToolTip(_t(
+            "Don't open the preview window when selecting rows / 行選択時にプレビューウィンドウを開かない"))
+        self._chk_disable_preview.setChecked(self.config.get("disable_preview", False))
+        def _on_disable_preview_toggle(v):
+            self.config["disable_preview"] = bool(v)
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._chk_disable_preview.toggled.connect(_on_disable_preview_toggle)
+        _s4_layout.addWidget(self._chk_disable_preview, alignment=Qt.AlignmentFlag.AlignRight)
+        _s4_layout.addStretch()
+        self._header_splitter.addWidget(_section4)
+
+        # Restore saved sizes if the user has dragged before, else default.
+        # 3 sections: [thumb area, info, settings].
+        def _apply_header_sizes():
+            saved = self.config.get("header_splitter_sizes")
+            if saved and len(saved) == self._header_splitter.count():
+                self._header_splitter.setSizes(saved)
+            else:
+                # Default: thumb area gets the widest share
+                self._header_splitter.setSizes([700, 400, 200])
+        QTimer.singleShot(0, _apply_header_sizes)
+        # Persist sizes whenever the user drags a divider
+        def _save_header_sizes(_p, _i):
+            self.config["header_splitter_sizes"] = self._header_splitter.sizes()
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._header_splitter.splitterMoved.connect(_save_header_sizes)
+
+        # Wrap header + table in a vertical splitter so the user can drag the
+        # divider to resize either section.
+        from PyQt6.QtWidgets import QSplitter
+        self._main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.setHandleWidth(6)
+        self._main_splitter.addWidget(self.header)
+        # Splitter only — search/dup progress is added INSIDE the splitter's
+        # table section below so it sits at the table border instead of pushing
+        # everything down from the top.
+        main_layout.addWidget(self._main_splitter, stretch=1)
+
+        # Debug log panel — hidden by default, toggle with Ctrl+Shift+D.
+        # Mirrors stderr log output so you can monitor background workers,
+        # snap cascades, etc. without keeping the terminal visible.
+        from PyQt6.QtWidgets import QPlainTextEdit
+        self._debug_panel = QPlainTextEdit()
+        self._debug_panel.setReadOnly(True)
+        self._debug_panel.setMaximumBlockCount(500)
+        self._debug_panel.setFixedHeight(180)
+        self._debug_panel.setStyleSheet(
+            "background:#0a0a0a; color:#9fbf9f; font-family:monospace; "
+            "font-size:8pt; border-top:1px solid #444;")
+        self._debug_panel.hide()
+        main_layout.addWidget(self._debug_panel)
+        try:
+            from aisearch_debug import set_panel as _set_dbg_panel
+            _set_dbg_panel(self._debug_panel)
+        except Exception:
+            pass
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        _dbg_sc = QShortcut(QKeySequence("Ctrl+Shift+D"), self)
+        _dbg_sc.activated.connect(
+            lambda: self._debug_panel.setVisible(not self._debug_panel.isVisible()))
+
+        # Thumbs are sized by the horizontal header splitter — user can drag
+        # to resize each section. No automatic sync is needed.
+        self._sync_thumb_size = lambda: None
 
 
         # Results table
@@ -581,7 +745,47 @@ class AISearchApp(QMainWindow):
         self.table.cellDoubleClicked.connect(lambda r, c: self.on_double_click())
         self.table.cellClicked.connect(self._on_group_cell_click)
         self.popup_menu = front_page.create_context_menu(self.table, self)
-        main_layout.addWidget(self.table)
+        # Wrap the table with the search/dup progress label + bar above it so
+        # they appear at the top edge of the list rather than pushing the
+        # whole header down.
+        _table_wrap = QWidget()
+        _table_wrap_lay = QVBoxLayout(_table_wrap)
+        _table_wrap_lay.setContentsMargins(0, 0, 0, 0)
+        _table_wrap_lay.setSpacing(0)
+        _table_wrap_lay.addWidget(self.search_status_label)
+        _table_wrap_lay.addWidget(self.search_progress)
+        _table_wrap_lay.addWidget(self.table, stretch=1)
+        self._main_splitter.addWidget(_table_wrap)
+        # Header gets just enough; table gets the rest by default
+        self._main_splitter.setStretchFactor(0, 0)
+        self._main_splitter.setStretchFactor(1, 1)
+        # Restore saved splitter position if available, else default the
+        # header to the project-to-undo span so the layout doesn't open with
+        # a giant thumb that covers the table.
+        def _apply_initial_splitter():
+            _ss = self.config.get("main_splitter_sizes")
+            if _ss and len(_ss) == 2:
+                self._main_splitter.setSizes(_ss)
+                return
+            # Default — header height = project-to-undo span (computed)
+            try:
+                from PyQt6.QtCore import QPoint as _QP2
+                top_in_iw = self.lbl_proj_hdr.mapTo(self.info_widget, _QP2(0, 0)).y()
+                _anchor = self.btn_browse  # bottom of mode column
+                bot_in_iw = _anchor.mapTo(self.info_widget, _QP2(0, _anchor.height())).y()
+                span = max(bot_in_iw - top_in_iw, 200)
+            except Exception:
+                span = 350
+            margins = h_layout.contentsMargins()
+            header_h = span + margins.top() + margins.bottom()
+            total_h = max(self._main_splitter.height(), header_h + 200)
+            self._main_splitter.setSizes([header_h, total_h - header_h])
+        QTimer.singleShot(0, _apply_initial_splitter)
+        # Persist splitter position whenever user drags it
+        def _save_splitter_sizes(_p, _i):
+            self.config["main_splitter_sizes"] = self._main_splitter.sizes()
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._main_splitter.splitterMoved.connect(_save_splitter_sizes)
         self._apply_colors()
         self.reload_fonts()
         self._apply_header_theme()
@@ -631,8 +835,6 @@ class AISearchApp(QMainWindow):
         self.btn_find_dups.setToolTip(_t("Find duplicates (Shift+click to force rescan) / 重複を検索（Shift+クリックで強制再スキャン）"))
         self.btn_browse.setText(_t("📂 Browse / 📂 閲覧"))
         self.btn_browse.setToolTip(_t("Browse folder contents (ls mode) / フォルダ内容を閲覧（lsモード）"))
-        self._btn_back.setText(_t("⏮ Back / ⏮ 戻る"))
-        self._btn_back.setToolTip(_t("Go back to previously viewed file / 直前に表示したファイルに戻る"))
         # Dup controls
         if hasattr(self, '_btn_dup_import'):
             self._btn_dup_import.setText(_t("Import czkawka / czkawka取込"))
@@ -1479,6 +1681,9 @@ class AISearchApp(QMainWindow):
         self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(5)}
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._save_dup_results()
+        # Flush any pending debounced missing-file removals before exit
+        if getattr(self, '_missing_save_dirty', False):
+            self._flush_missing_removals()
         event.accept()
 
     def _open_settings(self, tab=0):
@@ -1503,6 +1708,31 @@ class AISearchApp(QMainWindow):
     def set_project(self, name):
         # Save current project's config before switching
         cfg.save_config(self.config, self.current_project)
+        # Cancel any running dup scan and reset its UI state — otherwise the
+        # "♊ Duplicates" button stays stuck on "Searching..." / "Hashing..."
+        # if the user switches mid-scan.
+        if getattr(self, "_search_running", False):
+            try: self._search_cancel[0] = True
+            except Exception: pass
+            self._search_running = False
+        self._dup_cancel = True
+        self._dup_paused = False
+        if hasattr(self, "_dup_poll_timer"):
+            self._dup_poll_timer.stop()
+        self.btn_find_dups.setText(_t("♊ Duplicates / ♊ 重複"))
+        self.btn_find_dups.setEnabled(True)
+        if hasattr(self, "btn_scan"):
+            try: self.btn_scan.clicked.disconnect()
+            except Exception: pass
+            self.btn_scan.clicked.connect(self._force_rescan)
+            self.btn_scan.setText(_t("⟳ Scan / ⟳ スキャン"))
+            self.btn_scan.show()
+        if hasattr(self, "spin_threshold"):
+            self.spin_threshold.setEnabled(True)   # un-hide if Stop hid it before switch
+        if hasattr(self, "btn_dup_resume"): self.btn_dup_resume.hide()
+        if hasattr(self, "btn_dup_rescan"): self.btn_dup_rescan.hide()
+        if hasattr(self, "search_status_label"): self.search_status_label.hide()
+        if hasattr(self, "search_progress"): self.search_progress.hide()
         # Ensure per-project filename rules file exists so auto_rename doesn't
         # bleed from the global fallback file into newly-created projects.
         # Copy the global default so the new project inherits existing rules.
@@ -1846,6 +2076,16 @@ class AISearchApp(QMainWindow):
             # extraction + MediaPipe pose/shot, which is cheap and useful.
             attrs_dirty = True
 
+            # One-shot capture of original watch-zone filename (with extension)
+            # into note — only if note is empty, so user-entered notes are
+            # never overwritten.
+            try:
+                _e = self.attrs_data.setdefault(path, {})
+                if not _e.get("note"):
+                    _e["note"] = os.path.basename(path)
+            except Exception:
+                pass
+
             if _auto_rename:
                 orig_stem = os.path.splitext(os.path.basename(path))[0]
                 pid = (self.attrs_data.get(path) or {}).get("person_id", "")
@@ -1956,12 +2196,40 @@ class AISearchApp(QMainWindow):
 
     # ── Duplicate finder ─────────────────────────────────────────────────────
 
+    def _update_header_layout_for_mode(self):
+        """3-column header — section 1 is the wide thumbnail area, sections 3
+        and 4 are info+settings. Section 2 has been removed entirely."""
+        if not hasattr(self, "thumb_outer"):
+            return
+        self.thumb_outer.setVisible(True)
+
     def _on_threshold_changed(self, v):
         self.config.update({"dup_threshold": v})
         cfg.save_config(self.config)
-        # In dup mode: auto-load cached results for the new threshold if available
-        if self.config.get("last_mode") == "dup" and os.path.exists(self._dup_file_path()):
-            self._load_dup_results(update_spinner=False)
+        self._update_header_layout_for_mode()
+        # In dup mode: only load the cache if its threshold matches the new
+        # spinner value. Otherwise clear the table and prompt for rescan —
+        # showing 99%-scan groups under a "100%" spinner label is misleading.
+        if self.config.get("last_mode") == "dup":
+            cached_thr = None
+            try:
+                if os.path.exists(self._dup_file_path()):
+                    with open(self._dup_file_path(), encoding="utf-8") as f:
+                        cached_thr = int(json.load(f).get("threshold", 0))
+            except Exception:
+                cached_thr = None
+            if cached_thr == v:
+                self._load_dup_results(update_spinner=False)
+            else:
+                # Clear stale display and tell the user
+                self.table.setRowCount(0)
+                self._dup_display_data = None
+                if cached_thr:
+                    self.lbl_dup_status.setText(_t(
+                        f"Cache is from {cached_thr}% — press ⟳ Scan for {v}% / "
+                        f"キャッシュは {cached_thr}% のもの — {v}% で⟳スキャンを押してください"))
+                else:
+                    self.lbl_dup_status.setText(_t("Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
         else:
             self._update_dup_status_label()
 
@@ -1988,6 +2256,55 @@ class AISearchApp(QMainWindow):
         if os.path.exists(f):
             os.remove(f)
         self._run_dup_scan()
+
+    def cleanup_legacy_resolution_tags(self):
+        """Remove legacy resolution tags ('sd', '1k', '2k', '4k') from all
+        entries in the current project. The R coded field replaces them."""
+        legacy = {"sd", "1k", "2k", "4k"}
+        if not self.attrs_data:
+            QMessageBox.information(self, _t("Cleanup / 整理"),
+                _t("No attrs loaded. / 属性が読み込まれていません。"))
+            return
+        affected = 0
+        for path, entry in self.attrs_data.items():
+            if not isinstance(entry, dict):
+                continue
+            tags = entry.get("tags", [])
+            new_tags = [t for t in tags if t not in legacy]
+            if len(new_tags) != len(tags):
+                entry["tags"] = new_tags
+                affected += 1
+        if affected:
+            attrs_mod.save(self.current_project, self.attrs_data)
+        QMessageBox.information(self, _t("Cleanup / 整理"),
+            _t(f"Removed legacy resolution tags from {affected} files / "
+               f"{affected}件のファイルから古い解像度タグを削除しました"))
+
+    def apply_path_rules_to_all(self):
+        """Re-apply path-scoped filename rules ('/' rules) to every file in
+        the current project. Useful after adding/changing a path rule for
+        files that were imported earlier."""
+        if not self.data or not self.data.get("paths"):
+            QMessageBox.information(self, _t("Apply Rules / ルール適用"),
+                _t("No files in project. / プロジェクトにファイルがありません。"))
+            return
+        path_rules = self.get_path_rules_cached()
+        if not path_rules:
+            QMessageBox.information(self, _t("Apply Rules / ルール適用"),
+                _t("No path-scoped (/) rules to apply. / 適用する '/' ルールがありません。"))
+            return
+        changed_count = 0
+        for p in list(self.data["paths"]):
+            try:
+                self.attrs_data, c = attrs_mod.apply_path_rules(
+                    self.attrs_data, p, self.current_project, _path_rules=path_rules)
+                if c: changed_count += 1
+            except Exception:
+                pass
+        if changed_count:
+            attrs_mod.save(self.current_project, self.attrs_data)
+        QMessageBox.information(self, _t("Apply Rules / ルール適用"),
+            _t(f"Updated {changed_count} files / {changed_count}件のファイルを更新しました"))
 
 
 
@@ -2086,21 +2403,156 @@ class AISearchApp(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, _t("Export Error / 書出エラー"), str(e))
 
-    def _find_duplicates_by_hash(self):
-        """100% mode: full disk hash scan of all files in base_dirs — like Czkawka."""
+    def _find_duplicates_by_hash(self, content_hash=False):
+        """100%/99% mode: full disk hash scan of all files in base_dirs.
+        content_hash=False (100%): byte-level MD5 — exact byte match.
+        content_hash=True  (99%): decode images and hash pixel data only,
+            ignoring embedded metadata (EXIF/AItan/etc.). Lets you re-find
+            visual duplicates after baking metadata into them. Videos still
+            use file-byte hashing."""
         if not self.base_dirs:
             QMessageBox.information(self, _t("Find Duplicates / 重複検索"), _t("No base directory set. / ベースディレクトリが設定されていません。"))
             return
         import hashlib
         from collections import defaultdict
 
-        self.btn_find_dups.setEnabled(False)
-        self.btn_find_dups.setText(_t("Hashing... / ハッシュ計算中..."))
+        # During scan: ⟳ Scan → ⏹ Stop.
+        # On Stop click: worker pauses, sends partial results so the user
+        # can see what's been found so far. Stop hides; ▶ Resume + ⟳ Rescan
+        # show so the user can continue from where they left off or restart.
+        self._dup_cancel = False
+        self._dup_paused = False
+        self._dup_show_partial = False
+        self._dup_cancelling_ui = False   # reset suppress flag for new scan
+        if hasattr(self, "btn_scan"):
+            try:
+                self.btn_scan.clicked.disconnect()
+            except Exception:
+                pass
+            def _stop_scan():
+                self._dup_paused = True
+                self._dup_show_partial = True   # worker will pause when it reaches a check
+                # Build partial groups RIGHT NOW from the shared hash_map —
+                # don't wait for worker to reach its next pause check.
+                partial = []
+                hm = getattr(self, "_dup_hash_map", None)
+                if hm is not None:
+                    for fpaths in hm.values():
+                        if len(fpaths) < 2:
+                            continue
+                        members = [{"path": p, "sim": 1.0} for p in fpaths]
+                        try:
+                            members.sort(key=lambda m: os.path.getsize(m["path"]), reverse=True)
+                        except Exception:
+                            pass
+                        partial.append(members)
+                    partial.sort(key=len, reverse=True)
+                if partial:
+                    total_files = sum(len(g) for g in partial)
+                    self._set_dup_result(f"{len(partial)} groups, {total_files} files (partial)",
+                                         int(self.spin_threshold.value()))
+                    self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
+                    self._collapsed_groups.clear()
+                    self._display_dup_from_data(partial)
+                    self._dup_display_data = partial
+                else:
+                    self.lbl_dup_status.setText(_t("Stopped — nothing found yet / 停止中 — まだ何も見つかっていません"))
+                self.btn_scan.hide()
+                if hasattr(self, "btn_dup_resume"):
+                    self.btn_dup_resume.show()
+                if hasattr(self, "btn_dup_rescan"):
+                    self.btn_dup_rescan.show()
+                # Keep the progress bar VISIBLE but FROZEN while paused so
+                # the user sees the scan is "held". Switch from indeterminate
+                # (range 0,0 = animation) to a fixed determinate state so
+                # there's no motion. Also override the in-row dup status text
+                # so it doesn't keep showing the last "Hashing… 50/2151" line.
+                if not (self._dup_display_data and len(self._dup_display_data) > 0):
+                    self.lbl_dup_status.setText(_t("⏸ Paused / ⏸ 一時停止"))
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.setText(_t("⏸ Paused / ⏸ 一時停止"))
+                    self.search_status_label.show()
+                if hasattr(self, "search_progress"):
+                    self.search_progress.setRange(0, 1)
+                    self.search_progress.setValue(1)
+                    self.search_progress.show()
+            self.btn_scan.clicked.connect(_stop_scan)
+            self.btn_scan.setText(_t("⏹ Stop / ⏹ 停止"))
+            if hasattr(self, "spin_threshold"):
+                self.spin_threshold.setEnabled(False)
+            self.btn_scan.show()
+        # Wire Resume: unpause worker, hide Resume/Rescan, show Stop again.
+        if hasattr(self, "btn_dup_resume"):
+            try:
+                self.btn_dup_resume.clicked.disconnect()
+            except Exception:
+                pass
+            def _resume_scan():
+                self._dup_paused = False
+                self.btn_dup_resume.hide()
+                if hasattr(self, "btn_dup_rescan"):
+                    self.btn_dup_rescan.hide()
+                self.btn_scan.show()
+                self.lbl_dup_status.setText(_t("Resuming… / 再開中…"))
+                # Update the global status label so it doesn't keep showing
+                # "⏸ Paused" while the bar starts moving again.
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.setText(_t("♊ Resuming… / ♊ 再開中…"))
+                    self.search_status_label.show()
+                # Restart indeterminate animation — Qt won't restart on its
+                # own after going from frozen (0,1) back to (0,0); hide/show
+                # cycle forces the bar to re-init the animation.
+                if hasattr(self, "search_progress"):
+                    self.search_progress.hide()
+                    self.search_progress.setRange(0, 0)
+                    self.search_progress.show()
+            self.btn_dup_resume.clicked.connect(_resume_scan)
+            self.btn_dup_resume.hide()
+        # Wire Cancel: terminate the paused worker and return to idle.
+        # Threshold spinner becomes editable so user can change it before
+        # starting a new scan.
+        if hasattr(self, "btn_dup_rescan"):
+            try:
+                self.btn_dup_rescan.clicked.disconnect()
+            except Exception:
+                pass
+            def _cancel_paused():
+                # Reset UI INSTANTLY on the main thread — don't wait for the
+                # worker to exit. Worker will exit cleanly in the background
+                # and _poll_dup_queue will harmlessly re-apply the same reset.
+                self._dup_cancel = True
+                self._dup_paused = False
+                self._dup_cancelling_ui = True   # block stale progress msgs
+                self.btn_dup_rescan.hide()
+                if hasattr(self, "btn_dup_resume"):
+                    self.btn_dup_resume.hide()
+                if hasattr(self, "btn_scan"):
+                    try:
+                        self.btn_scan.clicked.disconnect()
+                    except Exception:
+                        pass
+                    self.btn_scan.clicked.connect(self._force_rescan)
+                    self.btn_scan.setText(_t("⟳ Scan / ⟳ スキャン"))
+                    self.btn_scan.show()
+                if hasattr(self, "spin_threshold"):
+                    self.spin_threshold.setEnabled(True)
+                # Hide the global progress indicator and clear status text.
+                if hasattr(self, "search_progress"):
+                    self.search_progress.hide()
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.hide()
+                self.lbl_dup_status.setText("")
+            self.btn_dup_rescan.clicked.connect(_cancel_paused)
+            self.btn_dup_rescan.hide()
+        # Clear existing results immediately so the user sees a fresh slate.
+        self.table.setRowCount(0)
+        self._dup_display_data = None
         self._dup_result_summary = ""
         self.lbl_dup_status.setText("")
         self._dup_queue = queue.Queue()
         base_dirs = list(self.base_dirs)
         _media_exts = tuple(logic.EXT_IMG + logic.EXT_VID)
+        _IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.gif', '.avif')
 
         def _is_binary(p):
             try:
@@ -2117,10 +2569,23 @@ class AISearchApp(QMainWindow):
 
         def _worker():
             try:
+                import time as _wtime
                 # 1. Collect all media files grouped by size (skip zero-byte files)
+                self._dup_queue.put(("progress", _t("Scanning files… / ファイル走査中…")))
                 size_map = defaultdict(list)
+                _scanned = 0
+                def _check_pause_and_cancel():
+                    while self._dup_paused and not self._dup_cancel:
+                        _wtime.sleep(0.1)
+                    return self._dup_cancel
                 for base in base_dirs:
+                    if _check_pause_and_cancel():
+                        self._dup_queue.put(("hash_done", []))
+                        return
                     for root, _, files in os.walk(base):
+                        if _check_pause_and_cancel():
+                            self._dup_queue.put(("hash_done", []))
+                            return
                         for fname in files:
                             fpath = os.path.join(root, fname)
                             if not _is_media(fpath):
@@ -2129,10 +2594,18 @@ class AISearchApp(QMainWindow):
                                 sz = os.path.getsize(fpath)
                                 if sz > 0:
                                     size_map[sz].append(fpath)
+                                    _scanned += 1
+                                    if _scanned % 200 == 0:
+                                        if _check_pause_and_cancel():
+                                            self._dup_queue.put(("hash_done", []))
+                                            return
+                                        self._dup_queue.put(("progress",
+                                            _t(f"Scanning… {_scanned} files / 走査中… {_scanned}件")))
                             except OSError:
                                 pass
 
-                # 2. For same-size candidates, compute MD5 hash
+                # 2. Compute hash. content_hash mode decodes images and hashes
+                # pixel data only — metadata changes don't affect the hash.
                 def _md5(path):
                     h = hashlib.md5()
                     with open(path, 'rb') as f:
@@ -2140,17 +2613,74 @@ class AISearchApp(QMainWindow):
                             h.update(chunk)
                     return h.hexdigest()
 
-                hash_map = defaultdict(list)
-                for size, fpaths in size_map.items():
-                    if len(fpaths) < 2:
-                        continue
-                    for fpath in fpaths:
+                def _content_md5(path):
+                    if path.lower().endswith(_IMG_EXTS):
                         try:
-                            hash_map[(size, _md5(fpath))].append(fpath)
-                        except OSError:
+                            from PIL import Image
+                            with Image.open(path) as img:
+                                img.load()
+                                h = hashlib.md5()
+                                # mode+size first so 1024×1024 RGB ≠ 1024×1024 RGBA
+                                h.update(f"{img.mode}:{img.size}".encode())
+                                h.update(img.tobytes())
+                                return h.hexdigest()
+                        except Exception:
                             pass
+                    return _md5(path)   # videos / decode failures → fall back
+
+                _hash = _content_md5 if content_hash else _md5
+                # In content_hash mode, files of different sizes may still be
+                # pixel-identical (different metadata sizes). So hash ALL media
+                # files, not just same-size groups.
+                if content_hash:
+                    _to_hash = [(0, p) for fpaths in size_map.values() for p in fpaths]
+                else:
+                    _to_hash = [(s, p) for s, fpaths in size_map.items() if len(fpaths) >= 2 for p in fpaths]
+                _hash_total = len(_to_hash)
+                self._dup_queue.put(("progress",
+                    _t(f"Hashing {_hash_total} candidates… / {_hash_total}件をハッシュ化中…")))
+                import time as _time
+                # Store hash_map on self so main thread can build partial
+                # results instantly without waiting for the worker to reach
+                # a pause check.
+                self._dup_hash_map = defaultdict(list)
+                hash_map = self._dup_hash_map
+                def _build_partial_groups():
+                    partial = []
+                    for fpaths in hash_map.values():
+                        if len(fpaths) < 2:
+                            continue
+                        members = [{"path": p, "sim": 1.0} for p in fpaths]
+                        try:
+                            members.sort(key=lambda m: os.path.getsize(m["path"]), reverse=True)
+                        except Exception:
+                            pass
+                        partial.append(members)
+                    partial.sort(key=len, reverse=True)
+                    return partial
+                for _i, (size, fpath) in enumerate(_to_hash, 1):
+                    # Pause: block until resumed or cancelled. While paused,
+                    # if the UI has asked for partial results (Stop pressed),
+                    # emit them once.
+                    while self._dup_paused and not self._dup_cancel:
+                        if self._dup_show_partial:
+                            self._dup_show_partial = False
+                            self._dup_queue.put(("partial", _build_partial_groups()))
+                        _time.sleep(0.1)
+                    if self._dup_cancel:
+                        self._dup_queue.put(("hash_done", _build_partial_groups()))
+                        return
+                    try:
+                        key = _hash(fpath) if content_hash else (size, _hash(fpath))
+                        hash_map[key].append(fpath)
+                    except OSError:
+                        pass
+                    if _i % 50 == 0 or _i == _hash_total:
+                        self._dup_queue.put(("progress",
+                            _t(f"Hashing… {_i}/{_hash_total} / ハッシュ化… {_i}/{_hash_total}")))
 
                 # 3. Build groups — same hash = same bytes = duplicate regardless of extension
+                self._dup_queue.put(("progress", _t("Grouping… / グループ化中…")))
                 groups_data = []
                 for fpaths in hash_map.values():
                     if len(fpaths) < 2:
@@ -2180,14 +2710,29 @@ class AISearchApp(QMainWindow):
             self._load_dup_results(update_spinner=False)
         else:
             self.lbl_dup_status.setText(_t("Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
+        # Ensure the first thumb is populated even if no row is selected yet —
+        # show the top-of-list image so the section isn't blank.
+        if self.table.rowCount() > 0:
+            top_path = self.table.get_row_path(0)
+            if top_path and os.path.exists(top_path):
+                self._set_zone_image(self.drop_zone, top_path)
+        # Apply final layout based on current threshold (99 hides thumb 1)
+        self._update_header_layout_for_mode()
 
     def _run_dup_scan(self):
-        """Actually run the duplicate scan (called by ⟳ Scan button)."""
-
-        threshold = self.spin_threshold.value() / 100.0
-        if threshold >= 1.0:
-            self._find_duplicates_by_hash()
+        """Actually run the duplicate scan (called by ⟳ Scan button).
+        Threshold mapping:
+          100% → byte-level hash (exact match)
+          99%  → content hash (image pixel match, ignores metadata)
+          < 99% → CLIP similarity"""
+        pct = int(self.spin_threshold.value())
+        if pct >= 100:
+            self._find_duplicates_by_hash(content_hash=False)
             return
+        if pct == 99:
+            self._find_duplicates_by_hash(content_hash=True)
+            return
+        threshold = pct / 100.0
 
         if not self.data or not self.data.get("paths"):
             QMessageBox.information(self, _t("Find Duplicates / 重複検索"), _t("No database loaded. / データベースが読み込まれていません。"))
@@ -2203,6 +2748,88 @@ class AISearchApp(QMainWindow):
 
         self.btn_find_dups.setEnabled(False)
         self.btn_find_dups.setText(_t("Searching... / 検索中..."))
+        # Same pause/resume/cancel flow as hash-mode Stop.
+        self._dup_cancel = False
+        self._dup_paused = False
+        self._dup_cancelling_ui = False
+        if hasattr(self, "btn_scan"):
+            try:
+                self.btn_scan.clicked.disconnect()
+            except Exception:
+                pass
+            def _stop_scan():
+                self._dup_paused = True
+                self.btn_scan.hide()
+                if hasattr(self, "btn_dup_resume"):
+                    self.btn_dup_resume.show()
+                if hasattr(self, "btn_dup_rescan"):
+                    self.btn_dup_rescan.show()
+                # Freeze + label the bar like hash-mode pause does.
+                self.lbl_dup_status.setText(_t("⏸ Paused / ⏸ 一時停止"))
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.setText(_t("⏸ Paused / ⏸ 一時停止"))
+                    self.search_status_label.show()
+                if hasattr(self, "search_progress"):
+                    self.search_progress.setRange(0, 1)
+                    self.search_progress.setValue(1)
+                    self.search_progress.show()
+            self.btn_scan.clicked.connect(_stop_scan)
+            self.btn_scan.setText(_t("⏹ Stop / ⏹ 停止"))
+            if hasattr(self, "spin_threshold"):
+                self.spin_threshold.setEnabled(False)
+            self.btn_scan.show()
+        # Wire Resume — clear pause flag, restore animation, hide Resume/Cancel
+        if hasattr(self, "btn_dup_resume"):
+            try:
+                self.btn_dup_resume.clicked.disconnect()
+            except Exception:
+                pass
+            def _resume_clip():
+                self._dup_paused = False
+                self.btn_dup_resume.hide()
+                if hasattr(self, "btn_dup_rescan"):
+                    self.btn_dup_rescan.hide()
+                self.btn_scan.show()
+                self.lbl_dup_status.setText(_t("Resuming… / 再開中…"))
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.setText(_t("♊ Resuming… / ♊ 再開中…"))
+                    self.search_status_label.show()
+                if hasattr(self, "search_progress"):
+                    self.search_progress.hide()
+                    self.search_progress.setRange(0, 0)
+                    self.search_progress.show()
+            self.btn_dup_resume.clicked.connect(_resume_clip)
+            self.btn_dup_resume.hide()
+        # Wire Cancel — kill paused worker and return to idle
+        if hasattr(self, "btn_dup_rescan"):
+            try:
+                self.btn_dup_rescan.clicked.disconnect()
+            except Exception:
+                pass
+            def _cancel_clip():
+                self._dup_cancel = True
+                self._dup_paused = False
+                self._dup_cancelling_ui = True
+                self.btn_dup_rescan.hide()
+                if hasattr(self, "btn_dup_resume"):
+                    self.btn_dup_resume.hide()
+                if hasattr(self, "btn_scan"):
+                    try:
+                        self.btn_scan.clicked.disconnect()
+                    except Exception:
+                        pass
+                    self.btn_scan.clicked.connect(self._force_rescan)
+                    self.btn_scan.setText(_t("⟳ Scan / ⟳ スキャン"))
+                    self.btn_scan.show()
+                if hasattr(self, "spin_threshold"):
+                    self.spin_threshold.setEnabled(True)
+                if hasattr(self, "search_progress"):
+                    self.search_progress.hide()
+                if hasattr(self, "search_status_label"):
+                    self.search_status_label.hide()
+                self.lbl_dup_status.setText("")
+            self.btn_dup_rescan.clicked.connect(_cancel_clip)
+            self.btn_dup_rescan.hide()
         self.lbl_dup_status.setText("")
         self._dup_queue = queue.Queue()
 
@@ -2332,12 +2959,28 @@ class AISearchApp(QMainWindow):
                 q.put(("progress", f"Comparing pairs…  0%"))
                 _step = max(1, n // 20)
                 _last_pct = 0
+                import time as _ctime
                 for i in range(n):
+                    # Pause/cancel hooks so Stop responds inside this O(n²) loop
+                    while self._dup_paused and not self._dup_cancel:
+                        _ctime.sleep(0.1)
+                    if self._dup_cancel:
+                        q.put(("error", _t("Scan stopped by user / ユーザーが中止しました")))
+                        return
                     pct = int(i / n * 100)
                     if pct >= _last_pct + 5:
                         _last_pct = pct
                         q.put(("progress", f"Comparing pairs… {pct:3d}%"))
                     for j in range(i + 1, n):
+                        # Inner-loop pause/cancel check every 5000 iterations
+                        # so Stop responds even on huge n where one outer i
+                        # otherwise takes seconds.
+                        if (j & 0xFFF) == 0:
+                            while self._dup_paused and not self._dup_cancel:
+                                _ctime.sleep(0.1)
+                            if self._dup_cancel:
+                                q.put(("error", _t("Scan stopped by user / ユーザーが中止しました")))
+                                return
                         if sim[i][j].item() >= threshold:
                             if not _same_ext(i, j):
                                 continue
@@ -2394,12 +3037,59 @@ class AISearchApp(QMainWindow):
         except queue.Empty:
             return
         if msg == "progress":
+            # Suppress in-flight progress messages from the worker if user has
+            # paused (Stop) or is cancelling — otherwise they keep re-showing
+            # the bar/label after the main thread already hid it.
+            if getattr(self, "_dup_paused", False) or getattr(self, "_dup_cancelling_ui", False):
+                return
             self.lbl_dup_status.setText(payload)
+            self.search_status_label.setText(f"♊ {payload}")
+            self.search_status_label.show()
+            self.search_progress.show()
             return                        # keep polling
+        if msg == "partial":
+            # Render partial results from a paused worker without ending scan
+            groups_data = payload
+            total_files = sum(len(g) for g in groups_data)
+            if groups_data:
+                self._set_dup_result(f"{len(groups_data)} groups, {total_files} files (partial)",
+                                     int(self.spin_threshold.value()))
+                self.table.setHorizontalHeaderLabels([_t("Group / グループ"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス")])
+                self._collapsed_groups.clear()
+                self._display_dup_from_data(groups_data)
+                self._dup_display_data = groups_data
+            else:
+                self.lbl_dup_status.setText(_t("Stopped — nothing found yet / 停止中 — まだ何も見つかっていません"))
+            return                        # keep polling — worker still alive
         self._dup_poll_timer.stop()
-        self.btn_find_dups.setText("♊ Duplicates")
+        # btn_find_dups left untouched — no text change during scan to revert
+        # Hide Resume + Rescan (only visible while paused)
+        if hasattr(self, "btn_dup_resume"):
+            self.btn_dup_resume.hide()
+        if hasattr(self, "btn_dup_rescan"):
+            self.btn_dup_rescan.hide()
+        self._dup_paused = False
+        self._dup_cancelling_ui = False
+        # Restore Scan button: text, handler, AND visibility (Stop click hid it).
+        if hasattr(self, "btn_scan"):
+            try:
+                self.btn_scan.clicked.disconnect()
+            except Exception:
+                pass
+            self.btn_scan.clicked.connect(self._force_rescan)
+            self.btn_scan.setText(_t("⟳ Scan / ⟳ スキャン"))
+            self.btn_scan.show()
+        if hasattr(self, "spin_threshold"):
+            self.spin_threshold.setEnabled(True)
+        # Hide the global indicator when scan is done (or on error)
+        self.search_status_label.hide()
+        self.search_progress.hide()
         if msg == "error":
-            QMessageBox.critical(self, _t("Duplicate Finder / 重複検索"), payload)
+            # User-cancellation isn't a critical error — just clear status
+            if "Scan stopped by user" in payload or "中止" in payload:
+                self.lbl_dup_status.setText(payload)
+            else:
+                QMessageBox.critical(self, _t("Duplicate Finder / 重複検索"), payload)
             return
         if msg == "hash_done":
             groups_data = payload
@@ -2514,8 +3204,16 @@ class AISearchApp(QMainWindow):
         except Exception:
             return
         pct = data.get("threshold") or self.spin_threshold.value()
-        if update_spinner:
-            self.spin_threshold.setValue(pct)
+        # ALWAYS sync the spinner to the cached threshold — otherwise the
+        # spinner can show one value while the displayed groups are from a
+        # different scan threshold, leading to user confusion ("the spinner
+        # says 100% but these results clearly aren't byte-identical").
+        # If the user changes the spinner, they must press ⟳ Scan to refresh.
+        self.spin_threshold.blockSignals(True)
+        self.spin_threshold.setValue(int(pct))
+        self.spin_threshold.blockSignals(False)
+        # Apply the dup-99 vs other-mode header layout (hide thumb 1 if 99).
+        self._update_header_layout_for_mode()
         _media_exts = tuple(logic.EXT_IMG + logic.EXT_VID)
         def _is_media_path(entry):
             p = entry.get("path", "") if isinstance(entry, dict) else str(entry)
@@ -2893,7 +3591,14 @@ class AISearchApp(QMainWindow):
         self._update_mode_buttons("search")
         self.btn_find_dups.setEnabled(False)
         self.search_progress.show()
+        self.search_status_label.setText(_t("🔍 Analyzing image… / 🔍 画像を解析中…"))
+        self.search_status_label.show()
         self.statusBar().showMessage("Analyzing image…")
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"search start: {p}")
+        except Exception:
+            pass
 
         import threading, queue as _queue
         _q = _queue.Queue()
@@ -2982,6 +3687,7 @@ class AISearchApp(QMainWindow):
                 return
             if msg == "status":
                 self.statusBar().showMessage(payload)
+                self.search_status_label.setText(f"🔍 {payload}")
                 QTimer.singleShot(50, _poll)
                 return
             if msg == "error":
@@ -3032,10 +3738,16 @@ class AISearchApp(QMainWindow):
             QTimer.singleShot(50, lambda: self.table.setFocus())
 
     def _finish_search(self, emb, top, query_path):
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"search done: {query_path}")
+        except Exception:
+            pass
         if emb is not None:
             self.query_emb = emb
         self._search_running  = False
         self.search_progress.hide()
+        self.search_status_label.hide()
         self.statusBar().clearMessage()
         self.btn_find_dups.setEnabled(True)
         self._lock_preview = False
@@ -3061,6 +3773,8 @@ class AISearchApp(QMainWindow):
         """Return to search mode — search selected row, last query, or just reset."""
         if getattr(self, '_browse_dir', None):
             self._exit_browse_mode()
+        self.config["last_mode"] = "search"
+        self._update_header_layout_for_mode()
         # Prefer the currently selected file (useful when coming from dup/browse)
         path = None
         row = self._current_row()
@@ -3080,6 +3794,7 @@ class AISearchApp(QMainWindow):
             self._update_mode_buttons("search")
 
     def _enter_browse_mode(self, directory=None):
+        # Switching out of dup mode → restore section 1 visibility
         """Show all files in a directory (ls mode). directory=None uses selected row's folder."""
         if directory is None:
             row = self._current_row()
@@ -3103,6 +3818,7 @@ class AISearchApp(QMainWindow):
         self.config["last_mode"] = "browse"
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._update_mode_buttons("browse")
+        self._update_header_layout_for_mode()
 
         valid_exts = tuple(
             ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
@@ -3248,8 +3964,187 @@ class AISearchApp(QMainWindow):
             self.attrs_data, _ = attrs_mod.apply_path_rules(
                 self.attrs_data, path, self.current_project, _path_rules=_pr)
 
+        # Update the two thumbnails based on the current mode:
+        #   dup mode    → thumb1 = 1st of group, thumb2 = 2nd of group
+        #   search mode → thumb1 = top result (row 0), thumb2 = selected row
+        #   browse mode → thumb1 = selected row, thumb2 cleared
+        # In dup/search modes, a white border highlights whichever thumb
+        # corresponds to the currently selected row.
+        _mode = self.config.get("last_mode")
+        _is_dup = _mode == "dup" and self._dup_display_data
+        thumb1_path = thumb2_path = None
+        strip_paths = []   # rest of group members (3rd, 4th, ...) for filmstrip
+        # Build the full list of paths for the grid (drop_zone falls back to
+        # placeholder when empty; strip cells render the actual thumbnails).
+        all_paths = []
+        if _is_dup:
+            for grp in self._dup_display_data:
+                if grp and grp[0].get("path"):
+                    g_paths = [m["path"] for m in grp if os.path.exists(m["path"])]
+                    if path in g_paths:
+                        all_paths = g_paths
+                        break
+            if not all_paths and self.table.rowCount() > 0:
+                top = self.table.get_row_path(0)
+                if top: all_paths = [top]
+        elif _mode == "search" and self.table.rowCount() > 0:
+            top = self.table.get_row_path(0)
+            all_paths = [top, path] if top and path != top else [top or path]
+        elif _mode == "browse":
+            all_paths = [path]
+        # Strip cells render the entire path list (placeholder shown when empty)
+        self._update_filmstrip_cells(all_paths, selected_path=path)
+        # No outer rim (cells handle their own selection rim)
+        self._set_zone_selected(self.thumb_outer, False)
+
+        # Skip the preview window entirely if user disabled it (any mode).
+        if getattr(self, "_chk_disable_preview", None) and self._chk_disable_preview.isChecked():
+            self._refresh_inline_attrs(path)
+            return
+
         self.preview_handler.show(path)
         self._refresh_inline_attrs(path)
+
+    def _update_filmstrip_cells(self, paths, selected_path=None):
+        """Lay out dup-mode group cells (members beyond the second) in a
+        grid. Column count depends on the dup threshold:
+            threshold = 100 → 2 columns (pairs are the common case)
+            threshold < 100 → 4 columns (similarity matches usually have many)
+        Selected cell gets a 3px white border. Click jumps the table."""
+        # Choose grid column count by mode + threshold:
+        #   search mode → 2 cols (TOP | SELECTED, side-by-side wide view)
+        #   dup mode 100% → 2 cols (pair view)
+        #   dup mode  <99 → 4 cols (multi-member grid)
+        try:
+            thr = int(self.spin_threshold.value()) if hasattr(self, "spin_threshold") else 100
+        except Exception:
+            thr = 100
+        _mode = self.config.get("last_mode")
+        if _mode == "search":
+            cols = 2
+        else:
+            cols = 2 if thr >= 100 else 4
+        # Grow cells if needed
+        while len(self._strip_cells) < len(paths):
+            cell = DropZoneLabel()
+            cell._drop_callback = self.on_drop
+            cell.setMinimumWidth(40)
+            self._strip_cells.append(cell)
+        # Detach everything from the layout so we can re-add in order.
+        while self._strip_layout.count():
+            _it = self._strip_layout.takeAt(0)
+            _w = _it.widget() if _it else None
+            if _w is not None:
+                _w.setParent(self.thumb_outer)
+        # When there are paths to display, hide the "DROP IMAGE" placeholder
+        # and use strip cells. When empty, show the placeholder.
+        if paths:
+            self.drop_zone.hide()
+            for idx, cell in enumerate(self._strip_cells):
+                r, c = divmod(idx, cols)
+                self._strip_layout.addWidget(cell, r, c)
+        else:
+            # Idle — show the drop-target placeholder taking the whole area
+            self.drop_zone.show()
+            self._strip_layout.addWidget(self.drop_zone, 0, 0)
+        # Update visible cells
+        for i, cell in enumerate(self._strip_cells):
+            if i < len(paths):
+                p = paths[i]
+                # fast=True → first-frame only for filmstrip cells; spares
+                # the slow last-frame seek that pile up on video-heavy groups.
+                self._set_zone_image(cell, p, fast=True)
+                cell.setStyleSheet(
+                    "QLabel { border: 3px solid #9b6dff; }" if p == selected_path
+                    else "QLabel { border: none; }")
+                cell.show()
+                cell.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Single click: jump table row + open preview window
+                cell.mousePressEvent = lambda _e, _p=p: self._click_thumb(_p)
+                cell.mouseDoubleClickEvent = lambda _e, _p=p: self._click_thumb(_p)
+            else:
+                cell.hide()
+
+    def _jump_to_path(self, path):
+        """Select the table row whose path matches."""
+        for row in range(self.table.rowCount()):
+            if self.table.get_row_path(row) == path:
+                self._select_row(row)
+                break
+
+    def _click_thumb(self, path):
+        """Thumbnail cell clicked: select the row + force-open the preview
+        (overrides the 'Disable preview' checkbox — clicking a thumb is an
+        explicit request to inspect that file)."""
+        self._jump_to_path(path)
+        if path and os.path.exists(path):
+            self.preview_handler.show(path)
+            pw = getattr(self.preview_handler, "window", None)
+            if pw is not None:
+                pw.setWindowState(pw.windowState() & ~Qt.WindowState.WindowMinimized)
+                pw.show()
+                pw.raise_()
+                pw.activateWindow()
+
+    def _set_zone_selected(self, zone_frame, on: bool):
+        """Toggle a purple border around a thumbnail zone to show it matches
+        the currently selected row. Purple matches the dup-mode accent and
+        stands out better than white against bright/varied images."""
+        if zone_frame is None:
+            return
+        zone_frame.setStyleSheet(
+            "QFrame { border: 3px solid #9b6dff; }" if on
+            else "QFrame { border: none; }")
+
+    def _set_zone_image(self, zone, path, fast: bool = False):
+        """Load `path` as a thumbnail into the given drop-zone label.
+        fast=True → for video files, decode only the first frame (skips the
+        slow last-frame seek). Used for small filmstrip cells; the big
+        drop_zone keeps the combined first+last view.
+        Pass path=None to clear the zone."""
+        # Green outer rim for video files (mirrors the preview window)
+        _is_vid = bool(path) and path.lower().endswith(logic.EXT_VID)
+        if _is_vid:
+            zone.setStyleSheet(zone.styleSheet().rstrip("; ") +
+                               "; border: 4px solid #00ff00;")
+        else:
+            ss = zone.styleSheet()
+            if "border: 4px solid #00ff00" in ss:
+                zone.setStyleSheet(ss.replace("; border: 4px solid #00ff00;", ""))
+        if not path or not os.path.exists(path):
+            zone.setPixmap(QPixmap())
+            zone.setText("")
+            return
+        from PyQt6.QtGui import QImageReader
+        from PyQt6.QtCore import QSize as _QSize
+        _reader = QImageReader(path)
+        _reader.setAutoTransform(True)
+        _orig = _reader.size()
+        _MAX = 700
+        if _orig.isValid() and max(_orig.width(), _orig.height(), 1) > _MAX:
+            _sc = _MAX / max(_orig.width(), _orig.height())
+            _reader.setScaledSize(_QSize(max(1, int(_orig.width() * _sc)),
+                                         max(1, int(_orig.height() * _sc))))
+        _qimg = _reader.read()
+        px = QPixmap.fromImage(_qimg) if not _qimg.isNull() else QPixmap()
+        if px.isNull():
+            try:
+                from PyQt6.QtGui import QImage
+                import aisearch_logic as _lg
+                rgb = _lg.get_video_thumbnail_rgb(path, first_only=fast)
+                if rgb is not None:
+                    h, w, _ = rgb.shape
+                    qi = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+                    px = QPixmap.fromImage(qi)
+            except Exception:
+                pass
+        if px.isNull():
+            zone.setPixmap(QPixmap())
+            return
+        # The DropZoneLabel rescales its pixmap automatically on resize, so
+        # we just hand it the full-resolution image once.
+        zone.setPixmap(px)
+        zone.setText("")
 
     def get_path_rules_cached(self):
         """Return path-scoped filename rules, reloading only when the rules file changes."""
@@ -3263,22 +4158,32 @@ class AISearchApp(QMainWindow):
         if getattr(self, '_path_rules_cache_key', None) != key:
             fn_rules = attrs_mod.load_filename_rules(proj)
             self._path_rules_cache = [r for r in fn_rules
-                                      if r.get("field") and '/' in r.get("pattern", "")]
+                                      if (r.get("field") or r.get("tag_group"))
+                                      and '/' in r.get("pattern", "")]
             self._path_rules_cache_key = key
         return self._path_rules_cache
 
     def _remove_missing_file(self, row, path):
-        """Remove a file that no longer exists from the table, DB, and embeddings."""
-        # Remove from attrs DB
+        """Remove a file that no longer exists from the table, DB, and embeddings.
+        Disk saves are debounced via _flush_missing_removals so rapid scrolling
+        through many missing files doesn't freeze the UI on each one."""
+        # In-memory removal — fast
         self.attrs_data.pop(path, None)
-        attrs_mod.save(self.current_project, self.attrs_data)
-        # Remove from embeddings
         if self.data and "paths" in self.data and path in self.data["paths"]:
             idx  = self.data["paths"].index(path)
             keep = [i for i in range(len(self.data["paths"])) if i != idx]
             self.data["paths"]      = [self.data["paths"][i] for i in keep]
             self.data["embeddings"] = self.data["embeddings"][keep]
-            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+
+        # Schedule a debounced save (writes both JSON and the 60+MB .pt once)
+        if not getattr(self, '_missing_save_timer', None):
+            from PyQt6.QtCore import QTimer as _QT
+            self._missing_save_timer = _QT(self)
+            self._missing_save_timer.setSingleShot(True)
+            self._missing_save_timer.timeout.connect(self._flush_missing_removals)
+        self._missing_save_dirty = True
+        self._missing_save_timer.start(800)
+
         # Remove the row and select the next one
         was_query = (row == 0)
         self.table.removeRow(row)
@@ -3291,6 +4196,21 @@ class AISearchApp(QMainWindow):
             self.table.setFocus()
             if was_query:
                 self._rebase_to_row(new_row)
+
+    def _flush_missing_removals(self):
+        """Persist accumulated missing-file removals to disk in a single pass."""
+        if not getattr(self, '_missing_save_dirty', False):
+            return
+        self._missing_save_dirty = False
+        try:
+            attrs_mod.save(self.current_project, self.attrs_data)
+        except Exception:
+            pass
+        try:
+            torch.save(self.data,
+                       os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+        except Exception:
+            pass
 
     # ── Move / rename / delete ───────────────────────────────────────────────
 

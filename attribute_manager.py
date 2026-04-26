@@ -12,9 +12,9 @@ TAG_GROUPS_FILE = os.path.join(_DATA_DIR, "attrs_tags.json")   # same as TAGS_FI
 
 # ---------------------------------------------------------------------------
 # Per-prefix field definitions
-#   style: "2dig" | "3dig" | "1dig" | "matrix" | "id"
+#   style: "2dig" | "3dig" | "4dig" | "1dig" | "matrix" | "id"
 #   cols: list of (header_label, json_field_key, tag_group_key_or_None)
-#         columns ordered right-to-left (1st digit first, then 2nd, then 3rd)
+#         columns ordered right-to-left (1st digit first, then 2nd, 3rd, 4th)
 # ---------------------------------------------------------------------------
 FIELD_DEFS = {
     "E":  ("2dig",  [("Colors 1st",    "colors_1st",    "E_Color"),
@@ -30,6 +30,8 @@ FIELD_DEFS = {
     "CS": ("3dig",  [("Lighting 1st",  "lighting_1st",   "CS_Light"),
                      ("Angle 2nd",     "angle_2nd",       "CS_Angle"),
                      ("Shot 3rd",      "shot_3rd",        "CS_Shot")]),
+    # CL (Clothing) is user-customizable (renders yellow) — its columns live in
+    # __col_defs__ inside attrs_tags.json so users can edit the sub-tables.
     "X":  ("matrix",[("Expression",   "expression",      None)]),
     "Watermark":       ("radio",   []),
     "P":               ("id",      []),
@@ -49,7 +51,41 @@ FIELD_DEFS = {
 }
 
 # Style → zero-padding width
-_STYLE_PAD = {"1dig": 1, "2dig": 2, "3dig": 3, "matrix": 2, "id": 3}
+_STYLE_PAD = {"1dig": 1, "2dig": 2, "3dig": 3, "4dig": 4, "matrix": 2, "id": 3}
+
+# Color rule:
+#   blue   = label values are locked (cannot change)
+#   yellow = user can edit / add / remove values
+#
+# Explicit BLUE_PREFIXES list (rendered blue regardless of FIELD_DEFS membership).
+# Plus prefix("CLIP_") and FACE are always blue (inspect debug tiles).
+# Everything else is yellow.
+BLUE_PREFIXES = {
+    # Universal physical / composition
+    "E",   # Eyes
+    "HC",  # Hair
+    "FA",  # Face Angle
+    "SK",  # Skin
+    "CS",  # Camera Shot
+    # File-derived / fixed
+    "O", "R", "K", "audio", "Watermark",
+    # ID structural markers
+    "P", "J", "PI", "PW", "A",
+}
+
+
+def is_blue_prefix(prefix: str) -> bool:
+    if prefix in BLUE_PREFIXES:
+        return True
+    if isinstance(prefix, str) and (prefix == "FACE"
+                                     or prefix == "CLIP"
+                                     or prefix.startswith("CLIP_")):
+        return True
+    return False
+
+
+# Kept for backward compat (no longer load-bearing — is_blue_prefix is the source of truth)
+USER_EDITABLE_FIELD_DEFS = set()
 
 
 class AttributeManager:
@@ -159,7 +195,7 @@ class AttributeManager:
             if prefix in FIELD_DEFS:
                 continue
             style = _custom_styles.get(prefix, "2dig")
-            if style not in ("1dig", "2dig", "3dig"):
+            if style not in ("1dig", "2dig", "3dig", "4dig"):
                 continue
             pad = _STYLE_PAD.get(style, 2)
             for col_def in col_defs:

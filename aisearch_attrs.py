@@ -494,7 +494,8 @@ def _tag_keys(group_name):
 
 QUALITY_TAGS      = _tag_keys("Quality")
 SOURCE_TAGS       = _tag_keys("Source") or {"comfyui", "a1111", "aix", "other_src"}
-AUDIO_TAGS        = _tag_keys("Audio")
+AUDIO_TAGS        = (_tag_keys("audio") or _tag_keys("Audio")
+                     or {"none", "aac", "mp3", "opus", "vorbis", "flac", "ac3", "eac3", "sound"})
 # Per-digit sub-table sets
 E_COLOR_TAGS      = _tag_keys("E_Color")
 E_ADDITIONAL_TAGS  = _tag_keys("E_Additional")
@@ -751,6 +752,7 @@ _DEFAULT_CODED_FIELDS = [
     ("B",   "Bust",          2),   # [2nd=size][1st=shape]
     ("WH",  "WaistHip",      2),   # [2nd=waist][1st=hip]
     ("PM",  "PostureMotion", 2),   # [2nd=posture][1st=motion]
+    ("CL",  "Clothing",      4),   # [4=topColor][3=top][2=botColor][1=bot]; 0=unknown 1=none f=custom
     ("T",   "Tool",          2),   # 00=nothing  ff=custom
     # ── Technical ────────────────────────────────────────────────────────────
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
@@ -1267,9 +1269,46 @@ def get_coded_field(entry, letter):
     Treats both storage locations as equivalent sources for the same field."""
     return entry.get(letter.lower(), "") or entry.get(f"cf_{letter.lower()}", "")
 
-def set_file(attrs_data, path, tags, note="", confirmed=False, project="", scene="",
-             prompt="", neg_prompt="", seed="", meta=None, custom="", person_id="",
-             speech="", audio="", editable=False, preserve_text=False):
+_UNSET = object()  # sentinel — distinguishes "not passed" from "explicit empty"
+
+
+def set_file(attrs_data, path, tags, note=_UNSET, confirmed=False, project="", scene="",
+             prompt=_UNSET, neg_prompt=_UNSET, seed=_UNSET, meta=None, custom="", person_id="",
+             speech=_UNSET, audio=_UNSET, editable=False, preserve_text=False):
+    # Trace any prompt change — set AISEARCH_TRACE_PROMPT=1 to enable.
+    if os.environ.get("AISEARCH_TRACE_PROMPT"):
+        try:
+            _old_p = (attrs_data.get(path) or {}).get("prompt", "")
+            _new_p = "<unset>" if prompt is _UNSET else prompt
+            if _old_p != _new_p:
+                import traceback
+                _stk = traceback.extract_stack(limit=4)
+                _caller = f"{_stk[-2].filename.split('/')[-1]}:{_stk[-2].lineno}"
+                print(f"[PROMPT-TRACE] {os.path.basename(path)}  "
+                      f"{_old_p!r:.40} -> {_new_p!r:.40}  via {_caller}")
+        except Exception:
+            pass
+    """Write `path`'s attribute entry. Text fields (note/prompt/neg_prompt/seed/
+    speech/audio) default to a sentinel: if a caller doesn't pass them, the
+    existing value is preserved. Pass an explicit "" to clear a field.
+
+    Previously defaults were "" which meant any caller that forgot a parameter
+    silently wiped that field — caused user-typed prompts to be lost when
+    other code paths (face apply etc.) called set_file with partial args."""
+    # Resolve sentinels against existing entry so old values survive when
+    # the caller didn't specify them.
+    _existing = attrs_data.get(path, {})
+    def _resolve(val, key, default=""):
+        if val is _UNSET:
+            return _existing.get(key, default)
+        return val
+    note       = _resolve(note,       "note")
+    prompt     = _resolve(prompt,     "prompt")
+    neg_prompt = _resolve(neg_prompt, "neg_prompt")
+    seed       = _resolve(seed,       "seed")
+    speech     = _resolve(speech,     "speech")
+    audio      = _resolve(audio,      "audio")
+
     has_data = (tags or note or confirmed or project or scene or prompt or neg_prompt
                 or seed or meta or custom or person_id or speech or audio or editable)
     if not has_data and not preserve_text:
@@ -2062,15 +2101,20 @@ def remove_from_right_group(pid):
     save_right_groups(groups)
 
 
-def detect_tags_from_filename(path, rules):
+def detect_tags_from_filename(path, rules, existing_tags=None):
     """Return list of tag keys to add based on filename field rules.
-    New format: {"pattern": "-0", "field": "P", "value": "001"}
-    Old format (backward compat): {"pattern": "-front", "tags": ["front"]}
-    Pattern supports wildcards (* any chars, ? or # single char) and path-scoping
-    when the pattern contains '/' (matched against full path)."""
+    existing_tags: optional set/list of tags already on the file. Used so
+                   tag_group rules don't pile on a second value when the user
+                   has already picked one from the same group (e.g. user picks
+                   MDL_img_Table=09 and rule says =80; without this check
+                   both end up in tags and the matrix shows the wrong one).
+                   PATH rules ('/' in pattern) still override — they're
+                   explicit user intent and applied via apply_path_rules.
+    """
     import fnmatch as _fnmatch
     name      = os.path.basename(path).lower()
     norm_path = path.replace("\\", "/").lower()
+    _existing = set(existing_tags or [])
     tags = []
     for rule in rules:
         pattern = rule.get("pattern", "").lower()
@@ -2087,9 +2131,19 @@ def detect_tags_from_filename(path, rules):
         if not matched:
             continue
         if "tag_group" in rule:
-            # Tag group rule: pattern in filename → add tag value to file's tags
+            # Tag group rule: pattern in filename → add tag value to file's tags.
+            # Skip if user has already chosen a value from this same group
+            # (path rules — '/' patterns — bypass this check; they're handled
+            # by apply_path_rules with explicit override semantics).
+            grp = rule.get("tag_group", "")
             val = rule.get("value", "").strip()
             if val and val not in tags:
+                grp_vals = {v[0] for v in TAG_GROUPS.get(grp, [])
+                            if isinstance(v, (list, tuple)) and v}
+                is_path_rule = '/' in pattern_fnmatch
+                if not is_path_rule and grp_vals and (_existing & grp_vals):
+                    # User already has a value from this group — leave it alone
+                    continue
                 tags.append(val)
         elif "field" in rule:
             # Boolean coded field (digits=0) — add tag matching the field label
@@ -2389,6 +2443,74 @@ CLIP_AUTO_DETECT = [
         ("9", "a person with silver metallic eyes"),
         ("a", "a person with very dark black eyes"),
     ]},
+    # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
+    {"field": "cl", "pos": 3, "zero_is_none": True, "threshold": 0.20, "options": [
+        ("1", "a person who is topless without any top garment"),
+        ("2", "a person wearing a t-shirt"),
+        ("3", "a person wearing a blouse or button-up shirt"),
+        ("4", "a person wearing a sweater or knit pullover"),
+        ("5", "a person wearing a tank top or crop top"),
+        ("6", "a person wearing a hoodie"),
+        ("7", "a person wearing a jacket"),
+        ("8", "a person wearing a coat or outerwear"),
+        ("9", "a person wearing the upper part of a dress"),
+        ("a", "a person wearing lingerie or a bra"),
+        ("b", "a person wearing a swimsuit top or bikini top"),
+        ("c", "a person wearing a kimono or yukata top"),
+        ("d", "a person wearing a school uniform top"),
+        ("e", "a person wearing a costume top"),
+    ]},
+    # ── Clothing — Top color (pos 4) ──────────────────────────────────────────
+    {"field": "cl", "pos": 4, "zero_is_none": True, "threshold": 0.18, "options": [
+        ("1", "a person whose top is bare skin or no fabric color"),
+        ("2", "a person wearing a black colored top"),
+        ("3", "a person wearing a white colored top"),
+        ("4", "a person wearing a red colored top"),
+        ("5", "a person wearing a blue colored top"),
+        ("6", "a person wearing a green colored top"),
+        ("7", "a person wearing a yellow colored top"),
+        ("8", "a person wearing a pink colored top"),
+        ("9", "a person wearing a purple colored top"),
+        ("a", "a person wearing an orange colored top"),
+        ("b", "a person wearing a brown colored top"),
+        ("c", "a person wearing a gray colored top"),
+        ("d", "a person wearing a beige tan colored top"),
+        ("e", "a person wearing a multi-colored or patterned top"),
+    ]},
+    # ── Clothing — Bottom type (pos 1) ────────────────────────────────────────
+    {"field": "cl", "pos": 1, "zero_is_none": True, "threshold": 0.20, "options": [
+        ("1", "a person with no bottom garment bare lower body"),
+        ("2", "a person wearing jeans denim pants"),
+        ("3", "a person wearing trousers or slacks"),
+        ("4", "a person wearing shorts"),
+        ("5", "a person wearing a mini skirt"),
+        ("6", "a person wearing a long skirt"),
+        ("7", "a person wearing leggings or yoga pants"),
+        ("8", "a person wearing sweatpants or joggers"),
+        ("9", "a person wearing a full length dress"),
+        ("a", "a person wearing panties or underwear bottom"),
+        ("b", "a person wearing a bikini bottom or swim trunks"),
+        ("c", "a person wearing hakama or kimono bottom"),
+        ("d", "a person wearing a school skirt or school pants"),
+        ("e", "a person wearing stockings or tights"),
+    ]},
+    # ── Clothing — Bottom color (pos 2) ───────────────────────────────────────
+    {"field": "cl", "pos": 2, "zero_is_none": True, "threshold": 0.18, "options": [
+        ("1", "a person whose bottom is bare skin or no fabric color"),
+        ("2", "a person wearing black colored bottoms"),
+        ("3", "a person wearing white colored bottoms"),
+        ("4", "a person wearing red colored bottoms"),
+        ("5", "a person wearing blue colored bottoms"),
+        ("6", "a person wearing green colored bottoms"),
+        ("7", "a person wearing yellow colored bottoms"),
+        ("8", "a person wearing pink colored bottoms"),
+        ("9", "a person wearing purple colored bottoms"),
+        ("a", "a person wearing orange colored bottoms"),
+        ("b", "a person wearing brown colored bottoms"),
+        ("c", "a person wearing gray colored bottoms"),
+        ("d", "a person wearing beige tan colored bottoms"),
+        ("e", "a person wearing multi-colored or patterned bottoms"),
+    ]},
 ]
 
 CLIP_LABELS_FILE = os.path.join(_DATA_DIR, "clip_labels.json")
@@ -2397,14 +2519,19 @@ _CLIP_AUTO_DETECT_DEFAULTS = CLIP_AUTO_DETECT  # keep defaults reference
 
 def load_clip_labels():
     """Load CLIP label overrides from clip_labels.json.
-    Returns the full specs list (file contents if exists, else defaults)."""
+    Merges file contents over defaults so new (field, pos) entries added in
+    code (e.g. CL) appear automatically without forcing a delete-and-resave."""
     try:
         if os.path.exists(CLIP_LABELS_FILE):
             with open(CLIP_LABELS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
-            # Convert options from [[code,label],...] back to [(code,label),...]
             for spec in data:
                 spec["options"] = [tuple(o) for o in spec["options"]]
+            seen = {(s["field"].lower(), s["pos"]) for s in data}
+            for default_spec in _CLIP_AUTO_DETECT_DEFAULTS:
+                key = (default_spec["field"].lower(), default_spec["pos"])
+                if key not in seen:
+                    data.append(dict(default_spec))
             return data
     except Exception:
         pass
@@ -2649,6 +2776,7 @@ def inspect_clip_scores(image_emb):
     Returns list of dicts per spec: {field, pos, threshold, options: [(code, label, score)]}"""
     try:
         from sentence_transformers import util as _stutil
+        import torch as _torch
     except ImportError:
         return []
     cache = _get_clip_label_cache()
@@ -2657,6 +2785,9 @@ def inspect_clip_scores(image_emb):
     emb = image_emb
     if hasattr(emb, "dim") and emb.dim() == 1:
         emb = emb.unsqueeze(0)
+    # torch.no_grad — same reason as extract_feature: prevent autograd buildup
+    _ng = _torch.no_grad()
+    _ng.__enter__()
     results = []
     for i, spec in enumerate(CLIP_AUTO_DETECT):
         text_embs = cache[i]
@@ -2683,6 +2814,7 @@ def inspect_clip_scores(image_emb):
             "options": opts_sorted,
             "winner": winner,
         })
+    _ng.__exit__(None, None, None)
     return results
 
 
@@ -3356,40 +3488,95 @@ def apply_tag_sync_rules(attrs_data, path, project):
 def apply_path_rules(attrs_data, path, project, _path_rules=None):
     """Apply path-scoped filename rules (pattern contains '/') to a single file.
     Called on file open — fast, no metadata/audio/CLIP detection.
-    Path rules always override existing values.
+    Path rules always override existing values, both for `field` rules
+    (coded/text fields) and `tag_group` rules (replaces any existing tags
+    belonging to the same tag_group with the rule's value).
     _path_rules: pre-filtered list of path-scoped rules (caller cache); if None, loads from disk.
     Returns (attrs_data, changed)."""
     if _path_rules is None:
+        import fnmatch as _fnmatch
         fn_rules = load_filename_rules(project)
         _path_rules = [r for r in fn_rules
-                       if r.get("field") and '/' in r.get("pattern", "")]
+                       if (r.get("field") or r.get("tag_group"))
+                       and '/' in r.get("pattern", "")]
     path_rules = _path_rules
     if not path_rules:
         return attrs_data, False
 
     _bn  = os.path.basename(path)
     stem = os.path.splitext(_bn)[0]
-    od, _ = parse_filename_rules(stem, path_rules, basename=_bn, fullpath=path,
-                                 _return_path_flags=True)
-    if not od:
-        return attrs_data, False
 
     entry   = dict(get(attrs_data, path))
     changed = False
 
-    if "P" in od and od["P"] and entry.get("person_id") != od["P"]:
-        entry["person_id"] = od["P"]
-        changed = True
+    # ── Field path rules (coded fields, text fields, person ID) ──────────────
+    field_rules = [r for r in path_rules if r.get("field")]
+    if field_rules:
+        od, _ = parse_filename_rules(stem, field_rules, basename=_bn, fullpath=path,
+                                     _return_path_flags=True)
+        if "P" in od and od["P"] and entry.get("person_id") != od["P"]:
+            entry["person_id"] = od["P"]
+            changed = True
+        _TEXT_TARGETS = {"prompt", "neg_prompt", "seed", "note", "speech", "model"}
+        for field, value in od.items():
+            if field == "P" or not value:
+                continue
+            flc = field.lower()
+            target_key = flc if flc in _TEXT_TARGETS else f"cf_{flc}"
+            if entry.get(target_key) != value:
+                entry[target_key] = value
+                changed = True
 
-    for field, value in od.items():
-        if field != "P" and value:
-            custom_key = f"cf_{field.lower()}"
-            if entry.get(custom_key) != value:
-                entry[custom_key] = value
+    # ── Tag-group path rules (override any existing tags in same group) ──────
+    tag_group_rules = [r for r in path_rules if r.get("tag_group")]
+    if tag_group_rules:
+        import fnmatch as _fnmatch
+        norm_path = path.replace("\\", "/").lower()
+        # tag_group → set of wanted values from matched path rules
+        wanted_by_group = {}
+        for rule in tag_group_rules:
+            pattern = (rule.get("pattern") or "").lower()
+            if not pattern:
+                continue
+            pattern_fn = pattern.replace('#', '?')
+            if '*' in pattern_fn or '?' in pattern_fn:
+                tgt = pattern_fn if pattern_fn.startswith('*') else f"*{pattern_fn}"
+                if not _fnmatch.fnmatch(norm_path, tgt):
+                    continue
+            else:
+                if pattern_fn not in norm_path:
+                    continue
+            grp = rule["tag_group"]
+            val = (rule.get("value") or "").strip()
+            if not val:
+                continue
+            wanted_by_group.setdefault(grp, set()).add(val)
+
+        if wanted_by_group:
+            cur_tags = list(entry.get("tags", []))
+            new_tags = list(cur_tags)
+            for grp, wanted in wanted_by_group.items():
+                grp_def = TAG_GROUPS.get(grp, [])
+                grp_vals = {v[0] for v in grp_def if isinstance(v, (list, tuple)) and v}
+                # Skip if the file already has exactly the wanted values from this group
+                cur_in_grp = {t for t in new_tags if t in grp_vals}
+                if cur_in_grp == wanted:
+                    continue
+                new_tags = [t for t in new_tags if t not in grp_vals]
+                for w in wanted:
+                    if w not in new_tags:
+                        new_tags.append(w)
+            if new_tags != cur_tags:
+                entry["tags"] = new_tags
                 changed = True
 
     if changed:
         attrs_data[path] = entry
+        # Persist immediately so re-opening the app preserves the rule's effect.
+        try:
+            save(project, attrs_data)
+        except Exception:
+            pass
 
     return attrs_data, changed
 
@@ -3485,25 +3672,26 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                     entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
                     changed = True
 
-    # Audio detection — always-on; stores codec in entry["audio"] field
-    if not entry.get("audio"):
+    # Audio detection — gated by audio_probed flag so each file is probed at
+    # most once (ffprobe's 5s timeout was halting navigation). Files corrupted
+    # to "sound" by an earlier bug also get re-probed once.
+    _audio_probed = entry.get("audio_probed", False)
+    _needs_audio_probe = (
+        not _audio_probed
+        or not entry.get("audio")
+        or entry.get("audio") == "sound"
+    )
+    if _needs_audio_probe:
         audio_tag = detect_audio_tag(path)
         if audio_tag is None:
-            # Non-video file (image) — no audio by definition
             audio_tag = "none"
         elif audio_tag == "no_sound":
             audio_tag = "none"
         elif audio_tag not in AUDIO_TAGS:
             audio_tag = "sound"
         entry["audio"] = audio_tag
+        entry["audio_probed"] = True
         changed = True
-
-    # Resolution detection — always-on
-    if not any(t in RESOLUTION_TAGS for t in current_tags):
-        tag = detect_resolution_tag(path)
-        if tag:
-            current_tags = [t for t in current_tags if t not in RESOLUTION_TAGS] + [tag]
-            changed = True
 
     # Ratio (O) / Resolution (R) / FPS (K) — always-on
     _fa = detect_file_attrs(path)
@@ -3520,7 +3708,8 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
     # Filename-based tags + enforce rules
     fn_rules = load_filename_rules(project)
     if fn_rules:
-        for t in detect_tags_from_filename(path, fn_rules):
+        for t in detect_tags_from_filename(path, fn_rules,
+                                            existing_tags=current_tags):
             if t not in current_tags:
                 current_tags.append(t)
                 changed = True
@@ -3543,13 +3732,26 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                 if "P" in _path_flds or not entry.get("person_id"):
                     person_id = od["P"]
                     changed = True
-            # Path rules override existing values; non-path rules only fill empty fields
+            # Path rules override existing values; non-path rules only fill empty fields.
+            # Text fields (model, prompt, …) write to entry[field] directly;
+            # coded fields write to entry["cf_<field>"].
             for field, value in od.items():
-                if field != "P" and value:
-                    custom_key = f"cf_{field.lower()}"
-                    if field in _path_flds or not entry.get(custom_key):
-                        entry[custom_key] = value
-                        changed = True
+                if field == "P" or not value:
+                    continue
+                flc = field.lower()
+                is_text = flc in _TEXT_TARGETS
+                target_key = flc if is_text else f"cf_{flc}"
+                if field in _path_flds or not entry.get(target_key):
+                    if is_text:
+                        # Text targets are stored at the entry level; map common
+                        # ones to the named local var so set_file picks them up.
+                        if flc == "prompt":     prompt = value
+                        elif flc == "neg_prompt": neg_prompt = value
+                        elif flc == "seed":     seed = value
+                        else:                   entry[target_key] = value
+                    else:
+                        entry[target_key] = value
+                    changed = True
 
     # Sync person_id from coded filename (e.g. P001.jpg → person_id "001")
     if not person_id:
