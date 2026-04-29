@@ -3644,22 +3644,37 @@ def would_rename(attrs_data, path, project=None):
     return bool(new_stem) and new_stem != stem
 
 
-def sync_filename_from_entry(attrs_data, path, project=None):
-    """Rebuild the coded filename so it reflects entry's current coded values
-    (E/HC/FA/SK/PM/CS/X/CL/etc.) plus person_id and persons_with. Triggered
-    on canvas edits when auto-rename is on so changing a value visibly
-    updates the filename. Returns new path (same as path if unchanged)."""
+_FLAG_OFF_VALUES = frozenset(("", "0", "false", "no", "off", "none"))
+
+
+def _bool_flag_on(entry_val):
+    """Interpret an entry's boolean-flag value: treat 'WM'/'true'/'1' as on,
+    ''/'false'/'0' as off."""
+    if not isinstance(entry_val, str):
+        return bool(entry_val)
+    return entry_val.strip().lower() not in _FLAG_OFF_VALUES
+
+
+def rename_file_to_match_entry(attrs_data, path, project=None):
+    """The single rename function. Reads entry's canonical lowercase keys
+    for every CODED_FIELDS letter (plus person_id, persons_with), rebuilds
+    the stem via build_coded_filename, and renames the file on disk.
+
+    Replaces sync_filename_from_entry, apply_tag_sync_rules,
+    apply_boolean_sync_rules, rename_with_person_id, rename_to_date_first.
+    Boolean flags and per-field values flow through the same path here.
+
+    Returns new path (same as path if unchanged or rename failed)."""
     entry = get(attrs_data, path)
     if not entry:
         return path
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
     if parts is None:
-        # Uncoded file — start fresh from julian + entry person_id (if any)
         parts = {"persons": [], "persons_with": [],
                  "j": julian_id_for_file(path)}
 
-    # Sync persons / persons_with from entry (entry wins)
+    # Persons / persons_with — entry wins.
     pid = (entry.get("person_id") or "").strip().lower()
     if pid and pid != "000":
         parts["persons"] = [pid] + parts.get("persons", [])[1:]
@@ -3667,27 +3682,26 @@ def sync_filename_from_entry(attrs_data, path, project=None):
     if pws:
         parts["persons_with"] = pws
 
-    # Sync each non-boolean coded field from entry (entry wins). Booleans
-    # (digits=0) are handled by apply_boolean_sync_rules — skip here so we
-    # don't fight that flow.
-    _changed = False
+    # Every coded field — entry's canonical lowercase key is the source.
+    # Backward-compat fallbacks (matrix uppercase, label, cf_) handled by
+    # _entry_value_for_letter for entries that haven't been migrated yet.
     for letter, label, digits in CODED_FIELDS:
-        if letter == "J" or digits == 0:
+        if letter == "J":
             continue
         lk = letter.lower()
-        v = _entry_value_for_letter(entry, letter, label)
-        if v and parts.get(lk, "") != v:
-            parts[lk] = v
-            _changed = True
-
-    if not _changed and not pid and not pws:
-        return path  # nothing to sync
+        if digits == 0:
+            # Boolean flag: parts[lk] = letter when on, "" when off.
+            v = _entry_value_for_letter(entry, letter, label)
+            parts[lk] = letter if _bool_flag_on(v) else ""
+        else:
+            v = _entry_value_for_letter(entry, letter, label)
+            if v:
+                parts[lk] = v
 
     if not parts.get("j"):
         parts["j"] = julian_id_for_file(path)
     date_first = not bool(parts.get("persons"))
-    new_stem = build_coded_filename(parts, date_first=date_first,
-                                    field_order=get_sync_field_order(project))
+    new_stem = build_coded_filename(parts, date_first=date_first)
     if not new_stem or new_stem == stem:
         return path
     new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
@@ -3709,6 +3723,11 @@ def sync_filename_from_entry(attrs_data, path, project=None):
     except Exception:
         pass
     return new_path
+
+
+# Back-compat alias — preview/UI still imports the old name. To be removed
+# once all callers point at rename_file_to_match_entry.
+sync_filename_from_entry = rename_file_to_match_entry
 
 
 def rename_to_date_first(attrs_data, path, project=None):

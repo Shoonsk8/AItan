@@ -4118,24 +4118,14 @@ class PreviewWindow(QWidget):
         _was_paused = getattr(app, "_watcher_paused", False)
         app._watcher_paused = True
         try:
-            new_path = attrs_mod.sync_filename_from_entry(
+            # Single rename function — replaces sync_filename_from_entry +
+            # apply_tag_sync_rules + apply_boolean_sync_rules. All field
+            # types (dig / matrix / boolean) are handled in one pass.
+            new_path = attrs_mod.rename_file_to_match_entry(
                 app.attrs_data, path, app.current_project)
             if new_path != path:
                 _propagate_rename(path, new_path)
                 path = new_path
-            new_path = attrs_mod.apply_tag_sync_rules(
-                app.attrs_data, path, app.current_project)
-            if new_path != path:
-                _propagate_rename(path, new_path)
-                path = new_path
-            try:
-                new_path = attrs_mod.apply_boolean_sync_rules(
-                    app.attrs_data, path, app.current_project)
-                if new_path != path:
-                    _propagate_rename(path, new_path)
-                    path = new_path
-            except Exception:
-                pass
             attrs_mod.save(app.current_project, app.attrs_data)
         finally:
             app._watcher_paused = _was_paused
