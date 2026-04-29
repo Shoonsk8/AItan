@@ -63,17 +63,25 @@ class _FilenameMixin:
         fn_l.addLayout(proj_bar)
         fn_l.addWidget(_hsep())
 
-        # Auto-rename switch
+        # Auto-rename was a checkbox here; it's been removed. Rename is now
+        # explicit via the 🪪 Rename button on the preview window, which
+        # turns yellow when an attribute change makes the filename stale.
+        # Stub kept so legacy code that toggles check_auto_rename still finds
+        # an object; setting its state is a no-op.
+        from PyQt6.QtWidgets import QCheckBox as _QCBStub
         _cur_fn_proj = self._fn_proj_cb.currentText().strip() or None
-        auto_rename_on = _am.load_filename_config(_cur_fn_proj).get("auto_rename", False)
-        self.check_auto_rename = QCheckBox(_t("Auto-rename when attributes change / 属性変更時に自動リネーム"))
-        self.check_auto_rename.setChecked(auto_rename_on)
-        fn_l.addWidget(self.check_auto_rename)
+        self.check_auto_rename = _QCBStub()
+        self.check_auto_rename.setVisible(False)
+        # Banner stub — same reason. Kept so toggle handlers don't break.
+        self._fn_sync_warning = QLabel("")
+        self._fn_sync_warning.setVisible(False)
         fn_l.addWidget(_hsep())
 
-        # Container for rule segments — disabled when auto-rename is off
+        # Container for rule segments — always editable. The auto_rename flag
+        # only controls whether files get RENAMED on attribute change; the
+        # rules still drive filename → tag detection and path-rule matching
+        # even with auto-rename off, so users must be able to edit them.
         _rules_container = QWidget()
-        _rules_container.setEnabled(auto_rename_on)
         _rc_l = QVBoxLayout(_rules_container)
         _rc_l.setContentsMargins(0, 0, 0, 0)
         _rc_l.setSpacing(8)
@@ -84,7 +92,9 @@ class _FilenameMixin:
             return None if (not p or p == "default") else p
 
         def _on_auto_rename_toggled(v):
-            _rules_container.setEnabled(v)
+            # Don't gate rule editing on this flag — see comment above.
+            if hasattr(self, "_fn_sync_warning"):
+                self._fn_sync_warning.setVisible(not v)
             proj = _fn_selected_proj()
             fn_cfg = _am.load_filename_config(proj)
             fn_cfg["auto_rename"] = v
@@ -414,18 +424,17 @@ class _FilenameMixin:
                     rule.get("pattern", ""), rule.get("field", ""),
                     rule.get("value", ""), rule.get("one_way", False))
             elif "tag_group" in rule:
+                # Honor the saved one_way flag — was hardcoded to True, which
+                # made every tag_group rule display as "Detect" in the Mode
+                # dropdown even when the JSON had no one_way (sync).
                 _build_rule_row(
                     rule.get("pattern", ""), f"TAG:{rule['tag_group']}",
-                    rule.get("value", ""), True)
+                    rule.get("value", ""), rule.get("one_way", False))
 
         fn_add_row = QHBoxLayout()
         btn_fn_add = QPushButton(_t("+ Add Rule / + ルール追加"))
         btn_fn_add.setStyleSheet(cfg.btn_ss("btn_add", self.app.config))
         def _on_add_rule():
-            # If container is disabled (auto_rename off), enable it first
-            if not _rules_container.isEnabled():
-                self.check_auto_rename.setChecked(True)
-                _rules_container.setEnabled(True)
             _build_rule_row("", "E", "", True)
         btn_fn_add.clicked.connect(_on_add_rule)
         fn_add_row.addWidget(btn_fn_add)
@@ -511,7 +520,9 @@ class _FilenameMixin:
             self.check_auto_rename.blockSignals(True)
             self.check_auto_rename.setChecked(ar)
             self.check_auto_rename.blockSignals(False)
-            _rules_container.setEnabled(ar)
+            if hasattr(self, "_fn_sync_warning"):
+                self._fn_sync_warning.setVisible(not ar)
+            # Rules table stays editable regardless of auto_rename flag.
             # Reload rules
             for rule in fn_cfg.get("rules", []):
                 if rule.get("extract"):
@@ -526,7 +537,7 @@ class _FilenameMixin:
                 elif "tag_group" in rule:
                     _build_rule_row(
                         rule.get("pattern", ""), f"TAG:{rule['tag_group']}",
-                        rule.get("value", ""), True)
+                        rule.get("value", ""), rule.get("one_way", False))
         self._reload_fn_rules = _reload_fn_rules  # expose so set_project() can call it
         btn_fn_proj_load.clicked.connect(_reload_fn_rules)
 

@@ -43,6 +43,17 @@ class _DbMixin:
         self.proj_combo.setCurrentText(self.app.current_project)
         self.proj_combo.currentTextChanged.connect(self._on_project_select)
         l1.addWidget(self.proj_combo, stretch=1)
+        # Color swatch — click to pick background color for the SELECTED
+        # project in the combo (not necessarily the active one). Shows the
+        # current color; click to open color picker.
+        self.btn_proj_color = QPushButton()
+        self.btn_proj_color.setFixedSize(28, 28)
+        self.btn_proj_color.setToolTip(_t(
+            "Click to set this project's thumbnail/preview background color "
+            "/ クリックでプロジェクトの背景色を設定"))
+        self.btn_proj_color.clicked.connect(self._pick_project_color)
+        self._refresh_proj_color_swatch()
+        l1.addWidget(self.btn_proj_color)
         self.btn_load   = QPushButton(_t("Load / 読み込み"))
         self.btn_load.setToolTip(_t("Load selected project / 選択したプロジェクトを読み込む"))
         self.btn_load.clicked.connect(self.switch_project)
@@ -200,39 +211,10 @@ class _DbMixin:
 
         self._btn_rename_util = btn_rename_util
 
-        # ── Options row: Auto rename ──────────────────────────────────────────
-        opt_row = QHBoxLayout()
-
-        self.chk_rename_on_scan = _QCB(_t("✏️ Auto rename / ✏️ 自動リネーム"))
-        self.chk_rename_on_scan.setToolTip(_t("Auto-rename files during scan using Filename Rules. / スキャン中にファイル名規則で自動リネーム。"))
-        self.chk_rename_on_scan.setChecked(
-            attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False))
-        def _on_rename_toggled(v):
-            proj = (self.proj_combo.currentText().strip()
-                    or getattr(self.app, "current_project", None))
-            fn_cfg = attrs_mod.load_filename_config(proj)
-            fn_cfg["auto_rename"] = v
-            attrs_mod.save_filename_config(fn_cfg, proj)
-            pw = getattr(self.app, "preview_handler", None)
-            pw = getattr(pw, "window", None)
-            if pw:
-                if hasattr(pw, "_btn_auto_rename"):
-                    pw._btn_auto_rename.setVisible(v)
-                if hasattr(pw, "_chk_auto_rename") and pw._chk_auto_rename.isChecked() != v:
-                    pw._chk_auto_rename.blockSignals(True)
-                    pw._chk_auto_rename.setChecked(v)
-                    pw._chk_auto_rename.blockSignals(False)
-            # Keep filename tab checkbox in sync
-            fn_chk = getattr(self, "check_auto_rename", None)
-            if fn_chk and fn_chk.isChecked() != v:
-                fn_chk.blockSignals(True)
-                fn_chk.setChecked(v)
-                fn_chk.blockSignals(False)
-        self.chk_rename_on_scan.toggled.connect(_on_rename_toggled)
-        opt_row.addWidget(self.chk_rename_on_scan)
-
-        opt_row.addStretch()
-        l2.addLayout(opt_row)
+        # auto_rename UI removed — rename is explicit via the 🪪 Rename button
+        # on the preview window. Stub the attr so legacy code doesn't crash.
+        self.chk_rename_on_scan = _QCB()
+        self.chk_rename_on_scan.setVisible(False)
 
         self._stop_rename_only = False
         self._stop_scan_all = False
@@ -379,6 +361,15 @@ class _DbMixin:
                         data["paths"]      = []
                         data["embeddings"] = torch.empty((0, dim)).to(logic.device)
                     removed = len(old_paths) - len(data["paths"])
+                    # Also prune attrs entries that are no longer in v_disk —
+                    # otherwise files dropped from features.pt linger in
+                    # attrs_<project>.json forever (root cause of "still see
+                    # orphans after Update DB").
+                    _kept_set = {os.path.abspath(p) for p in data["paths"]}
+                    _attrs_orphans = [_p for _p in attrs_data
+                                      if os.path.abspath(_p) not in _kept_set]
+                    for _op in _attrs_orphans:
+                        attrs_data.pop(_op, None)
                     current_set = {os.path.abspath(p) for p in data["paths"]}
                     to_add = [p for p in v_disk if p not in current_set]
 
@@ -804,7 +795,10 @@ class _DbMixin:
         self.progress_bar.setRange(0, len(paths))
         self.progress_bar.setValue(0)
         face_mode       = 1  # always include face
-        auto_rename     = attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False)
+        # Always rename during scan — Update DB is an explicit batch op, the
+        # user already clicked it. The auto_rename UI was removed so this
+        # no longer needs to be conditional on a checkbox.
+        auto_rename     = True
         QApplication.processEvents()
         updated = 0
         scan_renames = {}   # old_path -> new_path, flushed once after the loop
@@ -828,12 +822,24 @@ class _DbMixin:
                             flush_stores=False, skip_uncoded=False)
                         if new_path != path:
                             scan_renames[path] = new_path
-                            # Update feature store path if loaded
                             if (self.app.data and "paths" in self.app.data
                                     and path in self.app.data["paths"]):
                                 idx2 = self.app.data["paths"].index(path)
                                 self.app.data["paths"][idx2] = new_path
-                            path = new_path   # continue with new path for unlock/after
+                            path = new_path
+                elif auto_rename:
+                    # No face → fall back to date-first coded name (J{j}…) so
+                    # the file still gets a structured filename instead of
+                    # staying as an arbitrary download stem.
+                    new_path = attrs_mod.rename_to_date_first(
+                        self.app.attrs_data, path, self.app.current_project)
+                    if new_path != path:
+                        scan_renames[path] = new_path
+                        if (self.app.data and "paths" in self.app.data
+                                and path in self.app.data["paths"]):
+                            idx2 = self.app.data["paths"].index(path)
+                            self.app.data["paths"][idx2] = new_path
+                        path = new_path
             after = attrs_mod.get(self.app.attrs_data, path)
             if after != before:
                 updated += 1
@@ -1595,9 +1601,82 @@ class _DbMixin:
             return
         # Sync the entire scan section to the selected project
         self._sync_scan_section(n)
+        # Refresh the color swatch to match selected project
+        self._refresh_proj_color_swatch()
         # Also update the person tab
         if hasattr(self, '_refresh_person_tab'):
             self._refresh_person_tab(n)
+
+    def _selected_project_bg_color(self):
+        """Return the saved bg color for the selected project (in combo).
+        Reads project_settings_<PROJECT>.json directly so we don't need to
+        switch app state to view another project's color."""
+        proj = self.proj_combo.currentText()
+        if not proj:
+            return ""
+        # Active project: read from live config (in case unsaved)
+        if proj == getattr(self.app, "current_project", None):
+            return self.app.config.get("project_bg_color", "") or ""
+        # Other projects: load their settings file
+        try:
+            return cfg.load_config(proj).get("project_bg_color", "") or ""
+        except Exception:
+            return ""
+
+    def _refresh_proj_color_swatch(self):
+        """Update the color-swatch button to show the selected project's color."""
+        if not hasattr(self, "btn_proj_color"):
+            return
+        col = self._selected_project_bg_color() or "#888"
+        # Solid color background, neutral border. Empty string falls back to gray.
+        self.btn_proj_color.setStyleSheet(
+            f"background-color: {col}; border: 1px solid #555;")
+
+    def _pick_project_color(self):
+        from PyQt6.QtWidgets import QColorDialog, QMenu
+        proj = self.proj_combo.currentText()
+        if not proj:
+            return
+        _menu = QMenu(self)
+        _act_pick  = _menu.addAction(_t("Pick color… / 色を選択…"))
+        _act_clear = _menu.addAction(_t("Clear (use theme default) / クリア（デフォルト）"))
+        _act = _menu.exec(self.btn_proj_color.mapToGlobal(
+            self.btn_proj_color.rect().bottomLeft()))
+        if _act == _act_pick:
+            cur = self._selected_project_bg_color()
+            initial = QColor(cur) if cur else QColor("#495057")
+            color = QColorDialog.getColor(initial, self,
+                                          _t(f"Background color for {proj}"))
+            if color.isValid():
+                self._save_project_color(proj, color.name())
+        elif _act == _act_clear:
+            self._save_project_color(proj, "")
+        self._refresh_proj_color_swatch()
+
+    def _save_project_color(self, proj, color_hex):
+        """Persist the bg color into the project's settings file. If the
+        project is the active one, also update live config and refresh UI."""
+        if proj == getattr(self.app, "current_project", None):
+            if color_hex:
+                self.app.config["project_bg_color"] = color_hex
+            else:
+                self.app.config.pop("project_bg_color", None)
+            cfg.save_config(self.app.config, proj)
+            self.app._apply_header_theme()
+            _pw = getattr(self.app, "preview_handler", None)
+            if _pw and getattr(_pw, "window", None):
+                _pw.window._apply_project_bg()
+        else:
+            # Edit the project's settings file directly
+            try:
+                _data = cfg.load_config(proj)
+                if color_hex:
+                    _data["project_bg_color"] = color_hex
+                else:
+                    _data.pop("project_bg_color", None)
+                cfg.save_config(_data, proj)
+            except Exception:
+                pass
 
     def switch_project(self):
         t = self.proj_combo.currentText()

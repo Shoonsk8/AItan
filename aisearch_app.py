@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.99"
+VERSION = "1.991"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -42,7 +42,7 @@ class SizeItem(QTableWidgetItem):
         return self._bytes(self.text()) < self._bytes(other.text())
 
 class DateItem(QTableWidgetItem):
-    """Table cell that stores a raw mtime, displays JD + readable date, sorts by mtime."""
+    """Table cell that stores a raw mtime, displays a readable date, sorts by mtime."""
     def __init__(self, mtime):
         self._mtime = mtime
         super().__init__(DateItem._fmt(mtime))
@@ -51,19 +51,27 @@ class DateItem(QTableWidgetItem):
     @staticmethod
     def _fmt(mtime):
         try:
-            dt = datetime.datetime.fromtimestamp(mtime)
-            a  = (14 - dt.month) // 12
-            y  = dt.year + 4800 - a
-            m  = dt.month + 12 * a - 3
-            jd = (dt.day + (153 * m + 2) // 5
-                  + 365 * y + y // 4 - y // 100 + y // 400 - 32045)
-            return f"JD{jd} · {dt.strftime('%Y-%m-%d %H:%M')}"
+            return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         except Exception:
             return ""
 
     def __lt__(self, other):
         try:    return self._mtime < other._mtime
         except: return super().__lt__(other)
+
+
+_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv")
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif")
+
+def _file_type_str(path):
+    if not path:
+        return ""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _VIDEO_EXTS:
+        return "Video"
+    if ext in _IMAGE_EXTS:
+        return "Pic"
+    return ""
 
 
 # ── Drop zone label / frame ───────────────────────────────────────────────────
@@ -110,17 +118,60 @@ class _ThresholdCombo(QComboBox):
 
 
 class DropZoneLabel(QLabel):
+    _bg_color = None  # class-level default; overridden per instance below
+
     def __init__(self, parent=None):
         super().__init__(_t("DROP IMAGE / 画像をドロップ"), parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Allow the label to shrink/grow with its container; without this the
-        # pixmap's size drives sizeHint and creates a layout feedback loop.
         from PyQt6.QtWidgets import QSizePolicy as _QSP
         self.setSizePolicy(_QSP.Policy.Ignored, _QSP.Policy.Ignored)
         self.setMinimumSize(1, 1)
-        self._raw_pixmap = None   # full-resolution source; rescaled on resize
+        self._raw_pixmap = None
         self._drop_callback = None
+        self.setObjectName("dropZoneLabel")
+        self._bg_color = None    # set per-instance by main app
+        self._border_color = None  # painted in paintEvent (bypasses QSS)
+        self._border_width = 0
+
+    def set_rim(self, color: str | None, width: int = 4):
+        """Set the rim painted in paintEvent. None/empty clears the rim.
+        Used instead of QSS border because the project-bg fillRect was
+        overlapping the QSS frame and visually erasing it."""
+        self._border_color = color or None
+        self._border_width = int(width) if color else 0
+        self.update()
+
+    def paintEvent(self, ev):
+        # Manually fill bg with project color — guaranteed to paint
+        # regardless of QSS/palette quirks.
+        if self._bg_color:
+            from PyQt6.QtGui import QPainter, QColor as _QC
+            p = QPainter(self)
+            try:
+                p.fillRect(self.rect(), _QC(self._bg_color))
+            finally:
+                p.end()
+        super().paintEvent(ev)
+        # Paint the rim AFTER super so it's on top of the pixmap and any
+        # QSS layers. Using QPainter here avoids QSS-vs-paintEvent ordering
+        # bugs where the border would silently disappear.
+        if self._border_color and self._border_width > 0:
+            from PyQt6.QtGui import QPainter, QPen, QColor as _QC
+            from PyQt6.QtCore import Qt as _Qt
+            p = QPainter(self)
+            try:
+                pen = QPen(_QC(self._border_color))
+                pen.setWidth(self._border_width)
+                pen.setJoinStyle(_Qt.PenJoinStyle.MiterJoin)
+                p.setPen(pen)
+                # Inset by half the pen width so the rim lands inside the rect
+                inset = self._border_width / 2
+                r = self.rect().adjusted(int(inset), int(inset),
+                                         -int(inset), -int(inset))
+                p.drawRect(r)
+            finally:
+                p.end()
 
     def setPixmap(self, px):
         # Keep the original around so we can rescale to current size on resize
@@ -180,10 +231,10 @@ class DropZoneFrame(QFrame):
 
 class FileTable(QTableWidget):
     def __init__(self, parent=None):
-        super().__init__(0, 5, parent)
+        super().__init__(0, 6, parent)
         self.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"),
                                          _t("Name / 名前"), _t("Path / パス"),
-                                         _t("Date / 日付")])
+                                         _t("Date / 日付"), _t("Type / 種類")])
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -191,7 +242,7 @@ class FileTable(QTableWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.horizontalHeader().setSortIndicatorShown(True)
         self.horizontalHeader().setStretchLastSection(False)
-        for _col in range(5):
+        for _col in range(6):
             self.horizontalHeader().setSectionResizeMode(_col, QHeaderView.ResizeMode.Interactive)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
@@ -200,6 +251,7 @@ class FileTable(QTableWidget):
         self.setColumnWidth(1, 100)
         self.setColumnWidth(3, 300)
         self.setColumnWidth(4, 130)
+        self.setColumnWidth(5, 60)
 
         self.move_callback      = None
         self.delete_callback    = None
@@ -433,6 +485,7 @@ class AISearchApp(QMainWindow):
         # thumbnails (dup pair, search top+selected, dup grid, etc.).
         from PyQt6.QtWidgets import QGridLayout as _QGrid
         thumb_outer = DropZoneFrame()
+        thumb_outer.setObjectName("thumbOuter")
         thumb_outer.setMinimumSize(150, 150)
         thumb_layout = _QGrid(thumb_outer)
         thumb_layout.setContentsMargins(0, 0, 0, 0)
@@ -459,17 +512,31 @@ class AISearchApp(QMainWindow):
         self.btn_settings.clicked.connect(self._open_settings)
 
         self._lbl_logo = QLabel()
-        self._lbl_logo.setFixedSize(160, 160)
+        self._lbl_logo.setFixedSize(240, 240)
         self._lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl_logo.setStyleSheet("background: transparent;")
-        # Load logo once (PNG with transparency — no dark/light swap needed)
-        _logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aisearch_logo.png")
-        if os.path.exists(_logo_path):
-            _px = QPixmap(_logo_path).scaled(
-                160, 160,
+        self._lbl_logo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lbl_logo.setToolTip(_t("Click to toggle AI inspection / クリックでAI検査をオン/オフ"))
+        # Pre-load both pixmaps so toggling between them is instant. The
+        # off-variant is shown when clip_inspect_mode is "never"; clicking
+        # the logo toggles between off and the previously-used active mode.
+        _logo_dir = os.path.dirname(os.path.abspath(__file__))
+        # Prefer the user-supplied "AI smile" / "No AI No smile" logos when
+        # available; fall back to the bundled PNGs.
+        _user_on  = "/mnt/1TBSSD/Test/AItan/logo/1/AI smile.jpeg"
+        _user_off = "/mnt/1TBSSD/Test/AItan/logo/1/No AI No smile.jpeg"
+        _on_path  = _user_on  if os.path.exists(_user_on)  else os.path.join(_logo_dir, "aisearch_logo.png")
+        _off_path = _user_off if os.path.exists(_user_off) else os.path.join(_logo_dir, "aisearch_logo_off.png")
+        def _load(p):
+            return QPixmap(p).scaled(240, 240,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            self._lbl_logo.setPixmap(_px)
+                Qt.TransformationMode.SmoothTransformation) if os.path.exists(p) else None
+        self._logo_pix_on  = _load(_on_path)
+        self._logo_pix_off = _load(_off_path) or self._logo_pix_on
+        self._refresh_logo_pixmap()
+        # Make the QLabel clickable — a left click toggles inspection mode.
+        self._lbl_logo.mousePressEvent = lambda ev: (
+            self._toggle_inspect_mode() if ev.button() == Qt.MouseButton.LeftButton else None)
         # Stub _reposition_logo so older code that calls it doesn't crash
         # (logo is now in its own section, no overlay positioning needed).
         self._reposition_logo = lambda: None
@@ -516,6 +583,19 @@ class AISearchApp(QMainWindow):
         self.btn_browse.setToolTip(_t("Browse folder contents (ls mode) / フォルダ内容を閲覧（lsモード）"))
         self.btn_browse.clicked.connect(lambda: self._enter_browse_mode())
         mode_col.addWidget(self.btn_browse)
+
+        # Browse-mode only: re-apply path rules to every file under the
+        # currently-browsed folder (recursive). Useful after editing a
+        # /Folder/ rule to retag existing files without touching CLIP/face
+        # detection. Hidden outside browse mode.
+        self.btn_apply_rules = QPushButton(_t("🔧 Apply Rules / 🔧 規則適用"))
+        self.btn_apply_rules.setToolTip(_t(
+            "Apply path rules to every file under this folder (recursive). "
+            "Overrides existing tags for matching path rules. / "
+            "このフォルダ配下の全ファイルにパス規則を適用（再帰）。"))
+        self.btn_apply_rules.clicked.connect(self._apply_path_rules_to_browse_dir)
+        self.btn_apply_rules.hide()
+        mode_col.addWidget(self.btn_apply_rules)
 
         mode_and_dup.addLayout(mode_col)
 
@@ -624,6 +704,13 @@ class AISearchApp(QMainWindow):
             "QProgressBar::chunk { background: #4a90d9; }")
         self.search_progress.hide()
 
+        # Compact "row N / total" position indicator that lives just above
+        # the table — refreshed on selection change.
+        self.row_position_label = QLabel("")
+        self.row_position_label.setStyleSheet(
+            "color: #adb5bd; font-size: 9pt; padding: 1px 4px;")
+        self.row_position_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
         undo_row = QHBoxLayout()
         self.btn_undo = QPushButton(_t("↩ Undo / ↩ 元に戻す"))
         self.btn_undo.setEnabled(False)
@@ -664,6 +751,71 @@ class AISearchApp(QMainWindow):
         _s4_layout.setSpacing(4)
         _s4_layout.addWidget(self.btn_settings, alignment=Qt.AlignmentFlag.AlignRight)
         _s4_layout.addWidget(self._lbl_logo, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # ── RSS ceiling controls (under the logo) ─────────────────────────────
+        # Spinner sets the threshold; live readout shows current RSS, colored
+        # green/yellow/red based on proximity. When RSS exceeds the spinner
+        # value, the next inspect attempt flips clip_inspect_mode to "never"
+        # and the logo swaps to no-smile.
+        from PyQt6.QtWidgets import QSpinBox as _QSB
+        _ceil_row = QHBoxLayout()
+        _ceil_row.setContentsMargins(0, 0, 0, 0)
+        _ceil_row.setSpacing(4)
+        # Stretch on the LEFT pushes the label + spinner to the right edge
+        # so they line up with the right-aligned logo above.
+        _ceil_row.addStretch()
+        _ceil_lbl = QLabel(_t("AI off above: / AI停止閾値："))
+        _ceil_lbl.setStyleSheet("color:#bbb; font-size:9pt;")
+        _ceil_row.addWidget(_ceil_lbl)
+        self._rss_ceiling_sb = _QSB()
+        self._rss_ceiling_sb.setRange(500, 16000)
+        self._rss_ceiling_sb.setSingleStep(100)
+        self._rss_ceiling_sb.setSuffix(" MB")
+        self._rss_ceiling_sb.setValue(int(self.config.get("clip_inspect_rss_limit_mb", 1500)))
+        self._rss_ceiling_sb.setFixedWidth(110)
+        self._rss_ceiling_sb.setToolTip(_t(
+            "Above this RSS the app flips AI to 'never' to avoid OOM. / "
+            "RSS の上限。これを超えたら AI を停止して OOM を防止。"))
+        def _on_rss_ceiling_changed(v):
+            self.config["clip_inspect_rss_limit_mb"] = int(v)
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._rss_ceiling_sb.valueChanged.connect(_on_rss_ceiling_changed)
+        _ceil_row.addWidget(self._rss_ceiling_sb)
+        _s4_layout.addLayout(_ceil_row)
+
+        self._rss_now_lbl = QLabel("— MB")
+        self._rss_now_lbl.setStyleSheet(
+            "color:#8fc88f; font-family:monospace; font-size:9pt; padding:2px 6px;"
+            "background:#1e2630; border-radius:3px;")
+        self._rss_now_lbl.setToolTip(_t("Current process RSS / 現在のプロセスRSS"))
+        _s4_layout.addWidget(self._rss_now_lbl, alignment=Qt.AlignmentFlag.AlignRight)
+
+        from PyQt6.QtCore import QTimer as _QT
+        def _refresh_rss():
+            try:
+                import psutil as _ps
+                _rss = _ps.Process().memory_info().rss / (1024 * 1024)
+            except Exception:
+                self._rss_now_lbl.setText("— MB")
+                return
+            _ceil = float(self._rss_ceiling_sb.value())
+            _ratio = _rss / _ceil if _ceil > 0 else 0
+            if _ratio >= 1.0:
+                _bg, _fg = "#3a1a1a", "#ff8888"
+            elif _ratio >= 0.7:
+                _bg, _fg = "#3a2e1a", "#ddaa55"
+            else:
+                _bg, _fg = "#1e2630", "#8fc88f"
+            self._rss_now_lbl.setStyleSheet(
+                f"color:{_fg}; font-family:monospace; font-size:9pt; padding:2px 6px;"
+                f"background:{_bg}; border-radius:3px;")
+            self._rss_now_lbl.setText(f"now: {_rss:.0f} MB")
+        self._rss_refresh_timer = _QT(self)
+        self._rss_refresh_timer.setInterval(2000)
+        self._rss_refresh_timer.timeout.connect(_refresh_rss)
+        self._rss_refresh_timer.start()
+        _refresh_rss()
+
         self._chk_disable_preview = QCheckBox(_t("Disable preview / プレビュー無効"))
         self._chk_disable_preview.setToolTip(_t(
             "Don't open the preview window when selecting rows / 行選択時にプレビューウィンドウを開かない"))
@@ -742,6 +894,9 @@ class AISearchApp(QMainWindow):
         self.table.drop_callback      = self.on_drop
         self.table.customContextMenuRequested.connect(self._on_right_click)
         self.table.itemSelectionChanged.connect(self.handle_preview)
+        self.table.itemSelectionChanged.connect(self._update_row_position_label)
+        self.table.model().rowsInserted.connect(lambda *a: self._update_row_position_label())
+        self.table.model().rowsRemoved.connect(lambda *a: self._update_row_position_label())
         self.table.cellDoubleClicked.connect(lambda r, c: self.on_double_click())
         self.table.cellClicked.connect(self._on_group_cell_click)
         self.popup_menu = front_page.create_context_menu(self.table, self)
@@ -754,6 +909,7 @@ class AISearchApp(QMainWindow):
         _table_wrap_lay.setSpacing(0)
         _table_wrap_lay.addWidget(self.search_status_label)
         _table_wrap_lay.addWidget(self.search_progress)
+        _table_wrap_lay.addWidget(self.row_position_label)
         _table_wrap_lay.addWidget(self.table, stretch=1)
         self._main_splitter.addWidget(_table_wrap)
         # Header gets just enough; table gets the rest by default
@@ -790,7 +946,7 @@ class AISearchApp(QMainWindow):
         self.reload_fonts()
         self._apply_header_theme()
         col_widths = self.config.get("col_widths", {})
-        for col, default in [(0, 90), (1, 100), (2, 400), (3, 300), (4, 130)]:
+        for col, default in [(0, 90), (1, 100), (2, 400), (3, 300), (4, 130), (5, 60)]:
             self.table.setColumnWidth(col, col_widths.get(str(col), default))
 
     def _apply_colors(self):
@@ -863,11 +1019,11 @@ class AISearchApp(QMainWindow):
         elif cur_text in ("#",):
             self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"),
                                                    _t("Name / 名前"), _t("Path / パス"),
-                                                   _t("Date / 日付")])
+                                                   _t("Date / 日付"), _t("Type / 種類")])
         else:
             self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"),
                                                    _t("Name / 名前"), _t("Path / パス"),
-                                                   _t("Date / 日付")])
+                                                   _t("Date / 日付"), _t("Type / 種類")])
         # Drop zone default text if it still shows a mode label
         if hasattr(self, 'drop_zone'):
             _dtxt = self.drop_zone.text()
@@ -958,11 +1114,44 @@ class AISearchApp(QMainWindow):
             f"color: {proj_color}; font-size: {pfs}pt; font-weight: bold;")
         if font_size_only:
             return
+        # Per-project color — when set, becomes a visible border around the
+        # thumbnail so the user can see which project is active even when an
+        # image fills the area. Falls back to theme default.
+        _proj_color = self.config.get("project_bg_color", "")
+        _border_color = _proj_color if _proj_color else thumb_brd
+        _border_w = 6 if _proj_color else 3   # thicker when explicitly set
+        _bg_color = _proj_color if _proj_color else thumb_bg
+        # Debug: log what color we're applying so we can tell if the config
+        # has the color or if it falls back to the default theme bg.
+        if os.environ.get("AISEARCH_DEBUG_BG"):
+            print(f"[_apply_header_theme] project={getattr(self,'current_project',None)!r} "
+                  f"proj_color={_proj_color!r} bg={_bg_color}")
         self.header.setStyleSheet(f"background-color: {header_bg};")
+        # The right-pad widget paints reliably via palette+stylesheet — use
+        # the same mechanism on EVERY thumbnail-related widget so they all
+        # show the project color uniformly. Border lives only on thumb_outer.
+        from PyQt6.QtGui import QPalette, QColor as _QC
+        _col = _QC(_bg_color)
+        def _paint_thumb_widget(_w):
+            _pal = _w.palette()
+            _pal.setColor(QPalette.ColorRole.Window, _col)
+            _w.setAutoFillBackground(True)
+            _w.setPalette(_pal)
+        # thumb_outer: palette + ID-selector stylesheet for bg+border
+        _paint_thumb_widget(self.thumb_outer)
         self.thumb_outer.setStyleSheet(
-            f"background-color: {thumb_bg}; border: 3px ridge {thumb_brd};")
+            f"#thumbOuter {{ background-color: {_bg_color}; "
+            f"  border: {_border_w}px solid {_border_color}; }}")
+        # drop_zone (the picture cell) — its paintEvent paints _bg_color
+        # before drawing the pixmap, so the bg always wins.
+        self.drop_zone._bg_color = _bg_color
+        self.drop_zone.update()
         self.drop_zone.setStyleSheet(
-            f"color: {drop_color}; font-weight: bold; background-color: {thumb_bg};")
+            f"color: {drop_color}; font-weight: bold;")
+        # Strip cells (dup/search mode) get the same paintEvent treatment.
+        for _cell in getattr(self, "_strip_cells", []):
+            _cell._bg_color = _bg_color
+            _cell.update()
         self.info_widget.setStyleSheet(f"background-color: {header_bg};")
         self.lbl_base_dir.setStyleSheet(f"color: {base_color};")
         self.lbl_dup_status.setStyleSheet(f"color: {status_color};")
@@ -1392,6 +1581,9 @@ class AISearchApp(QMainWindow):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, col, item)
         self.table.setItem(row, 4, _date_item)
+        _type_item = QTableWidgetItem(_file_type_str(orig_path))
+        _type_item.setFlags(_type_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(row, 5, _type_item)
         bg = action.get("bg_color")
         if bg and bg.color().isValid():
             for col in range(self.table.columnCount()):
@@ -1678,13 +1870,95 @@ class AISearchApp(QMainWindow):
             self.preview_handler.window.close()
         g = self.geometry()
         self.config["main_geometry"] = [g.x(), g.y(), g.width(), g.height()]
-        self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(5)}
+        self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(6)}
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._save_dup_results()
         # Flush any pending debounced missing-file removals before exit
         if getattr(self, '_missing_save_dirty', False):
             self._flush_missing_removals()
         event.accept()
+
+    def _reset_project_memory(self):
+        """Free per-project state that would otherwise leak across project
+        switches: previous attrs_data (CLIP/FACE blobs), embedded-meta scan
+        cache, extract_metadata cache, the AItan-block cache, the path index,
+        and feedback. Force a GC sweep + drop torch/CUDA cache after."""
+        # Old attrs_data: drop transient blobs explicitly so the dict's value
+        # objects can be freed even if some other reference still holds the
+        # outer dict briefly.
+        _old_attrs = getattr(self, "attrs_data", None)
+        if isinstance(_old_attrs, dict):
+            for _e in _old_attrs.values():
+                if isinstance(_e, dict):
+                    for _k in list(_e.keys()):
+                        if _k == "CLIP" or _k == "FACE" or _k.startswith("CLIP_"):
+                            _e.pop(_k, None)
+        # Drop bulky structures
+        self.attrs_data = {}
+        self._emb_meta_scanned = set()
+        self._path_idx = {}
+        if hasattr(self, "_extract_meta_cache"):
+            self._extract_meta_cache = {}
+        # Preview-window-side caches (if a preview is open)
+        _pw = getattr(self, "preview_handler", None)
+        if _pw is not None:
+            _pwin = getattr(_pw, "window", None)
+            if _pwin is not None:
+                if hasattr(_pwin, "_aitan_block_cache"):
+                    _pwin._aitan_block_cache = {}
+                # Also clear any pending inspect/refresh debounce so they
+                # don't fire against the now-gone old project.
+                for _attr in ("_inspect_pending_args", "_refresh_pending_path"):
+                    if hasattr(_pwin, _attr):
+                        try: setattr(_pwin, _attr, None)
+                        except Exception: pass
+        # Drop the CLIP feature DB / embeddings tensor
+        self.data = None
+        # Force collection
+        try:
+            import gc as _gc
+            _gc.collect()
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _refresh_logo_pixmap(self):
+        """Show the on or off variant based on the current clip_inspect_mode."""
+        _mode = self.config.get("clip_inspect_mode", "when_empty")
+        _px = self._logo_pix_off if _mode == "never" else self._logo_pix_on
+        if _px is not None:
+            self._lbl_logo.setPixmap(_px)
+
+    def _toggle_inspect_mode(self):
+        """Click handler on the logo: toggle AI inspection between off
+        ("never") and the user's previous active mode (default "when_empty").
+        Persists to config and updates any open settings dialog dropdown."""
+        _mode = self.config.get("clip_inspect_mode", "when_empty")
+        if _mode == "never":
+            _restore = self.config.get("_clip_inspect_prev", "when_empty")
+            if _restore == "never":
+                _restore = "when_empty"
+            self.config["clip_inspect_mode"] = _restore
+        else:
+            self.config["_clip_inspect_prev"] = _mode
+            self.config["clip_inspect_mode"] = "never"
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        self._refresh_logo_pixmap()
+        # Sync the settings dialog combo if open
+        _sw = getattr(self, "_settings_win", None)
+        if _sw is not None:
+            _cb = getattr(_sw, "_clip_inspect_mode_cb", None)
+            if _cb is not None:
+                _i = _cb.findData(self.config["clip_inspect_mode"])
+                if _i >= 0:
+                    _cb.blockSignals(True)
+                    _cb.setCurrentIndex(_i)
+                    _cb.blockSignals(False)
 
     def _open_settings(self, tab=0):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
@@ -1765,6 +2039,12 @@ class AISearchApp(QMainWindow):
         self.config = cfg.load_config(name)
         self.config["last_project"] = name
         cfg.save_config(self.config, name)
+        # Re-apply header theme so the new project's bg color shows up on
+        # the thumbnail and drop zone immediately after switching.
+        try:
+            self._apply_header_theme()
+        except Exception:
+            pass
         # Also update last_project in global config so startup knows which project
         _g = cfg.load_config()
         _g["last_project"] = name
@@ -1825,6 +2105,13 @@ class AISearchApp(QMainWindow):
 
     def load_db(self):
         name = self.current_project.strip()
+        # Drop the previous project's in-memory state before loading the new
+        # one — otherwise CLIP/face debug blobs, metadata caches, and
+        # attribute panel widgets accumulate across switches and balloon RSS.
+        try:
+            self._reset_project_memory()
+        except Exception:
+            pass
         self.data, _ = logic.load_db_logic(name)
         self.base_dirs = []
         self.feedback_data = feedback.load(name)
@@ -2011,7 +2298,10 @@ class AISearchApp(QMainWindow):
         retry_files = []
         scan_renames = {}
         added_final_paths = []   # final path of each newly added file (after any renames)
-        _auto_rename = attrs_mod.load_filename_config(self.current_project).get("auto_rename", False)
+        # Watch-dir auto-rename — always True now that the auto_rename
+        # checkbox UI is gone. Watch is implicitly an explicit user setup
+        # (they configured a watch dir), so renaming on detection is fine.
+        _auto_rename = True
         # Track sizes from last check for two-stage stability test
         _prev_sizes = getattr(self, '_watch_prev_sizes', {})
         _next_sizes = {}
@@ -3297,6 +3587,19 @@ class AISearchApp(QMainWindow):
 
     # ── Table helpers ────────────────────────────────────────────────────────
 
+    def _update_row_position_label(self):
+        """Show 'N / total' for the currently selected row."""
+        if not hasattr(self, "row_position_label"):
+            return
+        total = self.table.rowCount()
+        row = self._current_row()
+        if total <= 0:
+            self.row_position_label.setText("")
+        elif row < 0:
+            self.row_position_label.setText(f"— / {total}")
+        else:
+            self.row_position_label.setText(f"{row + 1} / {total}")
+
     def _current_row(self):
         rows = self.table.selectionModel().selectedRows()
         return rows[0].row() if rows else -1
@@ -3344,6 +3647,9 @@ class AISearchApp(QMainWindow):
             self.table.setItem(row, 4, DateItem(os.path.getmtime(full_path)))
         except Exception:
             self.table.setItem(row, 4, DateItem(0))
+        _type_item = QTableWidgetItem(_file_type_str(full_path))
+        _type_item.setFlags(_type_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(row, 5, _type_item)
         color = self._score_color(str(score))
         if color:
             fg = self._contrast_fg(color)
@@ -3526,8 +3832,12 @@ class AISearchApp(QMainWindow):
             scaled = px.scaled(330, 330,
                                Qt.AspectRatioMode.KeepAspectRatio,
                                Qt.TransformationMode.SmoothTransformation)
+            self._apply_header_theme()
             self.drop_zone.setPixmap(scaled)
             self.drop_zone.setText("")
+            # Image query — clear any stale video rim
+            if hasattr(self.drop_zone, "set_rim"):
+                self.drop_zone.set_rim(None)
             # Pre-populate preview cache so _render skips its own PIL open
             self.preview_handler._cached_pixmap      = px
             self.preview_handler._cached_pixmap_path = self.query_path
@@ -3563,15 +3873,19 @@ class AISearchApp(QMainWindow):
                         frame_px = QPixmap.fromImage(qimg)
                 except Exception:
                     pass
+            _is_video_query = ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm')
             if frame_px and not frame_px.isNull():
                 scaled = frame_px.scaled(330, 330,
                                          Qt.AspectRatioMode.KeepAspectRatio,
                                          Qt.TransformationMode.SmoothTransformation)
+                self._apply_header_theme()
                 self.drop_zone.setPixmap(scaled)
                 self.drop_zone.setText("")
             else:
                 self.drop_zone.setPixmap(QPixmap())
-                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if _is_video_query else "?")
+            if hasattr(self.drop_zone, "set_rim"):
+                self.drop_zone.set_rim("#00ff00", 4) if _is_video_query else self.drop_zone.set_rim(None)
 
         # Show preview immediately before the background search starts
         self.preview_handler.show(self.query_path)
@@ -3583,7 +3897,7 @@ class AISearchApp(QMainWindow):
         # Restore "Score" column header; exit browse mode if active; clear table immediately
         if self._browse_dir:
             self._exit_browse_mode()
-        self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
+        self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付"), _t("Type / 種類")])
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)   # clear browse/old listing immediately, don't wait for worker
         self.config["last_mode"] = "search"
@@ -3607,6 +3921,7 @@ class AISearchApp(QMainWindow):
         _feedback    = self.feedback_data
 
         _path_idx    = getattr(self, '_path_idx', {})
+        _base_dirs   = [os.path.normpath(d) for d in (self.base_dirs or [])]
 
         def _worker():
             try:
@@ -3622,7 +3937,26 @@ class AISearchApp(QMainWindow):
                 if emb is None:
                     _q.put(("error", "Could not extract features from image.")); return
                 raw_sims = st_util.cos_sim(emb, _data["embeddings"])[0]
-                k = min(self.config.get("max_search_results", 300), len(_data["paths"]))
+                # Restrict ranking to project base_dirs — DB contains every
+                # watch-dir file (e.g. Downloads), but search results should
+                # only come from the active project. If the filter would leave
+                # 0 candidates (misconfigured base_dirs, paths normalised
+                # differently, etc.), skip it instead of returning an empty
+                # result list.
+                n_allowed = len(_data["paths"])
+                if _base_dirs and n_allowed:
+                    _allowed = torch.zeros(n_allowed, dtype=torch.bool)
+                    for _i, _p in enumerate(_data["paths"]):
+                        _pn = os.path.normpath(_p)
+                        for _bd in _base_dirs:
+                            if _pn == _bd or _pn.startswith(_bd + os.sep):
+                                _allowed[_i] = True
+                                break
+                    n_match = int(_allowed.sum().item())
+                    if n_match > 0:
+                        raw_sims = raw_sims.masked_fill(~_allowed.to(raw_sims.device), float("-inf"))
+                        n_allowed = n_match
+                k = min(self.config.get("max_search_results", 300), n_allowed)
                 if k == 0:
                     _q.put(("done", (emb, (raw_sims[:0], raw_sims[:0].long())))); return
                 top_raw  = torch.topk(raw_sims, k=k)
@@ -3765,6 +4099,8 @@ class AISearchApp(QMainWindow):
             active_ss, inactive_ss = self._mode_styles[m]
             btn.setStyleSheet(active_ss if m == mode else inactive_ss)
         self._dup_controls_widget.setVisible(mode == "dup")
+        if hasattr(self, "btn_apply_rules"):
+            self.btn_apply_rules.setVisible(mode == "browse")
         pw = getattr(getattr(self, 'preview_handler', None), 'window', None)
         if pw:
             pw.set_mode_color(_sep_colors.get(mode, '#1a1a1a'))
@@ -3787,7 +4123,7 @@ class AISearchApp(QMainWindow):
         if path:
             self.run_search(path)
         else:
-            self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
+            self.table.setHorizontalHeaderLabels([_t("Score / スコア"), _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付"), _t("Type / 種類")])
             self.table.setRowCount(0)
             self.config["last_mode"] = "search"
             cfg.save_config(self.config, getattr(self, "current_project", None))
@@ -3835,7 +4171,7 @@ class AISearchApp(QMainWindow):
             reverse=True  # newest first
         )
 
-        self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付")])
+        self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付"), _t("Type / 種類")])
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         for i, fp in enumerate(files):
@@ -3851,6 +4187,50 @@ class AISearchApp(QMainWindow):
             self._select_row(0)
             self.table.scrollToTop()
         self.table.setFocus()
+
+    def _apply_path_rules_to_browse_dir(self):
+        """Walk the currently-browsed directory recursively and re-apply path
+        rules to every supported file. Override semantics — matching rules
+        always win. Used to retag a folder's worth of files after editing
+        a /Folder/ rule, without touching CLIP/face detection."""
+        d = getattr(self, "_browse_dir", None)
+        if not d or not os.path.isdir(d):
+            return
+        valid_exts = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
+        proj = getattr(self, "current_project", None)
+        path_rules = self.get_path_rules_cached() or []
+        if not path_rules:
+            self.statusBar().showMessage(
+                _t("No path rules to apply. / 適用するパス規則がありません。"), 3000)
+            return
+        n_total = n_changed = 0
+        for root, _dirs, files in os.walk(d):
+            for f in files:
+                if not f.lower().endswith(valid_exts):
+                    continue
+                fp = os.path.join(root, f)
+                n_total += 1
+                self.attrs_data, ch = attrs_mod.apply_path_rules(
+                    self.attrs_data, fp, proj, _path_rules=path_rules)
+                if ch:
+                    n_changed += 1
+        # apply_path_rules saves per-file, but a final save is cheap and
+        # guarantees the JSON reflects the in-memory state if any save was
+        # skipped (e.g. one threw). Refresh preview if it's open.
+        try:
+            attrs_mod.save(proj, self.attrs_data)
+        except Exception:
+            pass
+        ph = getattr(self, "preview_handler", None)
+        pw = getattr(ph, "window", None) if ph else None
+        if pw is not None:
+            cur = getattr(pw, "_attr_path", None)
+            if cur:
+                try: pw._refresh_attrs_inner(cur)
+                except Exception: pass
+        self.statusBar().showMessage(
+            _t(f"Path rules applied: {n_changed} of {n_total} files changed. / "
+               f"パス規則適用：{n_total}件中{n_changed}件更新。"), 5000)
 
     def _exit_browse_mode(self):
         self._browse_dir = None
@@ -3907,34 +4287,56 @@ class AISearchApp(QMainWindow):
             scaled = px.scaled(330, 330,
                                Qt.AspectRatioMode.KeepAspectRatio,
                                Qt.TransformationMode.SmoothTransformation)
+            self._apply_header_theme()
             self.drop_zone.setPixmap(scaled)
             self.drop_zone.setText("")
+            if hasattr(self.drop_zone, "set_rim"):
+                self.drop_zone.set_rim(None)
         else:
-            # Video — extract first frame
+            # Video — extract first AND last frame, joined with a green
+            # divider (matches search-mode behavior so browsing videos
+            # always shows the split view).
             frame_px = None
             if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm'):
                 try:
                     import cv2, numpy as np
                     from PyQt6.QtGui import QImage
                     cap = cv2.VideoCapture(path)
-                    ret, frame = cap.read()
+                    ret1, frame1 = cap.read()
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if total > 1:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, total - 1)
+                        ret2, frame2 = cap.read()
+                    else:
+                        ret2, frame2 = False, None
                     cap.release()
-                    if ret:
-                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if ret1:
+                        if ret2 and frame2 is not None:
+                            div_w = max(20, frame1.shape[1] // 48)
+                            div = np.zeros((frame1.shape[0], div_w, 3), dtype=np.uint8)
+                            div[:, :] = [0, 200, 0]  # BGR green
+                            combined = np.concatenate([frame1, div, frame2], axis=1)
+                        else:
+                            combined = frame1
+                        rgb = cv2.cvtColor(combined, cv2.COLOR_BGR2RGB)
                         h, w, ch = rgb.shape
                         qimg = QImage(rgb.data, w, h, w * ch, QImage.Format.Format_RGB888)
                         frame_px = QPixmap.fromImage(qimg)
                 except Exception:
                     pass
+            _is_video_browse = ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm')
             if frame_px and not frame_px.isNull():
                 scaled = frame_px.scaled(330, 330,
                                          Qt.AspectRatioMode.KeepAspectRatio,
                                          Qt.TransformationMode.SmoothTransformation)
+                self._apply_header_theme()
                 self.drop_zone.setPixmap(scaled)
                 self.drop_zone.setText("")
             else:
                 self.drop_zone.setPixmap(QPixmap())
-                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if ext in ('.mp4', '.mkv', '.mov', '.avi', '.webm') else "?")
+                self.drop_zone.setText(_t("▶ VIDEO / ▶ 動画") if _is_video_browse else "?")
+            if hasattr(self.drop_zone, "set_rim"):
+                self.drop_zone.set_rim("#00ff00", 4) if _is_video_browse else self.drop_zone.set_rim(None)
 
     def handle_preview(self):
         if self._lock_preview: return
@@ -4047,16 +4449,29 @@ class AISearchApp(QMainWindow):
             # Idle — show the drop-target placeholder taking the whole area
             self.drop_zone.show()
             self._strip_layout.addWidget(self.drop_zone, 0, 0)
+        # Re-apply project bg before showing thumbnails so the color sticks
+        self._apply_header_theme()
         # Update visible cells
         for i, cell in enumerate(self._strip_cells):
             if i < len(paths):
                 p = paths[i]
-                # fast=True → first-frame only for filmstrip cells; spares
-                # the slow last-frame seek that pile up on video-heavy groups.
-                self._set_zone_image(cell, p, fast=True)
-                cell.setStyleSheet(
-                    "QLabel { border: 3px solid #9b6dff; }" if p == selected_path
-                    else "QLabel { border: none; }")
+                # Video filmstrip cells show the split first+last view to match
+                # the big drop-zone thumbnail and the preview window. The
+                # last-frame seek adds latency on video-heavy lists; that's
+                # absorbed because the strip is only re-rendered when the
+                # current row changes.
+                self._set_zone_image(cell, p, fast=False)
+                # Border priority: purple = selected; green = video; else none.
+                # Painted via DropZoneLabel.set_rim (paintEvent) instead of QSS
+                # so the project-bg fill in paintEvent doesn't visually erase
+                # the rim.
+                _is_vid = p.lower().endswith(logic.EXT_VID)
+                if p == selected_path:
+                    cell.set_rim("#9b6dff", 4)
+                elif _is_vid:
+                    cell.set_rim("#00ff00", 4)
+                else:
+                    cell.set_rim(None)
                 cell.show()
                 cell.setCursor(Qt.CursorShape.PointingHandCursor)
                 # Single click: jump table row + open preview window
@@ -4102,15 +4517,12 @@ class AISearchApp(QMainWindow):
         slow last-frame seek). Used for small filmstrip cells; the big
         drop_zone keeps the combined first+last view.
         Pass path=None to clear the zone."""
-        # Green outer rim for video files (mirrors the preview window)
+        # Green outer rim for video files (mirrors the preview window).
+        # Use set_rim so it paints in paintEvent — a QSS border was being
+        # visually overlapped by the project-bg fillRect and disappearing.
         _is_vid = bool(path) and path.lower().endswith(logic.EXT_VID)
-        if _is_vid:
-            zone.setStyleSheet(zone.styleSheet().rstrip("; ") +
-                               "; border: 4px solid #00ff00;")
-        else:
-            ss = zone.styleSheet()
-            if "border: 4px solid #00ff00" in ss:
-                zone.setStyleSheet(ss.replace("; border: 4px solid #00ff00;", ""))
+        if hasattr(zone, "set_rim"):
+            zone.set_rim("#00ff00", 4) if _is_vid else zone.set_rim(None)
         if not path or not os.path.exists(path):
             zone.setPixmap(QPixmap())
             zone.setText("")
@@ -4394,8 +4806,11 @@ class AISearchApp(QMainWindow):
             QMessageBox.warning(self, _t("Locked / ロック中"), _t("This file is locked and cannot be moved. / このファイルはロックされているため移動できません。"))
             return
 
+        # Start the picker at the file's own folder so moving to a sibling
+        # directory is one step instead of navigating from the last target.
+        _start = os.path.dirname(old_path) if old_path and os.path.isdir(os.path.dirname(old_path)) else self.last_move_dir
         new_path, self.data, err, chosen_dir = front_page.select_and_move_file(
-            self, old_path, self.data, self.current_project, self.last_move_dir,
+            self, old_path, self.data, self.current_project, _start,
             mode=self.config.get("move_conflict", "size_check"))
 
         if new_path:
@@ -4409,8 +4824,6 @@ class AISearchApp(QMainWindow):
             next_row = row + 1 if row + 1 < self.table.rowCount() else row - 1
             if next_row >= 0:
                 self._select_row(next_row)
-                if row == 0:
-                    self._rebase_to_row(next_row)
         elif err and err != "cancelled":
             QMessageBox.critical(self, _t("Move Error / 移動エラー"), _t(f"Could not move file: {err} / ファイルを移動できません: {err}"))
 

@@ -100,6 +100,9 @@ class _CanvasMixin:
             mode = self._clip_inspect_mode_cb.currentData()
             self.app.config["clip_inspect_mode"] = mode
             cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            # Keep the main-window logo in sync (on/off variant)
+            if hasattr(self.app, "_refresh_logo_pixmap"):
+                self.app._refresh_logo_pixmap()
         self._clip_inspect_mode_cb.currentIndexChanged.connect(_on_inspect_mode)
         proj_bar.addWidget(self._clip_inspect_mode_cb)
 

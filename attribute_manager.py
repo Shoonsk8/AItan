@@ -38,7 +38,7 @@ FIELD_DEFS = {
     "J":               ("id",      []),
     "PI":              ("id",      []),
     "PW":              ("id",      []),
-    "A":               ("id",      []),
+    "A":               ("matrix",  [("Animal", "animal", None)]),
     "O":               ("taglist",  []),
     "R":               ("taglist",  []),
     "K":               ("taglist",  []),
@@ -69,8 +69,8 @@ BLUE_PREFIXES = {
     "CS",  # Camera Shot
     # File-derived / fixed
     "O", "R", "K", "audio", "Watermark",
-    # ID structural markers
-    "P", "J", "PI", "PW", "A",
+    # ID structural markers — A removed (now a yellow user-editable matrix)
+    "P", "J", "PI", "PW",
 }
 
 

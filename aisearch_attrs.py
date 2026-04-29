@@ -1,4 +1,4 @@
-import json, os, cv2, re, datetime, time as _time, threading as _threading
+import json, os, sys, cv2, re, datetime, time as _time, threading as _threading
 
 # dlib (via face_recognition) is not thread-safe — serialize all face detection calls.
 _face_lock = _threading.Lock()
@@ -284,6 +284,12 @@ PERSON_ALIASES_FILE      = os.path.join(_DATA_DIR, "person_aliases.json")
 PERSON_RIGHT_GROUPS_FILE = os.path.join(_DATA_DIR, "person_right_groups.json")
 
 _DEFAULT_TAG_GROUPS = {
+    # ── Animal  A[hi][lo]  — 2-digit matrix (16x16 = 256 codes) ─────────────
+    # User-editable; expand via Settings → Attributes editor.
+    "A_Table": [
+        ["00", "(no animal)"],
+        ["01", "Capybara"],
+    ],
     # ── Eyes  E[additional][color]  ──────────────────────────────────────────
     # 1st digit (right) = color
     "E_Color": [
@@ -739,7 +745,7 @@ _DEFAULT_CODED_FIELDS = [
     # digits: 2 or 3 = hex digit count; 0 = boolean flag (letter only, no value)
     # Each digit position has independent meaning — see _DEFAULT_TAG_GROUPS for sub-tables
     # ── Person / Subject ─────────────────────────────────────────────────────
-    ("A",   "Animal",        3),   # animal ID  (A000 = no animal)
+    ("A",   "Animal",        2),   # animal type — 2-digit matrix (00 = no animal)
     ("PI",  "PersonInhrt",   3),   # origin/inherited person ID
     # PW is handled as multi-token (like P), not a single CODED_FIELD
     # ── Face ─────────────────────────────────────────────────────────────────
@@ -756,13 +762,15 @@ _DEFAULT_CODED_FIELDS = [
     ("T",   "Tool",          2),   # 00=nothing  ff=custom
     # ── Technical ────────────────────────────────────────────────────────────
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
-    ("BG",  "Background",    3),   # [3rd=major][2nd=sub][1st=specific]
+    ("BG",  "Background",    2),   # 16×16 matrix — 2-digit hex (00-ff). Was 3
+                                   # historically; reduced to match the actual
+                                   # Background_Table (e.g. Ocean=42).
     ("O",   "Orientation",   2),   # f1=15:1  73=21:9  09=16:9  32=3:2  43=4:3  11=1:1  34=3:4  23=2:3  90=9:16
     ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
     ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
-    ("WM",  "Watermark",     0),   # flag — WM present = watermarked
-    ("ED",  "Editable",      0),   # flag — ED present = app may auto-rename this file
-    ("J",   "Timestamp",     8),   # Timestamp: yymmddHHMMSS as 8 base-36 chars — always last
+    ("J",   "Timestamp",     8),   # yymmddHHMMSS as 8 base-36 chars
+    ("ED",  "Editable",      0),   # flag — ED present = app may auto-rename
+    ("WM",  "Watermark",     0),   # flag — WM present = watermarked. Always last.
 ]
 
 def _load_coded_fields():
@@ -805,6 +813,8 @@ _FIELD_RE = re.compile(
     # NOTE: no re.IGNORECASE — uppercase = field key, lowercase = value
 )
 
+_PCF_CACHE = {}
+
 def parse_coded_filename(stem):
     """Parse a coded filename stem into a dict.
     Supports two formats:
@@ -812,6 +822,12 @@ def parse_coded_filename(stem):
       Date-first:   J3bmrvfkvP001E01...    (regular photos; P optional)
     Returns {'persons': [...], 'persons_with': [...], 'j': '...', ...}
     or None if stem has neither P tokens nor a leading J field."""
+    # Same stem is parsed many times per attr-panel refresh (once per widget);
+    # cache by raw stem so we don't redo regex work in a hot loop.
+    if stem in _PCF_CACHE:
+        _v = _PCF_CACHE[stem]
+        return None if _v is None else dict(_v)
+    _orig_stem = stem
     # Normalize: strip legacy -hex fingerprint suffix (size-based, no longer used)
     stem = re.sub(r'-[0-9a-f]{3,6}$', '', stem)
     persons = re.findall(_PERSON_PAT, stem)
@@ -819,15 +835,53 @@ def parse_coded_filename(stem):
     if not persons:
         # Accept date-first stems: must start with J + 8 base-36 chars
         if not re.match(r'^J[0-9a-z]{8}', stem, re.IGNORECASE):
+            _PCF_CACHE[_orig_stem] = None
+            if len(_PCF_CACHE) > 4096:
+                _PCF_CACHE.clear()
             return None
     # Strip all P and PW tokens before matching coded fields
     remainder = re.sub(r'PW[0-9a-f]{3}', '', stem)
     remainder = re.sub(r'P(?!W)(?:A[0-9a-f]{3}|[0-9a-f]{3})', '', remainder)
     m = _FIELD_RE.match(remainder if remainder else '')
     if m is None:
-        return None
+        # Strict in-order regex didn't match — fall back to a per-field
+        # tolerant scan that pulls each field's value regardless of position.
+        # This catches files renamed before the canonical field order was
+        # finalized (e.g. "...J{j}CL...BG..." where J is mid-string instead
+        # of at the end). Without this, every rename of such a file gets a
+        # fresh J from ctime → endless filename churn.
+        result = {'persons': persons, 'persons_with': persons_with}
+        _ok = False
+        for letter, _, digits in CODED_FIELDS:
+            lk = letter.lower()
+            if digits == 0:
+                # Boolean flag — letter, not part of another key's name.
+                # Lookbehind forbids uppercase only (lowercase hex is fine
+                # because that's the previous field's value tail).
+                _bm = re.search(rf'(?<![A-Z]){letter}(?![A-Za-z0-9])', remainder)
+                result[lk] = letter if _bm else ""
+                if _bm:
+                    _ok = True
+            else:
+                _cls = "[0-9a-z]" if letter == "J" else "[0-9a-f]"
+                _fm = re.search(rf'(?<![A-Z]){letter}({_cls}{{{digits}}})', remainder)
+                result[lk] = _fm.group(1) if _fm else ""
+                if _fm:
+                    _ok = True
+        if not _ok:
+            _PCF_CACHE[_orig_stem] = None
+            if len(_PCF_CACHE) > 4096:
+                _PCF_CACHE.clear()
+            return None
+        _PCF_CACHE[_orig_stem] = dict(result)
+        if len(_PCF_CACHE) > 4096:
+            _PCF_CACHE.clear()
+        return result
     result = {'persons': persons, 'persons_with': persons_with}
     result.update({k: (v or "") for k, v in m.groupdict().items()})
+    _PCF_CACHE[_orig_stem] = dict(result)
+    if len(_PCF_CACHE) > 4096:
+        _PCF_CACHE.clear()
     return result
 
 def build_coded_filename(parts, date_first=False, field_order=None):
@@ -1231,9 +1285,27 @@ def load(project):
 # Keys that live only in memory (diagnostic/score-text caches and runtime markers);
 # stripped at disk-write so attrs_*.json stays compact.
 _TRANSIENT_ENTRY_KEYS = frozenset({
-    "CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E",
-    "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE", "_project",
+    "_project",  # only this is truly transient — runtime project marker
 })
+
+# Keys we DO persist to JSON but DON'T embed in the AItan{} block.
+# CLIP/FACE detection results are now cached in JSON so re-opening a file
+# doesn't re-run detection (which used to leak ~50MB per call). They stay
+# out of AItan to keep the embedded block small and file-portable.
+_AITAN_SKIP_KEYS = frozenset({
+    "CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E",
+    "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "FACE", "FACE_PW",
+})
+
+def _is_transient_key(k: str) -> bool:
+    """Runtime markers that should never hit disk. CLIP/FACE blobs are no
+    longer transient — they're cached in JSON so detection runs once per
+    file. Use _is_aitan_skip_key for the embed-side filter."""
+    return k in _TRANSIENT_ENTRY_KEYS
+
+def _is_aitan_skip_key(k: str) -> bool:
+    """Skip from the AItan{} block (still saved to JSON)."""
+    return k in _AITAN_SKIP_KEYS or k.startswith("CLIP_")
 
 # Guards against concurrent save() calls from multiple background threads
 # (CLIP detect, face detect, auto-scan, etc.) racing with the user's
@@ -1245,11 +1317,21 @@ def save(project, data):
     # Strip transient keys per-entry so disk JSON keeps only results, not
     # CLIP/FACE diagnostic dumps or runtime markers.
     with _SAVE_LOCK:
+        # CLIP/FACE/CLIP_*/FACE_PW debug dumps were pre-cap saved at 25k+ chars
+        # which triggered QTextCursor::setPosition out-of-range warnings on
+        # every reload. Cap on save so existing data normalizes over time.
+        _DEBUG_TEXT_CAP = 8192
+        _DEBUG_KEYS = {"CLIP", "FACE", "FACE_PW"}
+        def _cap_debug(k, v):
+            if isinstance(v, str) and len(v) > _DEBUG_TEXT_CAP and (
+                    k in _DEBUG_KEYS or k.startswith("CLIP_")):
+                return v[:_DEBUG_TEXT_CAP] + "\n…(truncated)"
+            return v
         cleaned = {}
         for path, entry in data.items():
             if isinstance(entry, dict):
-                cleaned[path] = {k: v for k, v in entry.items()
-                                 if k not in _TRANSIENT_ENTRY_KEYS}
+                cleaned[path] = {k: _cap_debug(k, v) for k, v in entry.items()
+                                 if not _is_transient_key(k)}
             else:
                 cleaned[path] = entry
         # Atomic write: dump to temp file, then rename, so a crash or second
@@ -1373,6 +1455,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
+_AITAN_VERSION = "1.991"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""
@@ -1395,12 +1478,40 @@ def _extract_aitan_block(text: str) -> dict | None:
         pass
     return None
 
+def _strip_aitan_block(text: str) -> str:
+    """Remove the AItan{...} block from a string, leaving the rest intact."""
+    if not text or _AITAN_PREFIX + "{" not in text:
+        return text
+    idx = text.find(_AITAN_PREFIX + "{")
+    end = idx + len(_AITAN_PREFIX)
+    depth, i = 0, end
+    while i < len(text):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return (text[:idx] + text[i + 1:]).strip()
+        i += 1
+    return text
+
 def _build_aitan_block(entry: dict) -> str:
     """Serialize attrs entry as AItan{...} string (excludes heavy/internal fields).
     CLIP/FACE debug blobs and runtime markers are stripped so the embedded
-    block stays small and file-portable — only results travel with the file."""
-    _SKIP = {"meta"} | _TRANSIENT_ENTRY_KEYS
-    slim = {k: v for k, v in entry.items() if k not in _SKIP and v not in (None, "", [], {})}
+    block stays small and file-portable — only results travel with the file.
+    "ver" is stamped first so future readers can branch on writer version."""
+    # Redundant flags that don't carry portable info — confirmed/editable are
+    # session-scoped UI state, audio_probed is a "we already ffprobed this
+    # file" cache marker, not file-level metadata.
+    _SKIP_FIELDS = {"meta", "ver", "confirmed", "editable", "audio_probed"}
+    slim = {"ver": _AITAN_VERSION}
+    for k, v in entry.items():
+        if (k in _SKIP_FIELDS
+                or _is_transient_key(k)
+                or _is_aitan_skip_key(k)        # CLIP_*/FACE stay out of file embed
+                or v in (None, "", [], {})):
+            continue
+        slim[k] = v
     return _AITAN_PREFIX + json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
 
 def read_raw_embedded_text(path: str) -> str:
@@ -1497,7 +1608,23 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
         elif ext in (".png", ".webp"):
             from PIL import Image
             with Image.open(path) as img:
-                desc = img.info.get("Description", "") or img.info.get("description", "")
+                # Primary: dedicated "AItan" chunk (current write location).
+                # Legacy: "Description"/"description" (older files).
+                info = img.info
+                aitan_text = info.get("AItan", "") or info.get("Description", "") or info.get("description", "")
+                # WebP EXIF UserComment fallback (some old files put AItan there)
+                if not aitan_text or not str(aitan_text).startswith(_PREFIX):
+                    raw_exif = info.get("exif", b"")
+                    if raw_exif:
+                        try:
+                            import piexif, piexif.helper
+                            exif = piexif.load(raw_exif)
+                            uc_raw = exif.get("Exif", {}).get(piexif.ExifIFD.UserComment, b"")
+                            if uc_raw:
+                                aitan_text = piexif.helper.UserComment.load(uc_raw)
+                        except Exception:
+                            pass
+            desc = str(aitan_text or "")
             if desc.startswith(_PREFIX):
                 try:
                     return json.loads(desc[len(_PREFIX):])
@@ -1515,6 +1642,194 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def migrate_aitan_video(path: str) -> bool:
+    """Migrate AItan{} block from old location ("comment" tag) to new
+    location ("description" tag). Preserves anything else in either tag.
+    Returns True if migration was performed, False if nothing to do.
+
+    Old versions of this app wrote AItan to "comment", which clobbered the
+    ComfyUI workflow stored there. For files written before that fix, the
+    workflow is already lost, but we can still relocate the AItan block so
+    new bakes don't keep stomping on "comment" going forward.
+    """
+    import subprocess, tempfile, shutil, json as _json, uuid as _uuid
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
+            capture_output=True, text=True, timeout=10)
+        fmt_tags = _json.loads(probe.stdout).get("format", {}).get("tags", {}) or {}
+    except Exception:
+        return False
+    comment = fmt_tags.get("comment", "") or ""
+    description = fmt_tags.get("description", "") or ""
+    aitan_in_comment = _extract_aitan_block(comment)
+    if aitan_in_comment is None:
+        return False  # No AItan in comment — nothing to migrate
+    # Build new field values
+    block = _AITAN_PREFIX + json.dumps(aitan_in_comment, ensure_ascii=False, separators=(",", ":"))
+    new_comment = _strip_aitan_block(comment).rstrip()
+    desc_stripped = _strip_aitan_block(description) if description else ""
+    new_description = (desc_stripped.rstrip() + "\n" + block) if desc_stripped.strip() else block
+    # Detect container ext
+    try:
+        _fmt = _json.loads(probe.stdout).get("format", {}).get("format_name", "")
+        _ext = ".mp4" if "mp4" in _fmt or "mov" in _fmt else \
+               ".mkv" if "matroska" in _fmt else \
+               ".webm" if "webm" in _fmt else \
+               os.path.splitext(path)[1]
+    except Exception:
+        _ext = os.path.splitext(path)[1]
+    tmp = os.path.join(os.path.dirname(path),
+                       "." + os.path.basename(path) + "." + _uuid.uuid4().hex[:8] + ".aitan_tmp" + _ext)
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", path,
+             "-metadata", f"comment={new_comment}",
+             "-metadata", f"description={new_description}",
+             "-codec", "copy", tmp],
+            capture_output=True, timeout=30)
+        orig_size = os.path.getsize(path) if os.path.exists(path) else 0
+        tmp_size  = os.path.getsize(tmp)  if os.path.exists(tmp)  else 0
+        if tmp_size > 0 and (orig_size == 0 or tmp_size >= orig_size * 0.5):
+            shutil.move(tmp, path)
+            return True
+        return False
+    finally:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
+
+
+def migrate_aitan_image(path: str) -> bool:
+    """For images, normalize where the AItan{} block lives without touching
+    any other metadata. PNG: ensure AItan goes in its own "AItan" text chunk
+    and strip the legacy copy from "Description". JPEG/WebP: rewrite the
+    existing AItan block in UserComment with strip+append so anything else
+    in UserComment (e.g. ComfyUI workflow) is preserved.
+    Returns True if the file was actually rewritten, False otherwise.
+    """
+    import shutil as _shutil, uuid as _uuid
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        return False
+    try:
+        from PIL import Image, PngImagePlugin
+    except Exception:
+        return False
+    try:
+        img = Image.open(path)
+        img.load()
+    except Exception:
+        return False
+
+    tmp = os.path.join(os.path.dirname(path),
+                       "." + os.path.basename(path) + "." + _uuid.uuid4().hex[:8] + ".aitan_tmp" + ext)
+    try:
+        if ext == ".png":
+            info = img.info
+            # Find AItan in any text chunk
+            aitan_block = None
+            for _k in ("AItan", "Description", "UserComment", "Comment"):
+                _v = info.get(_k, "")
+                if _v and _AITAN_PREFIX in str(_v):
+                    _parsed = _extract_aitan_block(str(_v))
+                    if _parsed is not None:
+                        aitan_block = _AITAN_PREFIX + json.dumps(_parsed, ensure_ascii=False, separators=(",", ":"))
+                        break
+            if aitan_block is None:
+                return False  # no AItan anywhere — nothing to migrate
+            # Build new chunks: preserve everything, AItan goes in dedicated key,
+            # legacy "Description" gets the AItan block stripped out.
+            meta = PngImagePlugin.PngInfo()
+            for _k, _v in info.items():
+                if _k == "AItan" or not isinstance(_v, str):
+                    continue
+                if _k == "Description":
+                    _stripped = _strip_aitan_block(_v)
+                    if _stripped.strip():
+                        try: meta.add_text(_k, _stripped)
+                        except Exception: pass
+                    continue
+                try: meta.add_text(_k, _v)
+                except Exception: pass
+            meta.add_text("AItan", aitan_block)
+            img.save(tmp, pnginfo=meta)
+        else:
+            # JPEG / WebP — pull AItan from any legacy slot (UserComment OR
+            # XPComment) and write it back to UserComment with strip+append,
+            # then remove the XPComment copy to avoid duplication.
+            import piexif, piexif.helper
+            exif_data = img.info.get("exif", b"")
+            try:
+                exif_dict = piexif.load(exif_data) if exif_data else {}
+            except Exception:
+                exif_dict = {}
+            exif_dict.setdefault("Exif", {})
+            exif_dict.setdefault("0th", {})
+            # Read XPComment (UTF-16LE)
+            xp_raw = exif_dict["0th"].get(piexif.ImageIFD.XPComment, b"")
+            existing_xp = ""
+            if xp_raw:
+                try:
+                    existing_xp = bytes(xp_raw).rstrip(b"\x00").decode("utf-16le", errors="replace")
+                except Exception:
+                    existing_xp = ""
+            # Read UserComment
+            uc_raw = exif_dict["Exif"].get(piexif.ExifIFD.UserComment, b"")
+            existing_uc = ""
+            try:
+                existing_uc = piexif.helper.UserComment.load(uc_raw) if uc_raw else ""
+            except Exception:
+                existing_uc = ""
+            # Find AItan in either slot — XPComment takes priority since that's
+            # the legacy location we need to clean up
+            block = None
+            for src in (existing_xp, existing_uc):
+                if src and _AITAN_PREFIX + "{" in src:
+                    parsed = _extract_aitan_block(src)
+                    if parsed is not None:
+                        block = _AITAN_PREFIX + json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+                        break
+            if block is None:
+                return False
+            # Build new UserComment: existing UC with AItan stripped + new block
+            uc_stripped = _strip_aitan_block(existing_uc).rstrip() if existing_uc else ""
+            new_uc = (uc_stripped + "\n" + block) if uc_stripped else block
+            # Skip rewrite only if XPComment was clean AND UC already correct
+            if not existing_xp and new_uc == existing_uc:
+                return False
+            exif_dict["Exif"][piexif.ExifIFD.UserComment] = (
+                piexif.helper.UserComment.dump(new_uc, encoding="unicode"))
+            # Remove XPComment so the AItan block isn't stored twice
+            if piexif.ImageIFD.XPComment in exif_dict["0th"]:
+                del exif_dict["0th"][piexif.ImageIFD.XPComment]
+            try:
+                exif_bytes = piexif.dump(exif_dict)
+            except Exception:
+                return False
+            if ext in (".jpg", ".jpeg"):
+                _shutil.copy2(path, tmp)
+                try:
+                    piexif.insert(exif_bytes, tmp)
+                except Exception:
+                    return False
+            else:  # .webp
+                lossless = img.info.get("lossless", False)
+                img.save(tmp, format="WEBP", exif=exif_bytes, lossless=lossless, quality=90)
+        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+            _shutil.move(tmp, path)
+            return True
+        return False
+    except Exception:
+        return False
+    finally:
+        try: img.close()
+        except Exception: pass
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except Exception: pass
 
 
 def embed_aitan_meta(path: str, entry: dict, _raise: bool = False) -> bool:
@@ -1550,10 +1865,23 @@ def _embed_aitan_video(path: str, block: str, _raise: bool = False) -> bool:
     import uuid as _uuid
     tmp = os.path.join(os.path.dirname(path),
                        "." + os.path.basename(path) + "." + _uuid.uuid4().hex[:8] + ".aitan_tmp" + _ext)
+    # Preserve any existing "description" content. Strip the prior AItan{}
+    # block (so re-bakes don't duplicate it) and append the new one, leaving
+    # everything else verbatim. ComfyUI's "comment" tag stays untouched.
+    _existing_desc = ""
+    try:
+        _probe2 = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", path],
+            capture_output=True, text=True, timeout=10)
+        _existing_desc = _json.loads(_probe2.stdout).get("format", {}).get("tags", {}).get("description", "") or ""
+    except Exception:
+        pass
+    _stripped = _strip_aitan_block(_existing_desc) if _existing_desc else ""
+    _new_desc = (_stripped.rstrip() + "\n" + block) if _stripped.strip() else block
     try:
         result = subprocess.run(
             ["ffmpeg", "-y", "-i", path,
-             "-metadata", f"comment={block}",
+             "-metadata", f"description={_new_desc}",
              "-codec", "copy", tmp],
             capture_output=True, timeout=30)
         # Accept if tmp was written with reasonable size (>= 50% of original),
@@ -1600,9 +1928,28 @@ def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
                 return _embed_aitan_video(path, block, _raise=_raise)
         with Image.open(path) as img:
             if ext == ".png":
+                # Preserve every existing text chunk verbatim; AItan goes in
+                # its own dedicated "AItan" key so nothing else is touched.
                 meta = PngImagePlugin.PngInfo()
-                meta.add_text("Description", block)
-                img.save(tmp, pnginfo=meta)
+                # Preserve every text chunk (ComfyUI workflow lives here)
+                for _k, _v in img.info.items():
+                    if _k == "AItan" or not isinstance(_v, str):
+                        continue
+                    try:
+                        meta.add_text(_k, _v)
+                    except Exception:
+                        pass
+                meta.add_text("AItan", block)
+                # Pass through PNG ancillary chunks that PIL exposes as
+                # non-string values in img.info — gamma, DPI, color profile,
+                # transparency, sRGB rendering intent. Without these passed
+                # explicitly img.save() drops them, destroying user metadata.
+                _save_kwargs = {"pnginfo": meta}
+                for _ckey in ("dpi", "gamma", "transparency",
+                              "icc_profile", "srgb", "chromaticity"):
+                    if _ckey in img.info:
+                        _save_kwargs[_ckey] = img.info[_ckey]
+                img.save(tmp, **_save_kwargs)
             elif ext in (".jpg", ".jpeg"):
                 import piexif, piexif.helper
                 exif_dict = {}
@@ -1611,15 +1958,40 @@ def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
                         exif_dict = piexif.load(img.info["exif"])
                 except Exception:
                     pass
+                # Read existing UserComment, strip any prior AItan block, then
+                # append the new one. Preserves ComfyUI/A1111 workflow if it
+                # was stored there.
                 exif_dict.setdefault("Exif", {})
+                exif_dict.setdefault("0th", {})
+                _uc_raw = exif_dict["Exif"].get(piexif.ExifIFD.UserComment, b"")
+                _existing_uc = ""
+                try:
+                    _existing_uc = piexif.helper.UserComment.load(_uc_raw) if _uc_raw else ""
+                except Exception:
+                    _existing_uc = ""
+                _uc_stripped = _strip_aitan_block(_existing_uc) if _existing_uc else ""
+                _new_uc = (_uc_stripped.rstrip() + "\n" + block) if _uc_stripped.strip() else block
                 exif_dict["Exif"][piexif.ExifIFD.UserComment] = (
-                    piexif.helper.UserComment.dump(block, encoding="unicode"))
+                    piexif.helper.UserComment.dump(_new_uc, encoding="unicode"))
+                # Drop any stale XPComment containing AItan from a prior write.
+                _xp_raw = exif_dict["0th"].get(piexif.ImageIFD.XPComment, b"")
+                if _xp_raw:
+                    try:
+                        _xp_str = bytes(_xp_raw).rstrip(b"\x00").decode("utf-16le", errors="replace")
+                        if _AITAN_PREFIX + "{" in _xp_str:
+                            del exif_dict["0th"][piexif.ImageIFD.XPComment]
+                    except Exception:
+                        pass
                 try:
                     exif_bytes = piexif.dump(exif_dict)
                 except Exception:
-                    exif_dict = {"Exif": {piexif.ExifIFD.UserComment:
-                        piexif.helper.UserComment.dump(block, encoding="unicode")}}
-                    exif_bytes = piexif.dump(exif_dict)
+                    # piexif.dump can fail on quirky EXIF (e.g. malformed
+                    # GPS subdir). DO NOT fall back to a minimal dict — that
+                    # would wipe legitimate user EXIF (camera, GPS, datetime,
+                    # XMP refs). Skip the embed instead and bail out cleanly.
+                    if _raise:
+                        raise
+                    return False
                 # Write to temp file then use piexif.insert to inject EXIF in-place
                 _shutil.copy2(path, tmp)
                 try:
@@ -1642,9 +2014,29 @@ def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
                     exif_dict = piexif.load(exif_data) if exif_data else {}
                 except Exception:
                     exif_dict = {}
+                # Read existing UserComment, strip prior AItan, append new
+                # — preserves ComfyUI/A1111 workflow if stored there.
                 exif_dict.setdefault("Exif", {})
+                exif_dict.setdefault("0th", {})
+                _uc_raw = exif_dict["Exif"].get(piexif.ExifIFD.UserComment, b"")
+                _existing_uc = ""
+                try:
+                    _existing_uc = piexif.helper.UserComment.load(_uc_raw) if _uc_raw else ""
+                except Exception:
+                    _existing_uc = ""
+                _uc_stripped = _strip_aitan_block(_existing_uc) if _existing_uc else ""
+                _new_uc = (_uc_stripped.rstrip() + "\n" + block) if _uc_stripped.strip() else block
                 exif_dict["Exif"][piexif.ExifIFD.UserComment] = (
-                    piexif.helper.UserComment.dump(block, encoding="unicode"))
+                    piexif.helper.UserComment.dump(_new_uc, encoding="unicode"))
+                # Drop any stale XPComment containing AItan from a prior write.
+                _xp_raw = exif_dict["0th"].get(piexif.ImageIFD.XPComment, b"")
+                if _xp_raw:
+                    try:
+                        _xp_str = bytes(_xp_raw).rstrip(b"\x00").decode("utf-16le", errors="replace")
+                        if _AITAN_PREFIX + "{" in _xp_str:
+                            del exif_dict["0th"][piexif.ImageIFD.XPComment]
+                    except Exception:
+                        pass
                 exif_bytes = piexif.dump(exif_dict)
                 lossless = img.info.get("lossless", False)
                 img.save(tmp, format="WEBP", exif=exif_bytes, lossless=lossless, quality=90)
@@ -1733,15 +2125,19 @@ def _extract_video_meta(path, meta):
             if s.get("codec_type") == "audio":
                 meta["Audio"] = s.get("codec_name", "")
                 break
-        # AItan embedded data + ComfyUI workflow in format comment tag
+        # AItan lives in the dedicated "AItan" tag; ComfyUI workflow in
+        # "comment". Legacy locations (description, comment) still scanned for
+        # backwards compat with files baked before the split.
         fmt_tags = probe.get("format", {}).get("tags", {})
-        comment = fmt_tags.get("comment", "") or fmt_tags.get("description", "")
-        if comment:
-            _aitan = _extract_aitan_block(comment)
-            if _aitan is not None:
+        for _field in ("AItan", "description", "comment"):
+            _val = fmt_tags.get(_field, "")
+            if not _val:
+                continue
+            _aitan = _extract_aitan_block(_val)
+            if _aitan is not None and "_aitan" not in meta:
                 meta["_aitan"] = _aitan
             try:
-                outer = _json.loads(comment)
+                outer = _json.loads(_val)
                 workflow_str = outer.get("prompt") or outer.get("workflow")
                 if workflow_str:
                     workflow = _json.loads(workflow_str) if isinstance(workflow_str, str) else workflow_str
@@ -1763,14 +2159,32 @@ def _extract_image_meta(path, meta):
             meta["Mode"]       = img.mode
             info = img.info
 
-            # AItan embedded block (PNG Description or JPEG UserComment)
-            for _field in ("Description", "UserComment", "Comment"):
+            # AItan embedded block — primary slot is PNG "AItan" chunk or JPEG/WebP
+            # XPComment EXIF tag (0x9C9C). Legacy locations (Description,
+            # UserComment, Comment) still scanned for backwards compat.
+            for _field in ("AItan", "Description", "UserComment", "Comment"):
                 _raw = info.get(_field, "")
                 if _raw and _AITAN_PREFIX in str(_raw):
                     _aitan = _extract_aitan_block(str(_raw))
                     if _aitan is not None:
                         meta["_aitan"] = _aitan
                     break
+            # JPEG/WebP XPComment lives in EXIF, not img.info — read separately
+            if "_aitan" not in meta:
+                try:
+                    _xp = None
+                    if "exif" in info:
+                        import piexif as _piexif
+                        _ex = _piexif.load(info["exif"])
+                        _xp_raw = _ex.get("0th", {}).get(_piexif.ImageIFD.XPComment)
+                        if _xp_raw:
+                            _xp = _xp_raw.rstrip(b"\x00").decode("utf-16le", errors="replace")
+                    if _xp and _AITAN_PREFIX in _xp:
+                        _aitan = _extract_aitan_block(_xp)
+                        if _aitan is not None:
+                            meta["_aitan"] = _aitan
+                except Exception:
+                    pass
 
             # ComfyUI / A1111 generation params
             if "workflow" in info or "prompt" in info:
@@ -1916,24 +2330,13 @@ def load_filename_config(project=None):
     return dict(_load_fn_raw(project))
 
 def get_sync_field_order(project=None):
-    """Return CODED_FIELDS ordered by sync rules in filename_rules.json.
-    Sync rules (no one_way, no tag_group) define the canonical field order.
-    Any CODED_FIELDS not mentioned in sync rules are appended at the end."""
-    rules = load_filename_rules(project)
-    cf_dict = {letter: (letter, label, digits) for letter, label, digits in CODED_FIELDS}
-    ordered = []
-    seen = set()
-    for rule in rules:
-        if rule.get("one_way") or rule.get("tag_group"):
-            continue
-        field = rule.get("field", "")
-        if field and field in cf_dict and field not in seen:
-            ordered.append(cf_dict[field])
-            seen.add(field)
-    for letter, label, digits in CODED_FIELDS:
-        if letter not in seen:
-            ordered.append((letter, label, digits))
-    return ordered if ordered else CODED_FIELDS
+    """Return CODED_FIELDS in canonical order.
+    Historical: the rule-iteration order from filename_rules.json could
+    override field order. That caused J to land mid-stem and CL/BG to
+    drift to the end whenever the user's saved rules had a non-canonical
+    sequence. CODED_FIELDS is the authoritative order and always wins now;
+    the project parameter is kept for signature compatibility."""
+    return CODED_FIELDS
 
 def save_filename_config(config, project=None):
     """Save full filename config (auto_rename + rules) for a project."""
@@ -2114,6 +2517,7 @@ def detect_tags_from_filename(path, rules, existing_tags=None):
     import fnmatch as _fnmatch
     name      = os.path.basename(path).lower()
     norm_path = path.replace("\\", "/").lower()
+    _parent_lc = os.path.basename(os.path.dirname(norm_path))
     _existing = set(existing_tags or [])
     tags = []
     for rule in rules:
@@ -2126,6 +2530,13 @@ def detect_tags_from_filename(path, rules, existing_tags=None):
             matched = _fnmatch.fnmatch(target,
                 f"*{pattern_fnmatch}" if '/' in pattern_fnmatch and not pattern_fnmatch.startswith('*')
                 else pattern_fnmatch)
+        elif pattern_fnmatch.endswith('/') and pattern_fnmatch.count('/') == 1:
+            # "Folder/" → file's immediate parent ends with that name.
+            # Suffix match (not equality) so "ob/" still matches parent
+            # "apob"; rejects nested subfolders ("apob/" never matches
+            # parent "sub" inside apob/sub/<file>).
+            _stem = pattern_fnmatch.rstrip('/')
+            matched = bool(_stem) and _parent_lc.endswith(_stem)
         else:
             matched = pattern_fnmatch in target
         if not matched:
@@ -2444,7 +2855,7 @@ CLIP_AUTO_DETECT = [
         ("a", "a person with very dark black eyes"),
     ]},
     # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
-    {"field": "cl", "pos": 3, "zero_is_none": True, "threshold": 0.20, "options": [
+    {"field": "cl", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
         ("1", "a person who is topless without any top garment"),
         ("2", "a person wearing a t-shirt"),
         ("3", "a person wearing a blouse or button-up shirt"),
@@ -2461,7 +2872,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing a costume top"),
     ]},
     # ── Clothing — Top color (pos 4) ──────────────────────────────────────────
-    {"field": "cl", "pos": 4, "zero_is_none": True, "threshold": 0.18, "options": [
+    {"field": "cl", "pos": 4, "zero_is_none": True, "threshold": 0.14, "options": [
         ("1", "a person whose top is bare skin or no fabric color"),
         ("2", "a person wearing a black colored top"),
         ("3", "a person wearing a white colored top"),
@@ -2478,7 +2889,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing a multi-colored or patterned top"),
     ]},
     # ── Clothing — Bottom type (pos 1) ────────────────────────────────────────
-    {"field": "cl", "pos": 1, "zero_is_none": True, "threshold": 0.20, "options": [
+    {"field": "cl", "pos": 1, "zero_is_none": True, "threshold": 0.15, "options": [
         ("1", "a person with no bottom garment bare lower body"),
         ("2", "a person wearing jeans denim pants"),
         ("3", "a person wearing trousers or slacks"),
@@ -2495,7 +2906,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing stockings or tights"),
     ]},
     # ── Clothing — Bottom color (pos 2) ───────────────────────────────────────
-    {"field": "cl", "pos": 2, "zero_is_none": True, "threshold": 0.18, "options": [
+    {"field": "cl", "pos": 2, "zero_is_none": True, "threshold": 0.14, "options": [
         ("1", "a person whose bottom is bare skin or no fabric color"),
         ("2", "a person wearing black colored bottoms"),
         ("3", "a person wearing white colored bottoms"),
@@ -2818,51 +3229,261 @@ def inspect_clip_scores(image_emb):
     return results
 
 
+_clip_pool_lock = _threading.Lock()
+_clip_pool_state = {"proc": None, "calls": 0, "max_calls": 30,
+                    "startup_timeout": 30.0, "call_timeout": 30.0}
+
+def _clip_pool_spawn():
+    """Start a persistent clip worker subprocess and wait for its READY line."""
+    import subprocess as _sp
+    _worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "clip_worker_persistent.py")
+    if not os.path.exists(_worker):
+        return None
+    proc = _sp.Popen(
+        [sys.executable, "-u", _worker],
+        stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+        text=True, bufsize=1)
+    # Wait for "ready" line (model loaded). Bounded by startup_timeout.
+    import select as _sel
+    _deadline = _time.time() + _clip_pool_state["startup_timeout"]
+    line = ""
+    while _time.time() < _deadline:
+        r, _, _ = _sel.select([proc.stdout], [], [], _deadline - _time.time())
+        if r:
+            line = proc.stdout.readline()
+            break
+    if not line:
+        try: proc.kill()
+        except Exception: pass
+        return None
+    try:
+        msg = json.loads(line.strip())
+        if not msg.get("ready"):
+            try: proc.kill()
+            except Exception: pass
+            return None
+    except Exception:
+        try: proc.kill()
+        except Exception: pass
+        return None
+    return proc
+
+def _clip_pool_kill():
+    """Terminate the current worker (called on recycle / shutdown)."""
+    proc = _clip_pool_state.get("proc")
+    if proc is None:
+        return
+    try:
+        proc.stdin.write(json.dumps({"cmd": "exit"}) + "\n")
+        proc.stdin.flush()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        try: proc.kill()
+        except Exception: pass
+    _clip_pool_state["proc"] = None
+    _clip_pool_state["calls"] = 0
+
+def inspect_clip_scores_subprocess(path, timeout=None):
+    """Run CLIP scoring via a persistent worker subprocess. The worker
+    keeps the CLIP model loaded so per-call latency is ~50-100ms instead
+    of the ~8s cold-start that one-shot subprocesses cost. Worker is
+    auto-recycled every N calls to bound any torch/CUDA state leaks.
+
+    AISEARCH_INPROC_CLIP=1 forces in-process for debugging.
+    """
+    if os.environ.get("AISEARCH_INPROC_CLIP"):
+        try:
+            import aisearch_logic as _lg
+            emb = _lg.extract_feature(path)
+            return inspect_clip_scores(emb) if emb is not None else []
+        except Exception:
+            return []
+    _to = timeout if timeout is not None else _clip_pool_state["call_timeout"]
+    with _clip_pool_lock:
+        proc = _clip_pool_state.get("proc")
+        # Lazy spawn or recycle when call count crosses the threshold
+        if proc is None or proc.poll() is not None:
+            if proc is not None:
+                _clip_pool_state["proc"] = None
+                _clip_pool_state["calls"] = 0
+            proc = _clip_pool_spawn()
+            if proc is None:
+                # Spawn failed — fall back to in-process so search/inspect
+                # still works even if the worker is broken.
+                try:
+                    import aisearch_logic as _lg
+                    emb = _lg.extract_feature(path)
+                    return inspect_clip_scores(emb) if emb is not None else []
+                except Exception:
+                    return []
+            _clip_pool_state["proc"] = proc
+            _clip_pool_state["calls"] = 0
+        if _clip_pool_state["calls"] >= _clip_pool_state["max_calls"]:
+            _clip_pool_kill()
+            proc = _clip_pool_spawn()
+            if proc is None:
+                return []
+            _clip_pool_state["proc"] = proc
+        # Send request
+        try:
+            proc.stdin.write(json.dumps({"path": path}) + "\n")
+            proc.stdin.flush()
+        except Exception:
+            _clip_pool_kill()
+            return []
+        # Read response with timeout
+        import select as _sel
+        _deadline = _time.time() + _to
+        line = ""
+        while _time.time() < _deadline:
+            r, _, _ = _sel.select([proc.stdout], [], [], _deadline - _time.time())
+            if r:
+                line = proc.stdout.readline()
+                break
+        if not line:
+            # Timeout — kill the worker so it can be respawned next call
+            _clip_pool_kill()
+            return []
+        _clip_pool_state["calls"] += 1
+        try:
+            out = json.loads(line.strip())
+        except Exception:
+            return []
+        return out.get("specs") or []
+
+
+def inspect_face_detection_subprocess(path, project, timeout=30):
+    """Run inspect_face_detection in a worker subprocess.
+    Isolates dlib/face_recognition leaks — each call gets a fresh process
+    whose memory the OS fully reclaims on exit. The leak that was crashing
+    the main app at high RSS no longer compounds across calls.
+
+    Slower than the in-process version (~300ms process spawn + import) but
+    bounded — fine for the auto-inspect debounced path which only fires
+    when the user pauses on a file. AISEARCH_INPROC_FACE=1 forces the
+    in-process call (fallback for debugging).
+    """
+    if os.environ.get("AISEARCH_INPROC_FACE"):
+        return inspect_face_detection(path, project)
+    import subprocess as _sp
+    _worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_worker.py")
+    if not os.path.exists(_worker):
+        return inspect_face_detection(path, project)
+    try:
+        _py = sys.executable
+        r = _sp.run(
+            [_py, _worker, "--path", path, "--project", str(project)],
+            capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0:
+            return {"face_found": False, "num_faces": 0, "matches": [],
+                    "assigned_id": None,
+                    "error": f"worker rc={r.returncode}: {r.stderr.strip()[:200]}"}
+        return json.loads(r.stdout)
+    except _sp.TimeoutExpired:
+        return {"face_found": False, "num_faces": 0, "matches": [],
+                "assigned_id": None, "error": f"worker timeout ({timeout}s)"}
+    except Exception as e:
+        return {"face_found": False, "num_faces": 0, "matches": [],
+                "assigned_id": None, "error": f"worker spawn failed: {e}"}
+
+
 def inspect_face_detection(path, project):
     """Return raw face detection info for a file.
-    Returns dict: {face_found, num_faces, matches: [(pid, similarity)], assigned_id, error}"""
-    result = {"face_found": False, "num_faces": 0, "matches": [], "assigned_id": None}
+    Returns dict: {face_found, num_faces, matches: [(pid, similarity)],
+                   assigned_id, secondaries: [pid, ...], error}
+    The biggest face (by bounding-box area) is treated as the primary and its
+    DB matches go in `matches` / `assigned_id`. Smaller faces that confidently
+    match a known person become `secondaries` (used for PW / persons_with).
+    Unmatched secondary faces are NOT auto-registered — that would inflate
+    the registry with strangers and extras."""
+    result = {"face_found": False, "num_faces": 0, "matches": [],
+              "assigned_id": None, "secondaries": []}
     try:
         import face_recognition
         import numpy as np
-        img = face_recognition.load_image_file(path)
+        _ext = os.path.splitext(path)[1].lower()
+        _VID = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv")
+        if _ext in _VID:
+            cap = cv2.VideoCapture(path)
+            _ok, _frame = cap.read()
+            cap.release()
+            if not _ok or _frame is None:
+                result["error"] = "could not decode first frame of video"
+                return result
+            img = cv2.cvtColor(_frame, cv2.COLOR_BGR2RGB)
+        else:
+            img = face_recognition.load_image_file(path)
         with _face_lock:
-            encodings = face_recognition.face_encodings(img)
+            locations = face_recognition.face_locations(img)
+            encodings = face_recognition.face_encodings(img, known_face_locations=locations)
         result["num_faces"] = len(encodings)
         if not encodings:
             return result
         result["face_found"] = True
-        enc = encodings[0]
+
+        # Sort faces by bounding-box area (biggest first). face_locations gives
+        # (top, right, bottom, left); encodings list is in the same order.
+        def _area(loc):
+            t, r, b, l = loc
+            return max(0, b - t) * max(0, r - l)
+        order = sorted(range(len(encodings)), key=lambda i: _area(locations[i]) if i < len(locations) else 0,
+                       reverse=True)
+        encs_sorted = [encodings[i] for i in order]
+
         db = load_faces_db(project)
         faces = db.get("faces", {})
         aliases = load_person_aliases()
-        matches = []
-        seen_groups = set()
-        for fid, fdata in faces.items():
-            group = frozenset(get_alias_group(fid, aliases))
-            if group in seen_groups:
-                continue
-            seen_groups.add(group)
-            embs = fdata.get("embeddings", [])
-            if not embs and fdata.get("embedding"):
-                embs = [fdata["embedding"]]
-            for gid in group:
-                if gid != fid:
-                    gdata = faces.get(gid, {})
-                    ge = gdata.get("embeddings", [])
-                    if not ge and gdata.get("embedding"):
-                        ge = [gdata["embedding"]]
-                    embs.extend(ge)
-            if not embs:
-                continue
-            np_embs = np.array(embs)
-            dists = face_recognition.face_distance(np_embs, enc)
-            min_dist = float(np.min(dists))
-            matches.append((fid, round(1.0 - min_dist, 3)))
-        matches.sort(key=lambda x: x[1], reverse=True)
-        result["matches"] = matches[:10]
-        if matches and matches[0][1] >= 0.35:
-            result["assigned_id"] = matches[0][0]
+
+        def _match_one(enc):
+            """Return list of (pid, similarity) for a single encoding, sorted desc."""
+            ms = []
+            seen_groups = set()
+            for fid, fdata in faces.items():
+                group = frozenset(get_alias_group(fid, aliases))
+                if group in seen_groups:
+                    continue
+                seen_groups.add(group)
+                embs = fdata.get("embeddings", [])
+                if not embs and fdata.get("embedding"):
+                    embs = [fdata["embedding"]]
+                for gid in group:
+                    if gid != fid:
+                        gdata = faces.get(gid, {})
+                        ge = gdata.get("embeddings", [])
+                        if not ge and gdata.get("embedding"):
+                            ge = [gdata["embedding"]]
+                        embs.extend(ge)
+                if not embs:
+                    continue
+                np_embs = np.array(embs)
+                dists = face_recognition.face_distance(np_embs, enc)
+                min_dist = float(np.min(dists))
+                ms.append((fid, round(1.0 - min_dist, 3)))
+            ms.sort(key=lambda x: x[1], reverse=True)
+            return ms
+
+        # Primary face — biggest box. Existing callers consume `matches` and
+        # `assigned_id` from this one.
+        primary_matches = _match_one(encs_sorted[0])
+        result["matches"] = primary_matches[:10]
+        if primary_matches and primary_matches[0][1] >= 0.35:
+            result["assigned_id"] = primary_matches[0][0]
+
+        # Secondaries — only emit IDs that match KNOWN persons confidently.
+        # Don't include the primary's assigned ID (would duplicate P into PW).
+        primary_pid = result["assigned_id"]
+        secondaries = []
+        for enc in encs_sorted[1:]:
+            ms = _match_one(enc)
+            if ms and ms[0][1] >= 0.35:
+                pid = ms[0][0]
+                if pid != primary_pid and pid not in secondaries:
+                    secondaries.append(pid)
+        result["secondaries"] = secondaries
     except Exception as e:
         result["error"] = str(e)
     return result
@@ -2961,6 +3582,132 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
         attrs_data[new_path] = attrs_data.pop(path)
     if flush_stores and project:
         update_path_in_all_stores(path, new_path, project)
+    return new_path
+
+
+def _entry_value_for_letter(entry, letter, label):
+    """Return the entry's stored value for a CODED_FIELDS letter, checking
+    every key the codebase has used over time. Different storage shapes:
+      - matrix sections (A/X) — uppercase letter is the section/widget key
+      - matrix sections w/ label name (T→Tool, BG→Background) — label key
+      - dig fields (E/HC/FA/SK/B/WH/PM/CL/CS/O/R/K) — lowercase letter
+      - cf_<letter> (auto-detected from CLIP / metadata)
+    Matrix-style keys are checked FIRST so the user's current widget pick
+    wins over a stale lowercase value left over from filename parsing.
+    Without this, picking Ocean (Background=42) was getting overridden by
+    the old filename-parsed bg='200' and writing BG042 instead of BG42."""
+    lk = letter.lower()
+    for _key in (letter, label, lk, f"cf_{lk}"):
+        if _key:
+            _v = (entry.get(_key) or "")
+            if isinstance(_v, str) and _v.strip():
+                return _v.strip().lower()
+    return ""
+
+
+def would_rename(attrs_data, path, project=None):
+    """Return True if sync_filename_from_entry would rename the file.
+    Used by preview UI to color the Rename button: yellow when pending."""
+    entry = get(attrs_data, path)
+    if not entry:
+        return False
+    stem, _ext = os.path.splitext(os.path.basename(path))
+    parts = parse_coded_filename(stem)
+    if parts is None:
+        parts = {"persons": [], "persons_with": [],
+                 "j": julian_id_for_file(path)}
+
+    pid = (entry.get("person_id") or "").strip().lower()
+    if pid and pid != "000":
+        parts["persons"] = [pid] + parts.get("persons", [])[1:]
+    pws = [p for p in (entry.get("persons_with") or []) if p]
+    if pws:
+        parts["persons_with"] = pws
+
+    _changed_field = False
+    for letter, label, digits in CODED_FIELDS:
+        if letter == "J" or digits == 0:
+            continue
+        lk = letter.lower()
+        v = _entry_value_for_letter(entry, letter, label)
+        if v and parts.get(lk, "") != v:
+            parts[lk] = v
+            _changed_field = True
+
+    if not _changed_field and not pid and not pws:
+        return False
+    if not parts.get("j"):
+        parts["j"] = julian_id_for_file(path)
+    date_first = not bool(parts.get("persons"))
+    new_stem = build_coded_filename(parts, date_first=date_first,
+                                    field_order=get_sync_field_order(project))
+    return bool(new_stem) and new_stem != stem
+
+
+def sync_filename_from_entry(attrs_data, path, project=None):
+    """Rebuild the coded filename so it reflects entry's current coded values
+    (E/HC/FA/SK/PM/CS/X/CL/etc.) plus person_id and persons_with. Triggered
+    on canvas edits when auto-rename is on so changing a value visibly
+    updates the filename. Returns new path (same as path if unchanged)."""
+    entry = get(attrs_data, path)
+    if not entry:
+        return path
+    stem, ext = os.path.splitext(os.path.basename(path))
+    parts = parse_coded_filename(stem)
+    if parts is None:
+        # Uncoded file — start fresh from julian + entry person_id (if any)
+        parts = {"persons": [], "persons_with": [],
+                 "j": julian_id_for_file(path)}
+
+    # Sync persons / persons_with from entry (entry wins)
+    pid = (entry.get("person_id") or "").strip().lower()
+    if pid and pid != "000":
+        parts["persons"] = [pid] + parts.get("persons", [])[1:]
+    pws = [p for p in (entry.get("persons_with") or []) if p]
+    if pws:
+        parts["persons_with"] = pws
+
+    # Sync each non-boolean coded field from entry (entry wins). Booleans
+    # (digits=0) are handled by apply_boolean_sync_rules — skip here so we
+    # don't fight that flow.
+    _changed = False
+    for letter, label, digits in CODED_FIELDS:
+        if letter == "J" or digits == 0:
+            continue
+        lk = letter.lower()
+        v = _entry_value_for_letter(entry, letter, label)
+        if v and parts.get(lk, "") != v:
+            parts[lk] = v
+            _changed = True
+
+    if not _changed and not pid and not pws:
+        return path  # nothing to sync
+
+    if not parts.get("j"):
+        parts["j"] = julian_id_for_file(path)
+    date_first = not bool(parts.get("persons"))
+    new_stem = build_coded_filename(parts, date_first=date_first,
+                                    field_order=get_sync_field_order(project))
+    if not new_stem or new_stem == stem:
+        return path
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    if new_path == path:
+        return path
+    try:
+        os.rename(path, new_path)
+    except Exception:
+        return path
+    if path in attrs_data:
+        attrs_data[new_path] = attrs_data.pop(path)
+    if project:
+        update_path_in_all_stores(path, new_path, project)
+    # Persist immediately — without this, a concurrent watch-dir scan or any
+    # stale-path consumer can see the old key in attrs_data and re-introduce
+    # it (the "phantom file" reappearing after rename).
+    try:
+        save(project, attrs_data)
+    except Exception:
+        pass
     return new_path
 
 
@@ -3443,7 +4190,18 @@ def apply_tag_sync_rules(attrs_data, path, project):
     if not sync_rules:
         return path
     stem, ext = os.path.splitext(os.path.basename(path))
-    entry_tags = set(get(attrs_data, path).get("tags", []))
+    entry = get(attrs_data, path)
+    entry_tags = set(entry.get("tags", []))
+    # Matrix groups (Background, ModelImage, ModelVideo, X, Animal, ...) store
+    # their value at entry[section_name], not in entry["tags"]. The rule's
+    # tag_group key may use the legacy "_Table" suffix (e.g. Background_Table)
+    # while the matrix section name is just "Background" — strip the suffix
+    # and check both.
+    try:
+        _tags_cfg = _load_tag_groups(tags_file_for_project(project))
+    except Exception:
+        _tags_cfg = {}
+    _styles = (_tags_cfg or {}).get("__section_styles__", {}) or {}
     new_stem = stem
     changed = False
 
@@ -3457,6 +4215,11 @@ def apply_tag_sync_rules(attrs_data, path, project):
         if not tag_val:
             continue
         tag_is_set = tag_val in entry_tags
+        # Matrix per-field check: entry["Background"] == "ff", etc.
+        if not tag_is_set:
+            section = tag_group[:-len("_Table")] if tag_group.endswith("_Table") else tag_group
+            if _styles.get(section) == "matrix" and entry.get(section, "") == tag_val:
+                tag_is_set = True
         if tag_is_set:
             # Check if any alias pattern already present — if so, leave filename alone
             any_present = any(p.lower() in new_stem.lower() for p in patterns)
@@ -3522,9 +4285,18 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
             if field == "P" or not value:
                 continue
             flc = field.lower()
-            target_key = flc if flc in _TEXT_TARGETS else f"cf_{flc}"
-            if entry.get(target_key) != value:
-                entry[target_key] = value
+            # Path rules override existing user input — write to the primary
+            # key (cl, hc, etc.) so widgets see the rule value. Without this
+            # the rule wrote to cf_<key>, but get_coded_field prefers the
+            # primary key, so manual entries silently won out.
+            primary_key = flc
+            if primary_key not in _TEXT_TARGETS and entry.get(primary_key) != value:
+                entry[primary_key] = value
+                changed = True
+                # Keep cf_ in sync so other readers see the same value
+                entry[f"cf_{primary_key}"] = value
+            elif primary_key in _TEXT_TARGETS and entry.get(primary_key) != value:
+                entry[primary_key] = value
                 changed = True
 
     # ── Tag-group path rules (override any existing tags in same group) ──────
@@ -3534,6 +4306,10 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
         norm_path = path.replace("\\", "/").lower()
         # tag_group → set of wanted values from matched path rules
         wanted_by_group = {}
+        # Path of the file's immediate parent dir, lowercased — used for
+        # trailing-slash patterns (which mean "this folder is the immediate
+        # parent", not "anywhere under this folder").
+        _parent_lc = os.path.basename(os.path.dirname(norm_path))
         for rule in tag_group_rules:
             pattern = (rule.get("pattern") or "").lower()
             if not pattern:
@@ -3542,6 +4318,18 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
             if '*' in pattern_fn or '?' in pattern_fn:
                 tgt = pattern_fn if pattern_fn.startswith('*') else f"*{pattern_fn}"
                 if not _fnmatch.fnmatch(norm_path, tgt):
+                    continue
+            elif pattern_fn.endswith('/') and pattern_fn.count('/') == 1:
+                # "Folder/" → file's immediate parent ends with that name.
+                # Equality would block valid partial patterns: rule "ob/"
+                # should match parent "apob" (since the path locally reads
+                # ".../apob/<file>"). Suffix match handles both the exact
+                # case ("apob/" → parent "apob") and the partial case
+                # ("ob/" → parent "apob") while still rejecting nested
+                # subfolders ("apob/" rule against parent "sub" inside
+                # apob/sub/<file>).
+                _stem = pattern_fn.rstrip('/')
+                if not _stem or not _parent_lc.endswith(_stem):
                     continue
             else:
                 if pattern_fn not in norm_path:
@@ -3553,12 +4341,34 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
             wanted_by_group.setdefault(grp, set()).add(val)
 
         if wanted_by_group:
+            # Look up section styles so matrix groups (ModelImage, ModelVideo,
+            # X, Tool, Background, etc.) write to entry[grp] (per-field
+            # storage) instead of entry["tags"]. Tag widgets bound to matrix
+            # groups read from entry[grp]; writing only to tags would leave
+            # the matrix combo blank even though the rule "fired".
+            try:
+                _tags_cfg = _load_tag_groups(tags_file_for_project(project))
+            except Exception:
+                _tags_cfg = {}
+            _styles = (_tags_cfg or {}).get("__section_styles__", {}) or {}
             cur_tags = list(entry.get("tags", []))
             new_tags = list(cur_tags)
             for grp, wanted in wanted_by_group.items():
                 grp_def = TAG_GROUPS.get(grp, [])
                 grp_vals = {v[0] for v in grp_def if isinstance(v, (list, tuple)) and v}
-                # Skip if the file already has exactly the wanted values from this group
+                # Matrix groups: store the (single) wanted value in entry[grp].
+                if _styles.get(grp) == "matrix":
+                    pick = next(iter(wanted), "")
+                    if pick and entry.get(grp) != pick:
+                        entry[grp] = pick
+                        changed = True
+                    # Also clean any stale matrix value out of the legacy
+                    # tags list so the two storage locations don't disagree.
+                    _stale = [t for t in new_tags if t in grp_vals]
+                    if _stale:
+                        new_tags = [t for t in new_tags if t not in grp_vals]
+                    continue
+                # Non-matrix tag groups: legacy behavior — write to tags list.
                 cur_in_grp = {t for t in new_tags if t in grp_vals}
                 if cur_in_grp == wanted:
                     continue
@@ -3672,25 +4482,22 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                     entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
                     changed = True
 
-    # Audio detection — gated by audio_probed flag so each file is probed at
-    # most once (ffprobe's 5s timeout was halting navigation). Files corrupted
-    # to "sound" by an earlier bug also get re-probed once.
-    _audio_probed = entry.get("audio_probed", False)
-    _needs_audio_probe = (
-        not _audio_probed
-        or not entry.get("audio")
-        or entry.get("audio") == "sound"
-    )
-    if _needs_audio_probe:
+    # Audio detection — probe at most once per file. The audio value itself
+    # is the "we already checked" marker: empty/missing = not probed, any
+    # other value = probed. "sound" is treated as a re-probe trigger because
+    # an earlier bug left some entries with that fallback value.
+    _existing_audio = entry.get("audio")
+    if not _existing_audio or _existing_audio == "sound":
         audio_tag = detect_audio_tag(path)
-        if audio_tag is None:
-            audio_tag = "none"
-        elif audio_tag == "no_sound":
+        if audio_tag is None or audio_tag == "no_sound":
             audio_tag = "none"
         elif audio_tag not in AUDIO_TAGS:
             audio_tag = "sound"
         entry["audio"] = audio_tag
-        entry["audio_probed"] = True
+        changed = True
+    # Drop the now-redundant audio_probed flag if a prior version set it.
+    if "audio_probed" in entry:
+        entry.pop("audio_probed", None)
         changed = True
 
     # Ratio (O) / Resolution (R) / FPS (K) — always-on

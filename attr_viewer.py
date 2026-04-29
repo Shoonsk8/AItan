@@ -6,7 +6,7 @@ Fields are draggable. Position saved to SQLite.
 import sys, json, sqlite3, os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QCheckBox, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QComboBox, QTextEdit, QGroupBox, QGridLayout, QScrollArea,
+    QLabel, QPushButton, QComboBox, QTextEdit, QPlainTextEdit, QGroupBox, QGridLayout, QScrollArea,
     QColorDialog, QMenu, QLineEdit,
 )
 from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QBrush
@@ -356,9 +356,13 @@ class FieldWidget(QGroupBox):
 
         if style == "text":
             placeholder = (text_meta or {}).get("placeholder", "") if isinstance(text_meta, dict) else ""
-            self._te = QTextEdit()
+            # QPlainTextEdit (not QTextEdit) — handles long debug dumps without
+            # "QTextCursor::setPosition out of range" warnings on huge text.
+            # Same API for setPlainText/toPlainText so the rest of the code
+            # is unchanged.
+            self._te = QPlainTextEdit()
             self._te.setMinimumHeight(0)
-            self._te.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+            self._te.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
             self._te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self._te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self._te.setPlaceholderText(placeholder or f"{label}…")
@@ -408,12 +412,42 @@ class FieldWidget(QGroupBox):
             vlay.addLayout(grid)
 
         elif style in ("1dig", "2dig", "3dig", "4dig") and self._cfg:
-            # Coded field — one freq-sorted combo per sub-table, auto-detected by prefix
-            self._coded_combos = []   # [(sub_key, QComboBox), ...]
+            # Coded field — one freq-sorted combo per sub-table, auto-detected by prefix.
+            # Each entry is (sub_key, QComboBox, pos) where pos is the 1-based
+            # digit position the combo controls (pos=1 = rightmost digit).
+            self._coded_combos = []   # [(sub_key, QComboBox, pos), ...]
             sub_tables = [(k, v) for k, v in self._cfg.items()
                           if k.startswith(key + "_") and isinstance(v, list) and v]
+            # Map sub-table suffix → digit position. Without this, combos were
+            # indexed by config-iteration order, so a project that listed
+            # CL_Top before CL_Bot would have the "Top" combo display the
+            # bottom digit (pos 1) — confusing the user.
+            _SUBPOS = {
+                "CL": {"Bot": 1, "BotColor": 2, "Top": 3, "TopColor": 4},
+                "HC": {"Length": 1, "Style": 2, "Color": 3},
+                "FA": {"Direction": 1, "Vert": 2, "Vertical": 2},
+                "PM": {"Motion": 1, "Posture": 2},
+                "CS": {"Light": 1, "Lighting": 1, "Angle": 2, "Shot": 3},
+                "E":  {"Color": 1, "Additional": 2, "Modifier": 2},
+            }
+            _pos_map = _SUBPOS.get(key, {})
+            def _pos_for(sub_key):
+                # Strip "<key>_" prefix
+                _suffix = sub_key[len(key)+1:] if sub_key.startswith(key + "_") else sub_key
+                if _suffix in _pos_map:
+                    return _pos_map[_suffix]
+                # Fall back to dict order (legacy behavior) — index in sub_tables
+                return None
+            # Sort by descending digit position — leftmost combo = highest
+            # pos = leftmost digit in the stored value (natural left-to-right
+            # reading order matches the value reading order). For CL:
+            # TopColor (pos 4) | Top (3) | BotColor (2) | Bot (1).
+            if _pos_map:
+                sub_tables = sorted(
+                    sub_tables,
+                    key=lambda kv: -(_pos_for(kv[0]) or 0))
             if sub_tables:
-                for sub_key, sub_opts in sub_tables:
+                for _idx, (sub_key, sub_opts) in enumerate(sub_tables):
                     sub_lbl = sub_key[len(key)+1:].replace("_", " ")
                     row = QHBoxLayout(); row.setSpacing(4)
                     row.addWidget(QLabel(sub_lbl + ":", styleSheet="color:#aaa;font-size:9pt;"))
@@ -428,7 +462,9 @@ class FieldWidget(QGroupBox):
                     cb.currentIndexChanged.connect(
                         lambda _, _k=sub_key, _cb=cb: (inc_usage(_cb.currentData() or ""),
                                                         save_usage(self.conn, _cb.currentData() or "")))
-                    self._coded_combos.append((sub_key, cb))
+                    _explicit_pos = _pos_for(sub_key) if _pos_map else None
+                    _final_pos = _explicit_pos if _explicit_pos is not None else (_idx + 1)
+                    self._coded_combos.append((sub_key, cb, _final_pos))
                     row.addWidget(cb, stretch=1)
                     vlay.addLayout(row)
             else:
@@ -457,23 +493,57 @@ class FieldWidget(QGroupBox):
                     "QLineEdit{background:#1e1e1e;color:#aaa;border:1px solid #444;"
                     "border-radius:2px;font-family:monospace;font-size:9pt;padding:1px 4px;}"
                     "QLineEdit:focus{border-color:#6a8a6a;}")
-                self._detect_btn = QPushButton("Detect")
+                # 👤 button — opens Settings → Persons and highlights the card
+                # for this file's current ID. Replaces the old Detect button:
+                # right-click → Update already runs face detection (read-only),
+                # so a separate one-click "register new" doesn't add value to
+                # this widget. Quick access to the registry is more useful.
+                self._detect_btn = QPushButton("👤")
                 self._detect_btn.setFixedHeight(20)
+                self._detect_btn.setFixedWidth(28)
                 self._detect_btn.setStyleSheet(
                     "QPushButton{background:#2e4a2e;color:#8fc88f;border:1px solid #4a6a4a;"
-                    "border-radius:3px;font-size:8pt;padding:0 6px;}"
+                    "border-radius:3px;font-size:9pt;padding:0;}"
                     "QPushButton:hover{background:#3a5e3a;}"
                     "QPushButton:disabled{color:#555;border-color:#333;background:#222;}")
-                self._detect_btn.setToolTip("Run face detection on this file")
+                self._detect_btn.setToolTip("Open Persons settings and highlight this ID")
                 self._detect_btn.clicked.connect(
-                    lambda: self.action_triggered.emit(self.key, "detect_face"))
+                    lambda: self.action_triggered.emit(self.key, "edit_person"))
                 _id_row = QHBoxLayout()
                 _id_row.setContentsMargins(0, 0, 0, 0)
                 _id_row.addWidget(self._pid_edit, stretch=1)
                 _id_row.addWidget(self._detect_btn)
                 vlay.addLayout(_id_row)
+            elif key in ("PI", "PW"):
+                # PI / PW — plain text input + 👤 button (same shape as P).
+                # Blank means "same as P" (PI: no face swap) or "none"
+                # (PW: no other person). Placeholders make that explicit so
+                # the field doesn't visually duplicate P when empty.
+                self._pid_edit = QLineEdit()
+                self._pid_edit.setPlaceholderText(
+                    "— (same as P)" if key == "PI" else "— (none)")
+                self._pid_edit.setMaxLength(6 if key == "PI" else 48)
+                self._pid_edit.setStyleSheet(
+                    "QLineEdit{background:#1e1e1e;color:#aaa;border:1px solid #444;"
+                    "border-radius:2px;font-family:monospace;font-size:9pt;padding:1px 4px;}"
+                    "QLineEdit:focus{border-color:#6a8a6a;}")
+                self._detect_btn = QPushButton("👤")
+                self._detect_btn.setFixedHeight(20)
+                self._detect_btn.setFixedWidth(28)
+                self._detect_btn.setStyleSheet(
+                    "QPushButton{background:#2e4a2e;color:#8fc88f;border:1px solid #4a6a4a;"
+                    "border-radius:3px;font-size:9pt;padding:0;}"
+                    "QPushButton:hover{background:#3a5e3a;}")
+                self._detect_btn.setToolTip("Open Persons settings to assign an ID")
+                self._detect_btn.clicked.connect(
+                    lambda: self.action_triggered.emit(self.key, "edit_person"))
+                _row = QHBoxLayout()
+                _row.setContentsMargins(0, 0, 0, 0)
+                _row.addWidget(self._pid_edit, stretch=1)
+                _row.addWidget(self._detect_btn)
+                vlay.addLayout(_row)
             else:
-                # A / PI / PW — read-only label
+                # Other id keys (none in current FIELD_DEFS — A is a matrix now)
                 self._id_lbl = QLabel("—")
                 self._id_lbl.setStyleSheet(
                     "color:#aaa; font-family:monospace; font-size:9pt;")
@@ -709,7 +779,42 @@ class FieldWidget(QGroupBox):
                         _pe.setToolTip("")
                     _pe.blockSignals(False)
                 return
-            # A / PI / PW — read-only, parse from filename
+            if self.key == "PI":
+                # PI (face-swap origin) — only show a value when explicitly
+                # set AND it differs from P. Blank = "no swap, same as P"
+                # (the placeholder reads "— (same as P)" so this is obvious).
+                _pe = getattr(self, "_pid_edit", None)
+                if _pe:
+                    _pi  = (entry.get("pi") or "").strip().lower()
+                    _pid = (entry.get("person_id") or "").strip().lower()
+                    val = _pi if _pi and _pi != _pid else ""
+                    _pe.blockSignals(True)
+                    _pe.setText(val)
+                    _pe.blockSignals(False)
+                return
+            if self.key == "PW":
+                # PW (persons_with) — only show when there's real data.
+                # Defaulting to P was wrong (PW means companions, defaulting
+                # to self is nonsense). Blank = "no other person in frame"
+                # (placeholder reads "— (none)").
+                _pe = getattr(self, "_pid_edit", None)
+                if _pe:
+                    pws = [p for p in (entry.get("persons_with") or [])
+                           if p and p.strip().lower() != "000"]
+                    if not pws:
+                        # Filename fallback (legacy PW token in coded filename)
+                        import aisearch_attrs as _am
+                        _path = entry.get("path", "")
+                        _stem = os.path.splitext(os.path.basename(_path))[0] if _path else ""
+                        _parsed = _am.parse_coded_filename(_stem) or {} if _stem else {}
+                        pws = [p for p in (_parsed.get("persons_with") or [])
+                               if p and p.strip().lower() != "000"]
+                    val = ", ".join(pws)
+                    _pe.blockSignals(True)
+                    _pe.setText(val)
+                    _pe.blockSignals(False)
+                return
+            # Fallback for other id keys (none in current FIELD_DEFS)
             lbl = getattr(self, "_id_lbl", None)
             if lbl:
                 import aisearch_attrs as _am
@@ -737,10 +842,15 @@ class FieldWidget(QGroupBox):
             combos = getattr(self, "_coded_combos", [])
             hex_edit = getattr(self, "_hex_edit", None)
             if combos and val:
-                # Pad short values so pos=2/"0" options (E Additional, FA Vert, etc.) populate
-                val_padded = val.zfill(len(combos))
-                for i, (_sk, cb) in enumerate(combos):
-                    pos = i + 1   # pos=1 = rightmost digit
+                # Each combo carries its own digit position (third tuple item).
+                # pos=1 = rightmost digit, pos=N = leftmost. Padding uses the
+                # max position seen so short values (e.g. "5" for HC) align.
+                _max_pos = max((t[2] if len(t) >= 3 else (i + 1)
+                                for i, t in enumerate(combos)), default=1)
+                val_padded = val.zfill(_max_pos)
+                for i, t in enumerate(combos):
+                    cb = t[1]
+                    pos = t[2] if len(t) >= 3 else (i + 1)
                     digit = val_padded[-pos] if len(val_padded) >= pos else ""
                     cb.blockSignals(True)
                     cb.setCurrentIndex(max(0, cb.findData(digit)) if digit else 0)
@@ -752,6 +862,13 @@ class FieldWidget(QGroupBox):
         elif self.style == "text":
             db_key = _TEXT_KEY_MAP.get(self.key, self.key)
             text = entry.get(db_key, "")
+            # Cap CLIP/FACE/CLIP_*/FACE_PW debug dumps at 8KB. Old saves before
+            # the cap was added carry 25k+ char strings that trigger
+            # QTextCursor::setPosition out-of-range warnings on every reload.
+            if isinstance(text, str) and len(text) > 8192 and (
+                    self.key in ("CLIP", "FACE", "FACE_PW")
+                    or self.key.startswith("CLIP_")):
+                text = text[:8192] + "\n…(truncated)"
             te = getattr(self, "_te", None)
             if te:
                 te.blockSignals(True)
@@ -779,11 +896,18 @@ class FieldWidget(QGroupBox):
             hex_edit = getattr(self, "_hex_edit", None)
             field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
             if combos:
-                any_set = any(cb.currentData() for _, cb in combos)
+                any_set = any(t[1].currentData() for t in combos)
                 if any_set:
-                    n = len(combos)
-                    parts = [combos[i][1].currentData() or "0" for i in range(n - 1, -1, -1)]
-                    val = "".join(parts)
+                    # Build value indexed by each combo's explicit pos so
+                    # display order doesn't have to match digit order.
+                    _max_pos = max((t[2] if len(t) >= 3 else (i + 1)
+                                    for i, t in enumerate(combos)), default=1)
+                    digits = ["0"] * _max_pos
+                    for i, t in enumerate(combos):
+                        pos = t[2] if len(t) >= 3 else (i + 1)
+                        # digits[0] is leftmost (highest pos), digits[-1] is rightmost (pos 1)
+                        digits[_max_pos - pos] = t[1].currentData() or "0"
+                    val = "".join(digits)
                 else:
                     val = ""
             elif hex_edit is not None:
@@ -807,6 +931,12 @@ class FieldWidget(QGroupBox):
         elif self.style == "id" and self.key == "P":
             _pe = getattr(self, "_pid_edit", None)
             return ("text", "person_id", _pe.text().strip() if _pe else "")
+        elif self.style == "id" and self.key == "PI":
+            _pe = getattr(self, "_pid_edit", None)
+            return ("text", "pi", _pe.text().strip() if _pe else "")
+        elif self.style == "id" and self.key == "PW":
+            _pe = getattr(self, "_pid_edit", None)
+            return ("text", "pw", _pe.text().strip() if _pe else "")
         elif self.style == "text":
             db_key = _TEXT_KEY_MAP.get(self.key, self.key)
             te = getattr(self, "_te", None)
@@ -1055,7 +1185,11 @@ class FieldWidget(QGroupBox):
 
         # "Show" — reveal the debug tile without re-running detection
         # "Update" — re-detect CLIP for this single field + reveal its debug tile
-        _CLIP_FIELDS = {"E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "P"}
+        # P and PW share the face-detection pipeline — Update on either runs
+        # the same detection (P = primary face, PW = secondary faces). PI is
+        # provenance-only and stays manual; assigned via the 👤 button →
+        # Settings → Persons card buttons.
+        _CLIP_FIELDS = {"E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "P", "PW", "CL"}
         act_show = act_update = None
         if self.key in _CLIP_FIELDS:
             act_show   = menu.addAction("👁 Show")
@@ -1700,6 +1834,14 @@ class AttrViewerWidget(QWidget):
                             hidden_for=hidden_for, exclusive=_auto_excl,
                             parent=self.canvas)
             w._cfg_path   = self.cfg_path
+            # Derive project name from cfg_path so widgets can look up
+            # per-project face DB / registry without relying on entry["_project"].
+            try:
+                _bn = os.path.basename(self.cfg_path or "")
+                if _bn.startswith("attrs_tags_") and _bn.endswith(".json"):
+                    w._project = _bn[len("attrs_tags_"):-len(".json")]
+            except Exception:
+                pass
             w._conditions = list(cfg.get("__conditions__", {}).get(key, []))
             px, py = positions.get(key, (x, y))
             px = max(0, min(px, 4000))   # clamp in case of corrupted saved position
@@ -1720,7 +1862,8 @@ class AttrViewerWidget(QWidget):
             _cb = getattr(w, "_cb", None)
             if _cb:
                 _cb.currentIndexChanged.connect(lambda _: self.data_changed.emit())
-            for _, _coded_cb in getattr(w, "_coded_combos", []):
+            for _ct in getattr(w, "_coded_combos", []):
+                _coded_cb = _ct[1]
                 _coded_cb.currentIndexChanged.connect(lambda _: self.data_changed.emit())
             _te = getattr(w, "_te", None)
             if _te:
@@ -1733,7 +1876,7 @@ class AttrViewerWidget(QWidget):
             # CLIP_*/FACE debug tiles are hidden by default — revealed via a
             # per-field Update action. Left-click-release on the debug tile
             # itself hides it (but drag/resize still works).
-            if key.startswith("CLIP_") or key == "CLIP" or key == "FACE":
+            if key.startswith("CLIP_") or key == "CLIP" or key == "FACE" or key == "FACE_PW":
                 w.hide()
                 _orig_release = w.mouseReleaseEvent
                 def _hide_on_release(ev, _w=w, _orig=_orig_release):
@@ -1775,7 +1918,9 @@ class AttrViewerWidget(QWidget):
         _DEBUG_PARENT = {
             "CLIP_E":  "E",  "CLIP_HC": "HC", "CLIP_FA": "FA", "CLIP_SK": "SK",
             "CLIP_PM": "PM", "CLIP_CS": "CS", "CLIP_BG": "BG", "CLIP_X":  "X",
+            "CLIP_CL": "CL",
             "FACE":    "P",
+            "FACE_PW": "PW",
         }
         for _dbg, _par in _DEBUG_PARENT.items():
             if _dbg not in keys or _par not in keys:
@@ -2039,7 +2184,7 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             # CLIP_*/FACE debug tiles start hidden and only appear on explicit
             # Update; mode switches should not force-show them.
-            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"):
+            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE", "FACE_PW"):
                 continue
             if mode_lower == "all":
                 w.setVisible(True)
@@ -2089,7 +2234,7 @@ class AttrViewerWidget(QWidget):
         # by default; revealed via right-click Show/Update with their own anchor).
         layoutable = [w for w in self.widgets
                       if w.isVisible()
-                      and not (w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"))]
+                      and not (w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE", "FACE_PW"))]
         # Bucket tiles by group; ungrouped tiles land in "__none__" at the end
         buckets = {g: [] for g in group_order}
         buckets["__none__"] = []
@@ -2184,7 +2329,7 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             # CLIP_*/FACE debug tiles only appear via right-click → Show/Update —
             # condition + mode logic must not force-show them.
-            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE"):
+            if w.key.startswith("CLIP_") or w.key in ("CLIP", "FACE", "FACE_PW"):
                 continue
             if w.key in hidden_keys:
                 w.setVisible(False)
@@ -2259,7 +2404,9 @@ class AttrViewerWidget(QWidget):
                 _raw = getattr(_btn, "_lbl_raw", None)
                 if _raw:
                     _btn.setText(_lang_label(_raw))
-            for sub_key, coded_cb in getattr(w, "_coded_combos", []):
+            for _ct in getattr(w, "_coded_combos", []):
+                sub_key = _ct[0]
+                coded_cb = _ct[1]
                 cur = coded_cb.currentData()
                 sub_opts = w._cfg.get(sub_key, []) if hasattr(w, "_cfg") else []
                 coded_cb.blockSignals(True)

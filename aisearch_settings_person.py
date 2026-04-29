@@ -768,6 +768,40 @@ class _PersonMixin:
         self._btn_person_undo.clicked.connect(_do_undo)
         outer.addLayout(hdr)
 
+        # ── Origin assignment bar ─────────────────────────────────────────────
+        # Shown when the user clicked the canvas 👤 button. Lets them assign
+        # a clicked-card's pid to the origin file's P / PI / PW field without
+        # leaving Settings.
+        _origin_bar = QHBoxLayout()
+        self._persons_origin_lbl = QLabel("")
+        self._persons_origin_lbl.setStyleSheet(
+            "color:#cfd8e0; font-family:monospace; font-size:9pt;"
+            " padding:4px 8px; background:#1e2630; border-radius:4px;")
+        self._persons_origin_lbl.setWordWrap(True)
+        self._persons_origin_lbl.hide()
+        _origin_bar.addWidget(self._persons_origin_lbl, stretch=1)
+        def _mk_assign_btn(text, field):
+            b = QPushButton(text)
+            b.setEnabled(False)
+            b.setMinimumWidth(60)
+            b.setStyleSheet(
+                "QPushButton{background:#2e4a2e;color:#cfe8cf;border:1px solid #4a6a4a;"
+                "border-radius:3px;font-weight:bold;padding:4px 10px;}"
+                "QPushButton:hover{background:#3a5e3a;}"
+                "QPushButton:disabled{color:#555;border-color:#333;background:#222;}")
+            b.clicked.connect(lambda _=None, _f=field: self._assign_pid_to_origin(_f))
+            return b
+        self._persons_btn_p  = _mk_assign_btn("→ P",  "person_id")
+        self._persons_btn_pi = _mk_assign_btn("→ PI", "pi")
+        self._persons_btn_pw = _mk_assign_btn("→ PW", "persons_with")
+        _origin_bar.addWidget(self._persons_btn_p)
+        _origin_bar.addWidget(self._persons_btn_pi)
+        _origin_bar.addWidget(self._persons_btn_pw)
+        outer.addLayout(_origin_bar)
+        self._persons_origin_path = ""
+        self._persons_selected_card = None
+        self._persons_selected_pid = ""
+
         # ── Two-column splitter ───────────────────────────────────────────────
         from PyQt6.QtWidgets import QSplitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -926,6 +960,15 @@ class _PersonMixin:
             _splitter.setVisible(True)
 
     def _open_person_preview(self, pid, src):
+        # When the user opened Settings via the canvas 👤 button, an origin
+        # path is recorded — clicks then select the card (highlight) instead
+        # of opening preview, since the user's intent is to pick a pid to
+        # assign back to the origin file.
+        if getattr(self, "_persons_origin_path", ""):
+            for c in self.findChildren(_PersonCard):
+                if (getattr(c, "_pid", "") or "").strip().lower() == (pid or "").strip().lower():
+                    self._select_person_card(c)
+                    return
         ph = getattr(getattr(self, "app", None), "preview_handler", None)
         # Try source_path first
         if src and os.path.exists(src):
@@ -1025,6 +1068,127 @@ class _PersonMixin:
         lay.removeWidget(pending_widget)
         pending_widget.deleteLater()
         lay.insertWidget(idx, grp)
+
+    # Style applied to the currently-selected person card (orange border).
+    # Persists until the user picks a different card or closes the dialog —
+    # not time-limited, since it represents the active selection target for
+    # the P/PI/PW assignment buttons.
+    _PERSON_SEL_SS = (
+        "QFrame { background:#3a2a4a; border:3px solid #ffaa00; border-radius:5px; }")
+
+    def _focus_person(self, pid: str, origin_path: str | None = None):
+        """Switch to Persons tab, highlight the card matching `pid`, and (if
+        provided) store `origin_path` so the in-tab P/PI/PW buttons can write
+        the user-chosen card's pid back to that file's entry."""
+        try:
+            self.tabs.setCurrentIndex(1)
+        except Exception:
+            pass
+        # Store origin even if pid is empty — user may pick a card to assign
+        if origin_path is not None:
+            self._persons_origin_path = origin_path
+            self._refresh_persons_origin_bar()
+        pid = (pid or "").strip().lower()
+        from PyQt6.QtCore import QTimer
+        def _try(retry=0):
+            target = None
+            for c in self.findChildren(_PersonCard):
+                if (getattr(c, "_pid", "") or "").strip().lower() == pid:
+                    target = c
+                    break
+            if target is None:
+                if retry < 8:
+                    QTimer.singleShot(120, lambda: _try(retry + 1))
+                return
+            from PyQt6.QtWidgets import QScrollArea
+            sa = target.parent()
+            while sa is not None and not isinstance(sa, QScrollArea):
+                sa = sa.parent()
+            if isinstance(sa, QScrollArea):
+                sa.ensureWidgetVisible(target, 50, 50)
+            self._select_person_card(target)
+        if pid:
+            _try()
+
+    def _select_person_card(self, card):
+        """Mark `card` as the active selection — restores any prior card's
+        original style and applies the orange highlight to this one. The
+        selected pid is what P/PI/PW assignment buttons write back to the
+        origin file."""
+        prev = getattr(self, "_persons_selected_card", None)
+        if prev is not None and prev is not card:
+            try:
+                prev.setStyleSheet(getattr(prev, "_orig_ss_for_select", _PersonCard._SS_NORMAL))
+            except Exception:
+                pass
+        if card is None:
+            self._persons_selected_card = None
+            self._persons_selected_pid = ""
+            return
+        # Stash the card's pre-selection stylesheet on first selection so we
+        # can restore it cleanly when selection moves elsewhere.
+        if not hasattr(card, "_orig_ss_for_select"):
+            card._orig_ss_for_select = card.styleSheet()
+        card.setStyleSheet(self._PERSON_SEL_SS)
+        self._persons_selected_card = card
+        self._persons_selected_pid = (getattr(card, "_pid", "") or "").strip().lower()
+        self._refresh_persons_origin_bar()
+
+    def _refresh_persons_origin_bar(self):
+        """Update the origin-info label and enable/disable assignment buttons
+        based on whether an origin file and a selected card both exist."""
+        lbl = getattr(self, "_persons_origin_lbl", None)
+        if lbl is None:
+            return
+        origin = getattr(self, "_persons_origin_path", "") or ""
+        sel    = getattr(self, "_persons_selected_pid", "") or ""
+        if origin:
+            import os
+            _bn = os.path.basename(origin)
+            _dir = os.path.dirname(origin)
+            txt = f"📁 {_bn}\n{_dir}"
+            if sel:
+                txt += f"\n→ assign P{sel} to:"
+            else:
+                txt += "\n(click a card to select an ID)"
+            lbl.setText(txt)
+            lbl.show()
+        else:
+            lbl.setText("")
+            lbl.hide()
+        for _b in (getattr(self, "_persons_btn_p", None),
+                   getattr(self, "_persons_btn_pi", None),
+                   getattr(self, "_persons_btn_pw", None)):
+            if _b is not None:
+                _b.setEnabled(bool(origin and sel))
+
+    def _assign_pid_to_origin(self, field: str):
+        """Write the currently-selected card's pid into the origin file's
+        attrs entry under `field` (one of 'person_id', 'pi', 'persons_with')
+        and refresh the preview canvas if open."""
+        origin = getattr(self, "_persons_origin_path", "") or ""
+        pid    = getattr(self, "_persons_selected_pid", "") or ""
+        if not origin or not pid:
+            return
+        proj = getattr(self.app, "current_project", None)
+        attrs_data = getattr(self.app, "attrs_data", {})
+        entry = attrs_data.setdefault(origin, {})
+        if field == "persons_with":
+            existing = [p for p in (entry.get("persons_with") or []) if p]
+            if pid not in existing:
+                existing.append(pid)
+            entry["persons_with"] = existing
+        else:
+            entry[field] = pid
+        attrs_mod.save(proj, attrs_data)
+        # Refresh preview canvas if it's showing this same file
+        try:
+            ph = getattr(self.app, "preview_handler", None)
+            pw = getattr(ph, "window", None) if ph else None
+            if pw is not None and getattr(pw, "_attr_path", None) == origin:
+                pw._refresh_attrs_inner(origin)
+        except Exception:
+            pass
 
     def _save_column_order(self):
         """Persist the current widget order of both columns to disk."""

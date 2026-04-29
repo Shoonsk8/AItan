@@ -4,7 +4,7 @@ from PIL import Image, PngImagePlugin
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QMenu,
                               QApplication, QDialog, QHBoxLayout, QPushButton,
                               QCheckBox, QComboBox, QGridLayout, QLineEdit,
-                              QTextEdit, QScrollArea, QSizePolicy,
+                              QTextEdit, QPlainTextEdit, QScrollArea, QSizePolicy,
                               QSplitter, QSplitterHandle, QToolButton, QMessageBox)
 import aisearch_attrs as attrs_mod
 from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize, pyqtSignal, pyqtSlot, Q_ARG, QMetaObject
@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.99"
+VERSION = "1.991"
 
 
 def _read_embedded_meta(path):
@@ -54,18 +54,40 @@ def _read_embedded_meta(path):
                     pass
         elif ext.endswith('.png'):
             with Image.open(path) as img:
-                raw = img.info.get("Description") or img.info.get("prompt", "")
-                if raw:
-                    if raw.startswith('{'):
-                        try:
-                            d = json.loads(raw)
-                            data = {k: str(d.get(k, "")) for k in
-                                    ("prompt", "neg_prompt", "seed", "model", "speech")}
-                        except Exception:
+                info = img.info
+                # ComfyUI workflow lives in "prompt" or "workflow" chunks;
+                # A1111 puts it in "parameters". Use the same extraction logic
+                # that extract_metadata uses so we don't miss them here.
+                if "workflow" in info or "prompt" in info or "parameters" in info:
+                    try:
+                        import aisearch_attrs as _am
+                        _meta = {}
+                        if "workflow" in info or "prompt" in info:
+                            _am._extract_comfyui_meta(info, _meta)
+                        elif "parameters" in info:
+                            _am._extract_a1111_meta(info["parameters"], _meta)
+                        # _extract_*_meta uses CamelCase keys; lowercase them
+                        if _meta.get("Prompt"):     data["prompt"]     = _meta["Prompt"]
+                        if _meta.get("NegPrompt"):  data["neg_prompt"] = _meta["NegPrompt"]
+                        if _meta.get("Seed"):       data["seed"]       = str(_meta["Seed"])
+                        if _meta.get("Model"):      data["model"]      = _meta["Model"]
+                    except Exception:
+                        pass
+                # Legacy "Description" chunk fallback (older AI tools)
+                if not data.get("prompt"):
+                    raw = info.get("Description", "")
+                    if raw:
+                        if raw.startswith('{'):
+                            try:
+                                d = json.loads(raw)
+                                for k in ("prompt", "neg_prompt", "seed", "model", "speech"):
+                                    if d.get(k) and not data.get(k):
+                                        data[k] = str(d.get(k, ""))
+                            except Exception:
+                                data["prompt"] = raw
+                        else:
                             data["prompt"] = raw
-                    else:
-                        data["prompt"] = raw
-                data["model"] = data.get("model") or img.info.get("Software", "")
+                data["model"] = data.get("model") or info.get("Software", "")
         elif ext.endswith(('.jpg', '.jpeg', '.webp')):
             with Image.open(path) as img:
                 desc = img.info.get("ImageDescription", "")
@@ -389,7 +411,7 @@ _THUMB_CACHE: dict = {}
 
 class PreviewWindow(QWidget):
     """Standalone preview window."""
-    _raw_refresh_signal = pyqtSignal(str)   # emitted from background thread with file path
+    _raw_refresh_signal = pyqtSignal(str, bool)   # (file path, embed_ok) — from background bake thread
 
     def __init__(self, handler):
         super().__init__()
@@ -791,10 +813,10 @@ class PreviewWindow(QWidget):
                 "PM": [("PM_Motion", 1, "Motion"),  ("PM_Posture", 2, "Posture")],
                 "CS": [("CS_Light", 1, "Light"),    ("CS_Angle", 2, "Angle"), ("CS_Shot", 3, "Shot")],
                 "BG": [("Background", 3, "Major")],
-                "CL": [("CL_Bot",      1, "Bot. Type"),
-                       ("CL_BotColor", 2, "Bot. Color"),
+                "CL": [("CL_TopColor", 4, "Top Color"),
                        ("CL_Top",      3, "Top Type"),
-                       ("CL_TopColor", 4, "Top Color")],
+                       ("CL_BotColor", 2, "Bot. Color"),
+                       ("CL_Bot",      1, "Bot. Type")],
             }
 
         # Helper: decode a coded field value to human-readable string
@@ -1208,28 +1230,34 @@ class PreviewWindow(QWidget):
             "QPushButton:hover { background:#3a3a5a; color:#aaccee; }")
         self._btn_apply_clip.clicked.connect(lambda: self._on_inspect(overwrite=True))
         r_bake.addWidget(self._btn_apply_clip)
+
+        # Manual Rename button — explicit trigger so the rename happens at a
+        # known-quiet moment (after auto-bake, after watch scan, etc.). The
+        # auto-fire path was racing with bake threads and producing phantom
+        # files (Linux: rename moved the inode, but a stale closure wrote
+        # back to the old path → both files exist).
+        self._btn_rename = QPushButton(_t("🪪 Rename / 🪪 改名"))
+        self._btn_rename.setToolTip(_t(
+            "Rebuild filename from current attributes (P, E, HC, FA, …) and "
+            "rename the file. Pauses auto-bake while running. / "
+            "現在の属性 (P, E, HC, FA, …) からファイル名を再構築して改名。"
+            "実行中は自動書込を一時停止します。"))
+        self._btn_rename.setStyleSheet(
+            "QPushButton { background:#2a3a2a; color:#88cc88; border:1px solid #464; padding:2px 6px; }"
+            "QPushButton:hover { background:#3a5a3a; color:#aacc99; }"
+            "QPushButton:disabled { color:#555; border-color:#333; background:#222; }")
+        self._btn_rename.clicked.connect(self._on_manual_rename)
+        r_bake.addWidget(self._btn_rename)
+        # auto_rename checkbox was removed — the 🪪 Rename button is the only
+        # rename trigger now. Its color flips to yellow ("pending") when an
+        # attribute change would change the filename, so the user always
+        # sees that a rename is needed.
+        # Stub kept so legacy code paths that reference _chk_auto_rename
+        # still find an object with an isChecked() that returns False.
         from PyQt6.QtWidgets import QCheckBox as _QCB
-        self._chk_auto_rename = _QCB(_t("Auto-rename / 自動改名"))
-        self._chk_auto_rename.setToolTip(_t("Rename file to match person ID when baking / 書込時に人物IDに合わせてファイル名を変更"))
-        self._chk_auto_rename.setChecked(
-            attrs_mod.load_filename_config(getattr(self.handler.app, "current_project", None)).get("auto_rename", False))
-        def _on_ar_toggle(v):
-            proj = getattr(self.handler.app, "current_project", None)
-            fn_cfg = attrs_mod.load_filename_config(proj)
-            fn_cfg["auto_rename"] = v
-            attrs_mod.save_filename_config(fn_cfg, proj)
-            sv = getattr(self.handler.app, "_settings_win", None)
-            if sv:
-                if hasattr(sv, "chk_rename_on_scan") and sv.chk_rename_on_scan.isChecked() != v:
-                    sv.chk_rename_on_scan.blockSignals(True)
-                    sv.chk_rename_on_scan.setChecked(v)
-                    sv.chk_rename_on_scan.blockSignals(False)
-                if hasattr(sv, "check_auto_rename") and sv.check_auto_rename.isChecked() != v:
-                    sv.check_auto_rename.blockSignals(True)
-                    sv.check_auto_rename.setChecked(v)
-                    sv.check_auto_rename.blockSignals(False)
-        self._chk_auto_rename.toggled.connect(_on_ar_toggle)
-        r_bake.addWidget(self._chk_auto_rename)
+        self._chk_auto_rename = _QCB()
+        self._chk_auto_rename.setVisible(False)
+        self._chk_auto_rename.setChecked(False)
         self._protected_check = QPushButton(_t("🔓 Editable / 🔓 編集可"))
         self._protected_check.setCheckable(True)
         self._protected_check.setToolTip(_t("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename / 🔓 編集可 — 自動改名される可能性あり\n🔒 ロック — 自動改名されません"))
@@ -1264,7 +1292,10 @@ class PreviewWindow(QWidget):
         _raw_lay = QVBoxLayout(self._raw_meta_sec.content)
         _raw_lay.setContentsMargins(6, 4, 6, 6)
         _raw_lay.setSpacing(4)
-        self._raw_meta_edit = QTextEdit()
+        # QPlainTextEdit (not QTextEdit) handles large documents without
+        # triggering "QTextCursor::setPosition out of range" warnings that
+        # occur when raw metadata exceeds Qt's rich-text layout limits.
+        self._raw_meta_edit = QPlainTextEdit()
         self._raw_meta_edit.setReadOnly(True)
         self._raw_meta_edit.setFixedHeight(160)
         self._raw_meta_edit.setStyleSheet(
@@ -1276,9 +1307,10 @@ class PreviewWindow(QWidget):
         # CLIP/Face debug text boxes replaced by per-field debug panels on the canvas.
         # Keep stub QTextEdit attributes so legacy code that calls
         # self._clip_inspect_edit.setPlainText(...) / .toPlainText() still works.
-        self._clip_inspect_edit = QTextEdit()
+        # Use QPlainTextEdit — handles huge debug dumps without QTextCursor warnings.
+        self._clip_inspect_edit = QPlainTextEdit()
         self._clip_inspect_edit.hide()
-        self._face_inspect_edit = QTextEdit()
+        self._face_inspect_edit = QPlainTextEdit()
         self._face_inspect_edit.hide()
         # _btn_apply_face still referenced elsewhere (e.g. _apply_detected_face enabling)
         self._btn_apply_face = QPushButton(_t("Apply / 適用"))
@@ -1294,8 +1326,8 @@ class PreviewWindow(QWidget):
                     _txt = attrs_mod.read_raw_embedded_text(_p)
                 except Exception:
                     _txt = ""
-                if _txt and len(_txt) > 16384:
-                    _txt = _txt[:16384] + "\n…(truncated)"
+                if _txt and len(_txt) > 8192:
+                    _txt = _txt[:8192] + "\n…(truncated)"
                 self._raw_meta_edit.setPlainText(_txt or _t("(no embedded text) / （埋め込みテキストなし）"))
                 # Honour clip_inspect_mode — don't run inspect at all in
                 # 'never', and skip already-set fields in 'when_empty'.
@@ -1309,7 +1341,9 @@ class PreviewWindow(QWidget):
                     _skip = {f for f in _clip_fields if _entry.get(f)}
                     if _entry.get("person_id"):
                         _skip.add("person_id")
-                self._on_inspect(skip_fields=_skip)
+                # Use the debounced + RSS-ceiling-guarded scheduler so this
+                # auto path also backs off at high memory.
+                self._schedule_inspect(skip_fields=_skip)
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
 
         # Apply show_raw_data config (hidden by default unless enabled in Settings > Canvas)
@@ -1400,6 +1434,10 @@ class PreviewWindow(QWidget):
             self.btn_toggle_attrs.setText(self._attr_arrow(True))
             # Fit image pane after layout settles
             QTimer.singleShot(120, self.handler._auto_fit_splitter)
+            # Re-sync the panel: while collapsed the inner refresh was skipped
+            # (when AI is off) to save time, so widgets may show stale data.
+            if getattr(self, "_attr_pending_refresh", False) and self._attr_path:
+                QTimer.singleShot(150, lambda: self._refresh_attrs(self._attr_path))
         QTimer.singleShot(0, self.handler._rerender)
 
     def _maybe_rebuild_attr_panel(self):
@@ -1453,12 +1491,63 @@ class PreviewWindow(QWidget):
         if not self._attr_panel_built:
             self._attr_panel_pending_path = path
             return
-        # Flush any pending auto-save when switching to a different file
+        # Always flush a pending text-edit save when switching files — must
+        # happen on every navigation (no debounce) to avoid losing typed text.
         if self._text_save_timer.isActive() and path != self._attr_path:
             self._text_save_timer.stop()
             self._save_attrs()
         elif self._text_save_timer.isActive():
             self._text_save_timer.stop()
+        # Auto-bake the previous file when leaving it. Run in a background
+        # thread — for videos, ffmpeg-copy can take 300ms+ and would block
+        # navigation otherwise. Track the last path we baked so rapid arrow
+        # nav doesn't re-bake the same file repeatedly.
+        if (self._attr_path and self._attr_path != path
+                and getattr(self, "_last_autobaked_path", None) != self._attr_path):
+            if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
+                _prev_path = self._attr_path
+                _prev_entry = attrs_mod.get(self.handler.app.attrs_data, _prev_path)
+                self._last_autobaked_path = _prev_path
+                if _prev_path and os.path.exists(_prev_path) and attrs_mod._has_real_data(_prev_entry):
+                    import threading as _thr
+                    def _bg_autobake(_p=_prev_path, _e=dict(_prev_entry)):
+                        try:
+                            attrs_mod.embed_aitan_meta(_p, _e)
+                        except Exception:
+                            pass
+                    _thr.Thread(target=_bg_autobake, daemon=True).start()
+        # CLIP/FACE results are now cached in JSON (per user request) so
+        # re-opening a file doesn't re-run detection. Don't clear them from
+        # in-memory — that would defeat the cache. Memory growth is bounded
+        # because each entry stores its own results once.
+        # Track the latest requested path; debounce the heavy widget rebuild
+        # so rapid arrow-key scrolling only runs it once when the user stops.
+        self._refresh_pending_path = path
+        if not hasattr(self, "_refresh_debounce"):
+            from PyQt6.QtCore import QTimer as _QT
+            self._refresh_debounce = _QT(self)
+            self._refresh_debounce.setSingleShot(True)
+            self._refresh_debounce.timeout.connect(self._run_pending_refresh)
+        self._refresh_debounce.start(120)
+        try:
+            _dbg(f"refresh_attrs END   scheduled={(_time.time()-_t0)*1000:.1f}ms (debounce 120ms)")
+        except Exception:
+            pass
+        return
+
+    def _run_pending_refresh(self):
+        """Fired by the debounce timer — runs the heavy widget rebuild for
+        the most recently requested path. Earlier requests are coalesced."""
+        path = getattr(self, "_refresh_pending_path", None)
+        if path is None:
+            return
+        import time as _time
+        _t0 = _time.time()
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"refresh_attrs RUN {os.path.basename(path) if path else None}")
+        except Exception:
+            pass
         # Rebuild attr panel if attrs_tags.json changed (new attributes added via Settings)
         _t1 = _time.time()
         self._maybe_rebuild_attr_panel()
@@ -1466,9 +1555,6 @@ class PreviewWindow(QWidget):
             _dbg(f"  maybe_rebuild_attr_panel: {(_time.time()-_t1)*1000:.1f}ms")
         except Exception:
             pass
-        # Block editingFinished on note/seed so setEnabled(False) in _apply_protected_lock
-        # doesn't fire _save_attrs with stale widget values for the new image's path.
-        # Use try/finally to guarantee these are always unblocked even if something throws.
         self._project_edit.blockSignals(True)
         self._seed_edit.blockSignals(True)
         try:
@@ -1490,7 +1576,7 @@ class PreviewWindow(QWidget):
             except Exception:
                 pass
         try:
-            _dbg(f"refresh_attrs END   total={(_time.time()-_t0)*1000:.1f}ms")
+            _dbg(f"refresh_attrs DONE  total={(_time.time()-_t0)*1000:.1f}ms")
         except Exception:
             pass
         # Auto-run CLIP + face inspect based on clip_inspect_mode setting.
@@ -1565,7 +1651,7 @@ class PreviewWindow(QWidget):
                     # Also clear the canvas debug tiles so stale score text
                     # from an earlier detection doesn't linger.
                     _CF_KEYS = ("CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
-                                "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "FACE")
+                                "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "FACE")
                     for _k in _CF_KEYS:
                         if _k in _entry:
                             del _entry[_k]
@@ -1578,10 +1664,10 @@ class PreviewWindow(QWidget):
                     _skip = {f for f in _clip_fields if _field_filled(f)}
                     if _entry.get("person_id"):
                         _skip.add("person_id")
-                    self._on_inspect(skip_fields=_skip)
+                    self._schedule_inspect(skip_fields=_skip)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
-                self._on_inspect()
+                self._schedule_inspect()
 
     _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".avif"}
     _VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv", ".flv", ".ts"}
@@ -1641,7 +1727,7 @@ class PreviewWindow(QWidget):
             pass
         _sc.load_file(path, entry)
         # Resize CLIP/FACE/per-field tiles to fit their loaded text content
-        _clip_keys = {"CLIP", "FACE", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X"}
+        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL"}
         for _cfw in _sc.widgets:
             if _cfw.key in _clip_keys and getattr(_cfw, "_te", None):
                 QTimer.singleShot(50, lambda _w=_cfw: self._fit_clip_face_tile(_w))
@@ -1658,7 +1744,7 @@ class PreviewWindow(QWidget):
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
-        _clip_keys = {"CLIP", "FACE", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X"}
+        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL"}
         for w in getattr(sc, "widgets", []):
             if w.key in _clip_keys:
                 te = getattr(w, "_te", None)
@@ -1708,22 +1794,9 @@ class PreviewWindow(QWidget):
             except Exception:
                 pass
         _mark("attr_inner enter")
-        # CRITICAL: flush any pending text-edit save BEFORE we navigate away.
-        # The text-save timer is 800ms debounced; navigating within that window
-        # would otherwise lose what the user just typed (the canvas reset on
-        # the new file overwrites the still-unsaved widget contents).
-        if self._attr_path and self._attr_path != path:
-            _tst = getattr(self, '_text_save_timer', None)
-            if _tst is not None and _tst.isActive():
-                _tst.stop()
-                try:
-                    self._save_attrs()
-                except Exception:
-                    pass
-        # Auto-bake previous file when navigating to a different one
-        if self._attr_path and self._attr_path != path:
-            if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
-                self._bake_to_file(silent=True)
+        # Note: text-save flush and auto-bake on navigation are handled in the
+        # outer _refresh_attrs wrapper so they fire on every nav (not delayed
+        # by the debounce). Don't duplicate them here.
         _same_file = (self._attr_path == path)
         # Navigating to a new file — hide all AI debug tiles (CLIP_*/CLIP/FACE).
         # They only appear on explicit right-click Show / Update.
@@ -1731,14 +1804,26 @@ class PreviewWindow(QWidget):
             _sc = getattr(self, "_soft_canvas", None)
             if _sc:
                 for _w in getattr(_sc, "widgets", []):
-                    if _w.key.startswith("CLIP_") or _w.key in ("CLIP", "FACE"):
+                    if _w.key.startswith("CLIP_") or _w.key in ("CLIP", "FACE", "FACE_PW"):
                         _w.hide()
         self._attr_path = path
-        # Only reset bake state when navigating to a new file — preserve state on same-file refresh
+        # On new-file nav, just reset to idle. Yellow ("pending") is set only
+        # when the user actually edits — no per-nav file read for the bake
+        # state, which kept arrow-key scrolling fast.
         if not _same_file:
-            _entry_pre = attrs_mod.get(self.handler.app.attrs_data, path) if path else {}
-            _has_bakeable = any(_entry_pre.get(k) for k in ("prompt", "neg_prompt", "seed", "speech", "person_id"))
-            self._update_bake_btn("pending" if _has_bakeable else "idle")
+            self._update_bake_btn("idle")
+            # Show whether a rename is pending for this file (yellow if the
+            # entry's coded values disagree with the filename).
+            QTimer.singleShot(0, self._refresh_rename_btn_state)
+        # Skip the heavy widget rebuild when the user can't see the panel and
+        # AI inspection is off — there's no UI to update and no detection to
+        # run. Mark a pending refresh so re-opening the panel re-syncs.
+        _panel_open = self._attr_scroll.isVisible()
+        _ai_off = (app.config.get("clip_inspect_mode", "when_empty") == "never")
+        if not _panel_open and _ai_off:
+            self._attr_pending_refresh = True
+            return
+        self._attr_pending_refresh = False
         self._btn_detect_person.setText(_t("Detect & Register / 検出＆登録"))
         self._btn_detect_person.setStyleSheet(
             "background:#445566; color:#e0e0e0; border:1px solid #667788;"
@@ -1786,6 +1871,29 @@ class PreviewWindow(QWidget):
                 if _ep_seed and not _ep_stored.get("seed"):
                     _ep_stored["seed"] = _ep_seed
                     _ep_changed = True
+                if _ep_changed:
+                    attrs_mod.save(app.current_project, app.attrs_data)
+            # Also restore from the file's AItan{} block — this is what we
+            # write on bake, and the only place that has the user's typed
+            # text fields (prompt/neg_prompt/speech) for files generated by
+            # tools other than ComfyUI/A1111.
+            try:
+                _aitan_block = attrs_mod._read_embedded_aitan_block(path)
+            except Exception:
+                _aitan_block = None
+            if _aitan_block:
+                if path not in app.attrs_data:
+                    app.attrs_data[path] = {}
+                _ep_stored = app.attrs_data[path]
+                _ep_changed = False
+                for _k, _v in _aitan_block.items():
+                    if _k == "ver":
+                        continue
+                    if _v in (None, "", [], {}):
+                        continue
+                    if not _ep_stored.get(_k):
+                        _ep_stored[_k] = _v
+                        _ep_changed = True
                 if _ep_changed:
                     attrs_mod.save(app.current_project, app.attrs_data)
 
@@ -1943,7 +2051,19 @@ class PreviewWindow(QWidget):
             _raw_meta = {}
             try:
                 _mark("before extract_metadata")
-                _raw_meta = attrs_mod.extract_metadata(path) if path else {}
+                # Cache by (path, mtime) — extract_metadata opens the file and
+                # parses EXIF/ComfyUI workflow, ~100ms per nav otherwise.
+                if not hasattr(app, "_extract_meta_cache"):
+                    app._extract_meta_cache = {}
+                try:
+                    _emm_mt = os.path.getmtime(path) if path else 0
+                except Exception:
+                    _emm_mt = 0
+                _emm_key = (path, _emm_mt)
+                _raw_meta = app._extract_meta_cache.get(_emm_key)
+                if _raw_meta is None:
+                    _raw_meta = attrs_mod.extract_metadata(path) if path else {}
+                    app._extract_meta_cache[_emm_key] = _raw_meta
                 _mark("after extract_metadata")
             except Exception:
                 pass
@@ -2117,8 +2237,8 @@ class PreviewWindow(QWidget):
             _embedded = attrs_mod.read_raw_embedded_text(path)
         except Exception:
             _embedded = ""
-        if _embedded and len(_embedded) > 16384:
-            _embedded = _embedded[:16384] + "\n…(truncated)"
+        if _embedded and len(_embedded) > 8192:
+            _embedded = _embedded[:8192] + "\n…(truncated)"
         self._raw_meta_edit.setPlainText(_embedded if _embedded else "(no embedded text)")
 
         # Fill seed/prompt fields from meta — always update from file
@@ -2530,6 +2650,77 @@ class PreviewWindow(QWidget):
         name_label = attrs_mod.get_person_id_label(app.current_project, new_pid)
         self._person_name_edit.setText(name_label if name_label != new_pid else "")
 
+    def _schedule_inspect(self, overwrite=False, skip_fields=None, delay_ms=250):
+        """Debounce wrapper around _on_inspect — rapid arrow-key navigation
+        was firing CLIP/face on every file, racing native code in the worker
+        thread with main-thread widget updates and occasionally segfaulting.
+        Only the most recent request fires after delay_ms of quiet.
+
+        Memory safety: if RSS is above the auto-inspect ceiling, skip the
+        auto-fire — mediapipe/torch native code is what's leaking and crashing
+        the process at high RSS. The user can still manually trigger inspect
+        via the Apply button."""
+        try:
+            import psutil
+            _rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+            # Resolution order:
+            # 1. AISEARCH_INSPECT_RSS_LIMIT_MB env var (debugging override)
+            # 2. config["clip_inspect_rss_limit_mb"] (user-set in Canvas tab)
+            # 3. Hardcoded fallback 1500
+            _env = os.environ.get("AISEARCH_INSPECT_RSS_LIMIT_MB")
+            if _env:
+                _ceiling = float(_env)
+            else:
+                _ceiling = float(self.handler.app.config.get(
+                    "clip_inspect_rss_limit_mb", 1500))
+            if _rss_mb > _ceiling:
+                try:
+                    from aisearch_debug import dbg as _dbg
+                    _dbg(f"_schedule_inspect SKIP (rss={_rss_mb:.0f}MB > {_ceiling:.0f}MB ceiling)")
+                except Exception:
+                    pass
+                # Don't just silently skip — flip the AI mode to "never" so the
+                # logo shows the OFF variant and the settings combo reflects
+                # reality. The previous mode is stored under _clip_inspect_prev
+                # so a manual logo-click can restore it once memory frees up.
+                try:
+                    _app = self.handler.app
+                    if _app.config.get("clip_inspect_mode", "never") != "never":
+                        _app.config["_clip_inspect_prev"] = _app.config.get("clip_inspect_mode")
+                        _app.config["clip_inspect_mode"] = "never"
+                        try:
+                            import aisearch_config as _cfg
+                            _cfg.save_config(_app.config, getattr(_app, "current_project", None))
+                        except Exception:
+                            pass
+                        if hasattr(_app, "_refresh_logo_pixmap"):
+                            _app._refresh_logo_pixmap()
+                        _sw = getattr(_app, "_settings_win", None)
+                        if _sw is not None:
+                            _cb = getattr(_sw, "_clip_inspect_mode_cb", None)
+                            if _cb is not None:
+                                _i = _cb.findData("never")
+                                if _i >= 0:
+                                    _cb.blockSignals(True)
+                                    _cb.setCurrentIndex(_i)
+                                    _cb.blockSignals(False)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        from PyQt6.QtCore import QTimer as _QT
+        self._inspect_pending_args = (overwrite, skip_fields)
+        if not hasattr(self, "_inspect_debounce"):
+            self._inspect_debounce = _QT(self)
+            self._inspect_debounce.setSingleShot(True)
+            def _fire():
+                args = getattr(self, "_inspect_pending_args", None)
+                if args is not None:
+                    self._on_inspect(overwrite=args[0], skip_fields=args[1])
+            self._inspect_debounce.timeout.connect(_fire)
+        self._inspect_debounce.start(delay_ms)
+
     def _on_inspect(self, overwrite=False, skip_fields=None):
         """Run CLIP + face detection and write raw scores into the inspect text box.
         overwrite=True: clear all CLIP fields and re-detect from scratch (Refresh mode).
@@ -2577,21 +2768,23 @@ class PreviewWindow(QWidget):
             _dbg("    CLIP START")
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
-            _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X")
+            _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL")
             _clip_specs = []
             try:
                 import aisearch_logic as _lg
+                # Look up cached embedding for follow-up code (corrections,
+                # canvas tile updates) — the subprocess re-extracts on its
+                # own, so this lookup is informational only.
                 emb = None
                 data = getattr(app, "data", None)
                 if data and "paths" in data and path in data["paths"]:
                     idx = data["paths"].index(path)
                     emb = data["embeddings"][idx]
-                if emb is None:
-                    _t_emb = _time.time()
-                    emb = _lg.extract_feature(path)
-                    _dbg(f"      CLIP extract_feature: {(_time.time()-_t_emb)*1000:.1f}ms")
-                if emb is not None:
-                    _clip_specs = attrs_mod.inspect_clip_scores(emb)
+                # CLIP scoring goes through the persistent worker pool —
+                # CLIP/CUDA state lives in the worker, so any segfault only
+                # kills the worker. Auto-recycles every 30 calls.
+                _clip_specs = attrs_mod.inspect_clip_scores_subprocess(path)
+                if _clip_specs:
                     _shown_skip_label = set()   # don't repeat "ignored" per spec position
                     for sp in _clip_specs:
                         _f_lc_top = sp["field"].lower()
@@ -2619,7 +2812,6 @@ class PreviewWindow(QWidget):
                         _f_lc = sp["field"].lower()
                         if _fk in _CLIP_CANVAS_FIELDS:
                             if skip_fields and _f_lc in skip_fields:
-                                # Only set the ignored message once per field
                                 if _fk not in clip_field_txt:
                                     clip_field_txt[_fk] = ["(ignored — already set)"]
                             else:
@@ -2636,8 +2828,8 @@ class PreviewWindow(QWidget):
                 clip_txt.append(f"ERROR: {e}")
             if clip_out:
                 _clip_full = "\n".join(clip_txt)
-                if len(_clip_full) > 16384:
-                    _clip_full = _clip_full[:16384] + "\n…(truncated)"
+                if len(_clip_full) > 8192:
+                    _clip_full = _clip_full[:8192] + "\n…(truncated)"
                 QMetaObject.invokeMethod(clip_out, "setPlainText",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, _clip_full))
@@ -2784,7 +2976,9 @@ class PreviewWindow(QWidget):
             else:
                 try:
                     _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
-                    fi = attrs_mod.inspect_face_detection(path, app.current_project)
+                    # Use the subprocess worker — isolates dlib/face_recognition
+                    # leaks so they don't accumulate in the main app.
+                    fi = attrs_mod.inspect_face_detection_subprocess(path, app.current_project)
                     if fi.get("error"):
                         face_txt.append(f"ERROR: {fi['error']}")
                     else:
@@ -2804,6 +2998,20 @@ class PreviewWindow(QWidget):
                             _det_str = ('P' + _detected_pid) if _detected_pid else 'no match (thr 0.35)'
                             _match = " ==" if _detected_pid == _stored_pid else " !="
                             face_txt.append(f"\n-> {_det_str}{_match} stored")
+
+                            # Secondary faces (PW candidates) — only those that
+                            # confidently matched a KNOWN person are auto-filled;
+                            # unknown secondaries are shown as a count, not registered.
+                            _secondaries = fi.get("secondaries") or []
+                            if _secondaries:
+                                _sec_strs = []
+                                for _spid in _secondaries:
+                                    _sname = registry.get(_spid, "")
+                                    _sec_strs.append(f"P{_spid}" + (f" {_sname}" if _sname else ""))
+                                face_txt.append(f"PW: {', '.join(_sec_strs)}")
+                            _extra = max(0, fi["num_faces"] - 1 - len(_secondaries))
+                            if _extra:
+                                face_txt.append(f"PW: {_extra} unmatched face(s)")
                         else:
                             face_txt.append("No face detected")
                             _detected_pid = "000"
@@ -2813,15 +3021,47 @@ class PreviewWindow(QWidget):
             if face_txt:
                 _entry = attrs_mod.get(app.attrs_data, path)
                 _entry["FACE"] = "\n".join(face_txt)
+                # Build a dedicated PW debug block — secondary face details so
+                # the user can see WHY a particular ID was chosen for PW.
+                _pw_lines = []
+                try:
+                    if 'fi' in dir() and isinstance(fi, dict) and not fi.get("error"):
+                        _num = fi.get("num_faces", 0)
+                        _secs = fi.get("secondaries") or []
+                        _pw_lines.append(f"Faces in frame: {_num}")
+                        if _num <= 1:
+                            _pw_lines.append("(only one face — no PW)")
+                        else:
+                            if _secs:
+                                _reg = attrs_mod.load_person_registry(app.current_project)
+                                _pw_lines.append("Matched secondaries:")
+                                for _spid in _secs:
+                                    _name = _reg.get(_spid, "")
+                                    _pw_lines.append(
+                                        f"  P{_spid}" + (f"  {_name}" if _name else ""))
+                            _unmatched = max(0, _num - 1 - len(_secs))
+                            if _unmatched:
+                                _pw_lines.append(f"Unmatched: {_unmatched} face(s)")
+                            if not _secs and not _unmatched:
+                                _pw_lines.append("(no secondary matches)")
+                except Exception:
+                    _pw_lines = []
+                if _pw_lines:
+                    _entry["FACE_PW"] = "\n".join(_pw_lines)
                 attrs_mod.save(app.current_project, app.attrs_data)
                 QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, "FACE"),
                                          Q_ARG(str, "\n".join(face_txt)))
+                if _pw_lines:
+                    QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
+                                             Qt.ConnectionType.QueuedConnection,
+                                             Q_ARG(str, "FACE_PW"),
+                                             Q_ARG(str, "\n".join(_pw_lines)))
             if face_out:
                 _face_full = "\n".join(face_txt)
-                if len(_face_full) > 16384:
-                    _face_full = _face_full[:16384] + "\n…(truncated)"
+                if len(_face_full) > 8192:
+                    _face_full = _face_full[:8192] + "\n…(truncated)"
                 QMetaObject.invokeMethod(face_out, "setPlainText",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, _face_full))
@@ -2832,6 +3072,18 @@ class PreviewWindow(QWidget):
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, path),
                                          Q_ARG(str, _detected_pid))
+            # Auto-apply secondary faces to persons_with (PW). Same "don't
+            # overwrite existing data" rule as primary — _auto_apply_pw bails
+            # if the user already has a value.
+            try:
+                _sec_for_pw = fi.get("secondaries") or []
+            except Exception:
+                _sec_for_pw = []
+            if _sec_for_pw:
+                QMetaObject.invokeMethod(self, "_auto_apply_pw",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, path),
+                                         Q_ARG(str, ",".join(_sec_for_pw)))
             # Keep Apply button in Raw Data section in sync
             _apply_btn = getattr(self, "_btn_apply_face", None)
             if _apply_btn and _detected_pid is not None and _detected_pid != _stored_pid_now:
@@ -2944,6 +3196,16 @@ class PreviewWindow(QWidget):
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
+        # All AI debug tiles (FACE/FACE_PW/CLIP/CLIP_*) use the same fixed
+        # height. Auto-fitting per-tile made them shrink/grow each detection,
+        # which the user found jarring. 220px holds the common case (top
+        # matches + summary line) without truncation.
+        _wkey = getattr(w, "key", "")
+        if _wkey in ("FACE", "FACE_PW", "CLIP") or _wkey.startswith("CLIP_"):
+            _fixed_h = 220
+            if w.height() != _fixed_h:
+                w.resize(w.width(), _fixed_h)
+            return
         tile_w = max(150, w.width() - 20)
         te.document().setTextWidth(tile_w)
         doc_h = int(te.document().size().height()) + te.frameWidth() * 2
@@ -2996,19 +3258,42 @@ class PreviewWindow(QWidget):
     @pyqtSlot(str, str)
     def _auto_apply_face(self, path: str, pid: str):
         """Slot called from _on_inspect thread to auto-apply detected person_id.
-        Only applies when the entry has no person_id yet — never overwrites an
-        existing value (user correction or prior save). Use the 'Apply' button
-        in the Face inspect panel to explicitly overwrite."""
+        Only applies when the entry has no real person_id yet — "000" (no
+        human) counts as empty, so a real detection like "058" can replace it.
+        Use the 'Apply' button to explicitly overwrite a non-zero stored ID."""
         if not path or not pid or pid == "000":
             return
         app = self.handler.app
         if self._attr_path != path:
             return  # user navigated away
         entry = attrs_mod.get(app.attrs_data, path)
-        old_pid = entry.get("person_id", "")
-        if old_pid:
+        old_pid = (entry.get("person_id") or "").strip().lower()
+        if old_pid and old_pid != "000":
             return  # already set — respect existing data
         entry["person_id"] = pid
+        attrs_mod.save(app.current_project, app.attrs_data)
+        self._refresh_attrs_inner(path)
+
+    @pyqtSlot(str, str)
+    def _auto_apply_pw(self, path: str, pids_csv: str):
+        """Slot called from _on_inspect thread to auto-apply detected secondary
+        faces to persons_with. Same rule as primary: never overwrite existing
+        user data — only fills in when persons_with is empty."""
+        if not path or not pids_csv:
+            return
+        pids = [p.strip().lower() for p in pids_csv.split(",") if p.strip()]
+        if not pids:
+            return
+        app = self.handler.app
+        if self._attr_path != path:
+            return
+        entry = attrs_mod.get(app.attrs_data, path)
+        # "000" entries don't count as real data — replace freely.
+        _existing = [p for p in (entry.get("persons_with") or [])
+                     if p and p.strip().lower() != "000"]
+        if _existing:
+            return  # respect existing user data
+        entry["persons_with"] = pids
         attrs_mod.save(app.current_project, app.attrs_data)
         self._refresh_attrs_inner(path)
 
@@ -3016,17 +3301,46 @@ class PreviewWindow(QWidget):
         """Dispatch action button clicks from canvas FieldWidgets."""
         if key == "P" and action == "detect_face":
             self._detect_face_for_canvas()
+        elif action == "edit_person" and key in ("P", "PI", "PW"):
+            self._open_persons_settings_for_pid()
         elif action == "update_clip":
             self._update_clip_for_field(key)
         elif action == "show_clip":
             self._show_clip_tile_for_field(key)
+
+    def _open_persons_settings_for_pid(self):
+        """Open Settings → Persons, highlight the card for current P, and store
+        this file as the assignment origin so the Persons tab's P/PI/PW
+        buttons can write the picked ID back to this entry."""
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        app = self.handler.app
+        entry = attrs_mod.get(app.attrs_data, path)
+        pid = (entry.get("person_id") or "").strip().lower()
+        try:
+            app._open_settings(tab=1)
+        except Exception:
+            return
+        _sw = getattr(app, "_settings_win", None)
+        if _sw is None:
+            return
+        _focus = getattr(_sw, "_focus_person", None)
+        if not callable(_focus):
+            return
+        QTimer.singleShot(150, lambda _p=pid, _o=path: _focus(_p, _o))
 
     def _show_clip_tile_for_field(self, key: str):
         """Right-click → Show: reveal the debug tile without re-running detection.
         Repositions the tile flush under its parent (BL→TL) so it stays
         attached even after Auto Grid disconnected it."""
         _target = key.lower()
-        _dbg_key = "FACE" if _target == "p" else f"CLIP_{_target.upper()}"
+        if _target == "p":
+            _dbg_key = "FACE"
+        elif _target == "pw":
+            _dbg_key = "FACE_PW"
+        else:
+            _dbg_key = f"CLIP_{_target.upper()}"
         _sc = getattr(self, "_soft_canvas", None)
         if not _sc:
             return
@@ -3045,8 +3359,10 @@ class PreviewWindow(QWidget):
         _ALL = {"hc", "fa", "sk", "pm", "e", "cs", "bg", "x"}
         _target = key.lower()
         _skip = set()
-        if _target == "p":
-            # Person: skip all CLIP fields, only run face detection
+        if _target == "p" or _target == "pw":
+            # Person / persons-with: skip all CLIP fields, only run face detection
+            # (PW shares the face-detection pipeline — secondaries come from
+            # the same call as primary).
             _skip = set(_ALL)
         elif _target in _ALL:
             _skip = _ALL - {_target}
@@ -3057,14 +3373,19 @@ class PreviewWindow(QWidget):
         _path = getattr(self, "_attr_path", None)
         if _path:
             _entry = self.handler.app.attrs_data.setdefault(_path, {})
-            if _target != "p":
+            if _target not in ("p", "pw"):
                 _entry.pop(_target, None)
                 _entry.pop(f"cf_{_target}", None)
         # Reveal the debug tile ahead of the detect so the user sees it populate.
         # Reposition flush under its parent — Auto Grid may have disconnected
         # and dragged it elsewhere.
         _sc = getattr(self, "_soft_canvas", None)
-        _dbg_key = "FACE" if _target == "p" else f"CLIP_{_target.upper()}"
+        if _target == "p":
+            _dbg_key = "FACE"
+        elif _target == "pw":
+            _dbg_key = "FACE_PW"
+        else:
+            _dbg_key = f"CLIP_{_target.upper()}"
         if _sc:
             widgets = getattr(_sc, "widgets", [])
             _parent = next((w for w in widgets if w.key == key), None)
@@ -3095,7 +3416,11 @@ class PreviewWindow(QWidget):
             Q_ARG(str, _t("Detecting face… / 顔を検出中…")))
 
         def _run(_path=path):
+            _status = ""
             try:
+                # Snapshot face DB size before detect to tell match vs new register
+                _faces_before = set(
+                    attrs_mod.load_faces_db(app.current_project).get("faces", {}).keys())
                 pid = attrs_mod.detect_or_assign_person_id(_path, app.current_project)
                 if pid is None:
                     pid = "000"
@@ -3105,6 +3430,21 @@ class PreviewWindow(QWidget):
                 attrs_mod.save(app.current_project, app.attrs_data)
                 if old_pid and old_pid != pid and old_pid != "000":
                     attrs_mod.correct_person_id(_path, app.current_project, pid, wrong_id=old_pid)
+                # Build a short status message for the FACE tile
+                if pid == "000":
+                    _status = "✗ No face detected"
+                elif pid not in _faces_before:
+                    _status = f"✓ REGISTERED as P{pid}"
+                else:
+                    _status = f"✓ Matched P{pid}"
+            except Exception as e:
+                _status = f"ERROR: {e}"
+            # Push status into the FACE canvas tile so the user sees feedback
+            try:
+                QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
+                                         Qt.ConnectionType.QueuedConnection,
+                                         Q_ARG(str, "FACE"),
+                                         Q_ARG(str, _status))
             except Exception:
                 pass
             QMetaObject.invokeMethod(
@@ -3507,27 +3847,46 @@ class PreviewWindow(QWidget):
         # Canvas P tile has priority when present; fall back to classic p_edits then combo
         if "person_id" in _text_vals:
             _canvas_pid = _norm_pid(_text_vals["person_id"])
-            persons = [_canvas_pid] if _canvas_pid else []
+            if _canvas_pid:
+                persons = [_canvas_pid]
+            else:
+                # Canvas P field empty — DON'T wipe existing person_id. The
+                # canvas may be mid-reload, or a parallel save fired before
+                # the assigned value made it into the widget. Fall back to
+                # whatever the entry already has, same pattern as the _v()
+                # helper for text fields.
+                _existing = _norm_pid((entry.get("person_id") or "").strip())
+                persons = [_existing] if _existing else []
         else:
             persons = [_norm_pid(pe.text().strip()) for pe in self._p_edits if pe.text().strip()]
             if not persons:
                 _combo_fid = self._person_id_combo.currentData()
                 if _combo_fid:
                     persons = [_norm_pid(_combo_fid)]
+        # Helper: only use the canvas value if it actually has content. Empty
+        # canvas values would otherwise wipe whatever the entry already has —
+        # which destroyed typed prompts when _save_attrs fired before the
+        # canvas had finished loading the new file's data.
+        def _v(key, fallback):
+            cv = _text_vals.get(key)
+            if isinstance(cv, str) and cv.strip():
+                return cv
+            return fallback
+        _seed_widget = self._seed_edit.text()
         attrs_mod.set_file(app.attrs_data, path,
                            tags=tags,
-                           note=self._project_edit.text() if self._note_row_widget.isVisible() else _text_vals.get("note", entry.get("note", "")),
+                           note=self._project_edit.text() if self._note_row_widget.isVisible() else _v("note", entry.get("note", "")),
                            confirmed=entry.get("confirmed", False),
                            project=entry.get("project", ""),
                            scene=entry.get("scene", ""),
-                           prompt=_text_vals.get("prompt", entry.get("prompt", "")),
-                           neg_prompt=_text_vals.get("neg_prompt", entry.get("neg_prompt", "")),
-                           seed=_text_vals.get("seed", self._seed_edit.text() or entry.get("seed", "")),
+                           prompt=_v("prompt", entry.get("prompt", "")),
+                           neg_prompt=_v("neg_prompt", entry.get("neg_prompt", "")),
+                           seed=_v("seed", _seed_widget if _seed_widget.strip() else entry.get("seed", "")),
                            meta=entry.get("meta"),
                            custom=entry.get("custom", ""),
                            person_id=persons[0] if persons else "",
-                           speech=_text_vals.get("speech", entry.get("speech", "")),
-                           audio=_text_vals.get("audio", entry.get("audio", "")),
+                           speech=_v("speech", entry.get("speech", "")),
+                           audio=_text_vals.get("audio") or entry.get("audio", ""),
                            editable=not self._protected_check.isChecked())
         # Write canvas coded-field values (HC, E, FA, SK, etc.) back into attrs_data.
         # set_file preserves old values via merge; we overwrite with the current canvas state.
@@ -3543,6 +3902,34 @@ class PreviewWindow(QWidget):
                     app.attrs_data[path][_mk] = _mv
                 else:
                     app.attrs_data[path].pop(_mk, None)
+        # PI (face-swap provenance) — dropdown from person registry, defaults
+        # to the P value as placeholder. Only persist as a real PI when the
+        # selection differs from the current person_id (i.e. user actually
+        # picked something else); selecting the same value as P is the
+        # placeholder fallback, not real provenance data.
+        if "pi" in _text_vals and path in app.attrs_data:
+            _pi_val = (_text_vals.get("pi") or "").strip().lower()
+            _entry_now = app.attrs_data[path]
+            _cur_pid = (_entry_now.get("person_id") or "").strip().lower()
+            if _pi_val and _pi_val != _cur_pid:
+                _entry_now["pi"] = _pi_val
+            else:
+                _entry_now.pop("pi", None)
+        # PW (persons_with) — companions actually present in the frame.
+        # Auto-filled by face detection, editable by user. Canvas widget
+        # default-displays the P value when blank, so only persist as a real
+        # PW edit when the typed value differs from the current person_id.
+        if "pw" in _text_vals and path in app.attrs_data:
+            _pw_raw = (_text_vals.get("pw") or "").strip()
+            _pw_ids = [p.strip().lower() for p in _pw_raw.split(",") if p.strip()]
+            _entry_now = app.attrs_data[path]
+            _cur_pid = (_entry_now.get("person_id") or "").strip().lower()
+            # If user left it as the P fallback (single ID == person_id), don't
+            # store it — that's just the placeholder, not real PW data.
+            if _pw_ids and not (len(_pw_ids) == 1 and _pw_ids[0] == _cur_pid):
+                _entry_now["persons_with"] = _pw_ids
+            else:
+                _entry_now.pop("persons_with", None)
         attrs_mod.save(app.current_project, app.attrs_data)
 
         # Teach the AI from user edits — record (embedding, saved-entry) as
@@ -3587,7 +3974,11 @@ class PreviewWindow(QWidget):
                 if _fn_changed:
                     _cur_entry2["tags"] = _cur_tags2
                     attrs_mod.save(app.current_project, app.attrs_data)
-        # Tag ↔ filename sync: apply two-way tag_group rules when auto_rename is on
+        # Tag ↔ filename sync: apply two-way tag_group rules when auto_rename
+        # is on. Rebuilding the coded filename from entry on every canvas
+        # change moved to the manual 🔄 Rename button — auto-fire raced with
+        # auto-bake threads and produced phantom files (file present at both
+        # old and new paths because a stale closure wrote to the old path).
         if _fn_cfg.get("auto_rename", False):
             new_path = attrs_mod.apply_tag_sync_rules(app.attrs_data, path, app.current_project)
             if new_path != path:
@@ -3602,14 +3993,21 @@ class PreviewWindow(QWidget):
                     app.table.set_row_path(row, new_path)
                 self.setWindowTitle(os.path.basename(new_path))
                 path = new_path
-        # Embed AItan{} block into the file itself (background, non-blocking)
-        _saved_entry = attrs_mod.get(app.attrs_data, path)
-        if os.path.exists(path):
+        # Embed AItan{} block into the file — only when auto-bake is on. When
+        # off, leave the bake button in "pending" (yellow) so the user can see
+        # the JSON has changed but the file is not yet baked.
+        _auto_bake = bool(getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked())
+        if _auto_bake and os.path.exists(path):
+            _saved_entry = attrs_mod.get(app.attrs_data, path)
             import threading
             def _embed_and_refresh(_p=path, _e=_saved_entry):
-                attrs_mod.embed_aitan_meta(_p, _e)
+                _ok = False
+                try:
+                    _ok = bool(attrs_mod.embed_aitan_meta(_p, _e))
+                except Exception:
+                    _ok = False
                 # Schedule UI refresh on main thread via signal
-                self._raw_refresh_signal.emit(_p)
+                self._raw_refresh_signal.emit(_p, _ok)
             threading.Thread(target=_embed_and_refresh, daemon=True).start()
         row = app._current_row()
         if row >= 0:
@@ -3620,6 +4018,9 @@ class PreviewWindow(QWidget):
         # Sync main window inline panel if visible
         if hasattr(app, '_inline_attr_path') and app._inline_attr_path == path:
             app._refresh_inline_attrs(path)
+        # Color the Rename button: yellow if any saved coded value differs
+        # from what's in the filename, idle otherwise.
+        self._refresh_rename_btn_state()
 
     def _update_bake_btn(self, state):
         """state: 'idle' | 'pending' | 'ok' | 'error'"""
@@ -3632,17 +4033,113 @@ class PreviewWindow(QWidget):
         }
         self._btn_bake_meta.setStyleSheet(_styles.get(state, _styles["idle"]))
 
-    def _on_raw_refresh(self, path):
+    def _on_raw_refresh(self, path, embed_ok=True):
         """Called from main thread after background embed completes — refresh Raw Data display."""
         _ed = getattr(self, '_raw_meta_edit', None)
-        if _ed is None:
-            return
-        # Only refresh if still viewing the same file
-        if getattr(self, '_attr_path', None) == path:
+        if _ed is not None and getattr(self, '_attr_path', None) == path:
             _t_emb = attrs_mod.read_raw_embedded_text(path) or "(no embedded text)"
-            if len(_t_emb) > 16384:
-                _t_emb = _t_emb[:16384] + "\n…(truncated)"
+            if len(_t_emb) > 8192:
+                _t_emb = _t_emb[:8192] + "\n…(truncated)"
             _ed.setPlainText(_t_emb)
+        # Reflect actual file state on the bake button so the user sees that
+        # the auto-embed already wrote the AItan block (otherwise it stays
+        # stuck on "pending" even though the file is up to date).
+        if hasattr(self, '_btn_bake_meta'):
+            self._update_bake_btn("ok" if embed_ok else "error")
+            QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
+
+    def _update_rename_btn(self, state):
+        """state: 'idle' | 'pending' | 'ok'. Mirrors the bake button."""
+        _styles = {
+            "idle":    "QPushButton { background:#2a3a2a; color:#88cc88; border:1px solid #464; padding:2px 6px; }"
+                       "QPushButton:hover { background:#3a5a3a; color:#aacc99; }",
+            "pending": "QPushButton { background:#7a5a10; color:#ffe080; border:1px solid #aa8820; padding:2px 6px; }"
+                       "QPushButton:hover { background:#8e6a18; color:#fff0a0; }",
+            "ok":      "QPushButton { background:#2a6a2a; color:#aaffaa; border:1px solid #44aa44; padding:2px 6px; }"
+                       "QPushButton:hover { background:#3a7a3a; color:#bbffbb; }",
+        }
+        btn = getattr(self, "_btn_rename", None)
+        if btn is not None:
+            btn.setStyleSheet(_styles.get(state, _styles["idle"]))
+
+    def _refresh_rename_btn_state(self):
+        """Check whether a rename is needed for the current file and color
+        the Rename button accordingly. Cheap — just runs the would_rename
+        check, no actual filesystem ops."""
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        try:
+            app = self.handler.app
+            if attrs_mod.would_rename(app.attrs_data, path, app.current_project):
+                self._update_rename_btn("pending")
+            else:
+                self._update_rename_btn("idle")
+        except Exception:
+            pass
+
+    def _on_manual_rename(self):
+        """Manual rename — rebuilds the filename from entry's current
+        attributes (person_id, persons_with, all coded fields) and renames
+        the file. Pauses the watch-dir scanner so no stale closure writes
+        back to the old path."""
+        path = getattr(self, "_attr_path", None)
+        if not path or not os.path.exists(path):
+            return
+        app = self.handler.app
+        try:
+            self._save_attrs()
+        except Exception:
+            pass
+        path = self._attr_path
+        if not path or not os.path.exists(path):
+            return
+
+        def _propagate_rename(old_p, new_p):
+            """Update every consumer of the old path with the new path so
+            the table, the in-memory paths list, the preview window state,
+            and the visible Name column all match the renamed file."""
+            attrs_mod.update_path_in_all_stores(old_p, new_p, app.current_project)
+            if app.data and "paths" in app.data and old_p in app.data["paths"]:
+                app.data["paths"][app.data["paths"].index(old_p)] = new_p
+            for _row in range(app.table.rowCount()):
+                if app.table.get_row_path(_row) == old_p:
+                    app.table.set_row_path(_row, new_p)
+                    _name_item = app.table.item(_row, 2)
+                    if _name_item:
+                        _name_item.setText(os.path.basename(new_p))
+                    break
+            self._attr_path = new_p
+            if self._canvas_loaded_path is not None:
+                self._canvas_loaded_path = new_p
+            self.handler.current_path = new_p
+            self.setWindowTitle(os.path.basename(new_p))
+
+        _was_paused = getattr(app, "_watcher_paused", False)
+        app._watcher_paused = True
+        try:
+            new_path = attrs_mod.sync_filename_from_entry(
+                app.attrs_data, path, app.current_project)
+            if new_path != path:
+                _propagate_rename(path, new_path)
+                path = new_path
+            new_path = attrs_mod.apply_tag_sync_rules(
+                app.attrs_data, path, app.current_project)
+            if new_path != path:
+                _propagate_rename(path, new_path)
+                path = new_path
+            try:
+                new_path = attrs_mod.apply_boolean_sync_rules(
+                    app.attrs_data, path, app.current_project)
+                if new_path != path:
+                    _propagate_rename(path, new_path)
+                    path = new_path
+            except Exception:
+                pass
+            attrs_mod.save(app.current_project, app.attrs_data)
+        finally:
+            app._watcher_paused = _was_paused
+        self._update_rename_btn("ok")
 
     def _bake_to_file(self, silent=False):
         """Embed all attrs (tags, prompt, seed, etc.) into the physical file as AItan{} block."""
@@ -3690,7 +4187,12 @@ class PreviewWindow(QWidget):
                 _sc2 = getattr(self, "_soft_canvas", None)
                 if _sc2:
                     try:
-                        _, _, _coded_vals2 = _sc2.collect_soft_data()
+                        # collect_soft_data returns 4 values now (added matrix
+                        # dict). Old 3-tuple unpack silently ValueErrored and
+                        # got swallowed by the outer except, so O/R/K rename
+                        # never ran.
+                        _coll = _sc2.collect_soft_data()
+                        _coded_vals2 = _coll[2] if len(_coll) >= 3 else {}
                         if _coded_vals2:
                             _ork_stem, _ork_ext = os.path.splitext(os.path.basename(path))
                             _ork_parts = attrs_mod.parse_coded_filename(_ork_stem)
@@ -3794,8 +4296,8 @@ class PreviewWindow(QWidget):
             self._bake_err_label.setText("")
             QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
             _t_rm = attrs_mod.read_raw_embedded_text(path) or "(no embedded text)"
-            if len(_t_rm) > 16384:
-                _t_rm = _t_rm[:16384] + "\n…(truncated)"
+            if len(_t_rm) > 8192:
+                _t_rm = _t_rm[:8192] + "\n…(truncated)"
             self._raw_meta_edit.setPlainText(_t_rm)
             return
         ok = attrs_mod.embed_aitan_meta(path, entry)
@@ -3809,8 +4311,8 @@ class PreviewWindow(QWidget):
             QTimer.singleShot(2000, lambda: self._update_bake_btn("idle"))
             _baked_path = getattr(self, '_attr_path', path)
             _t_rm2 = attrs_mod.read_raw_embedded_text(_baked_path) or "(no embedded text)"
-            if len(_t_rm2) > 16384:
-                _t_rm2 = _t_rm2[:16384] + "\n…(truncated)"
+            if len(_t_rm2) > 8192:
+                _t_rm2 = _t_rm2[:8192] + "\n…(truncated)"
             self._raw_meta_edit.setPlainText(_t_rm2)
             # Record as correction example for future CLIP detection — skipped
             # in "No inspection" mode since that mode means no AI activity.
@@ -3910,6 +4412,31 @@ class PreviewWindow(QWidget):
             self._btn_apply_face.setText(_t("Apply / 適用"))
             self._btn_apply_face.setToolTip(_t("Apply detected person ID to this file / 検出された人物IDをこのファイルに適用"))
 
+    def _apply_project_bg(self):
+        """Refresh the image-label + scroll-area backgrounds from the
+        current project's color. The scroll_area wraps the label; without
+        also tinting the scroll_area, its black bg shows around the label."""
+        try:
+            _app = self.handler.app
+            _bg = _app.config.get("project_bg_color", "")
+            # Always update scroll_area bg — that's the outer container the
+            # user actually sees as the "letterbox" around the picture.
+            _scroll_bg = _bg if _bg else "black"
+            self.scroll_area.setStyleSheet(
+                f"border: none; background: {_scroll_bg};")
+            self.scroll_area.viewport().setStyleSheet(
+                f"background: {_scroll_bg};")
+            _ss = self.label.styleSheet() or ""
+            if "10px solid #00ff00" in _ss:
+                return  # video — keep its green border
+            if _bg:
+                self.label.setStyleSheet(
+                    f"background-color: {_bg}; border: 8px solid {_bg};")
+            else:
+                self.label.setStyleSheet("background-color: black;")
+        except Exception:
+            pass
+
     def set_mode_color(self, color: str):
         """Update the bar background color to reflect the active mode."""
         bar_ss = f"background-color: {color};"
@@ -3963,8 +4490,21 @@ class PreviewHandler:
 
     def show(self, path):
         if not path or not os.path.exists(path): return
+        # Coalesce duplicate show() calls for the same path. Skip if the
+        # path is already the current one OR if we just rendered it within
+        # the last second — multiple click/selection events fire together
+        # and each was triggering a full video frame decode.
         import time as _time
-        _t0 = _time.time()
+        _now = _time.time()
+        _last_path = getattr(self, "_show_last_path", None)
+        _last_t = getattr(self, "_show_last_t", 0.0)
+        if path == _last_path and (_now - _last_t) < 1.0:
+            return
+        if path == getattr(self, "current_path", None) and (_now - _last_t) < 1.0:
+            return
+        self._show_last_path = path
+        self._show_last_t = _now
+        _t0 = _now
         try:
             from aisearch_debug import dbg as _dbg
             _dbg(f"preview.show START {os.path.basename(path)}")
@@ -4029,8 +4569,23 @@ class PreviewHandler:
         self.window._file_info_text = ""
         self.window._update_title_with_info(path)
 
+        # Project-colored bg fills the scroll_area + label backgrounds so
+        # the project tint is visible around any image/video. Video keeps
+        # the green border as the "this is a video" signal.
+        _proj_bg_set = self.app.config.get("project_bg_color", "")
+        _proj_bg = _proj_bg_set or "black"
+        # Tint the outer scroll_area too — without this, its hardcoded black
+        # bg shows around the label and overrides the project color.
+        self.window.scroll_area.setStyleSheet(
+            f"border: none; background: {_proj_bg};")
+        self.window.scroll_area.viewport().setStyleSheet(
+            f"background: {_proj_bg};")
         if is_video:
-            self.window.label.setStyleSheet("background-color: black; border: 10px solid #00ff00;")
+            self.window.label.setStyleSheet(
+                f"background-color: {_proj_bg}; border: 10px solid #00ff00;")
+        elif _proj_bg_set:
+            self.window.label.setStyleSheet(
+                f"background-color: {_proj_bg_set}; border: 8px solid {_proj_bg_set};")
         else:
             self.window.label.setStyleSheet("background-color: black;")
 
@@ -4094,7 +4649,11 @@ class PreviewHandler:
         row = self.app._current_row()
         if row < 0: return
         src = self.app.table.get_row_path(row)
-        target_dir = FolderPickerDialog(self.window, initialdir=self.app.last_move_dir, title="Copy to...").result
+        # Start the picker at the current file's folder so the user can move
+        # to a sibling directory in one step instead of navigating from the
+        # last-used target each time.
+        _start = os.path.dirname(src) if src and os.path.isdir(os.path.dirname(src)) else self.app.last_move_dir
+        target_dir = FolderPickerDialog(self.window, initialdir=_start, title="Copy to...").result
         if not target_dir: return
         try:
             shutil.copy2(src, os.path.join(target_dir, os.path.basename(src)))
@@ -4107,7 +4666,8 @@ class PreviewHandler:
         row = self.app._current_row()
         if row < 0: return
         old_path   = self.app.table.get_row_path(row)
-        target_dir = FolderPickerDialog(self.window, initialdir=self.app.last_move_dir, title="Move to...").result
+        _start = os.path.dirname(old_path) if old_path and os.path.isdir(os.path.dirname(old_path)) else self.app.last_move_dir
+        target_dir = FolderPickerDialog(self.window, initialdir=_start, title="Move to...").result
         if not target_dir: return
         dest_path  = os.path.join(target_dir, os.path.basename(old_path))
         mode       = self.app.config.get("move_conflict", "size_check")

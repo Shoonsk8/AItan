@@ -2,6 +2,18 @@ import os, sys, importlib.util
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Suppress libavformat/libwebp warnings about malformed EXIF segments in
+# user files ("invalid TIFF header in Exif data"). They flood stderr but
+# are harmless — the rest of the file decodes fine without the bad EXIF.
+# AV_LOG_LEVEL=panic (8) silences everything below FATAL in ffmpeg.
+os.environ.setdefault("AV_LOG_LEVEL", "panic")
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "8")
+try:
+    import av
+    av.logging.set_level(av.logging.PANIC)
+except Exception:
+    pass
+
 # Linux: cv2 ships its own Qt plugins that conflict with PyQt6 — point Qt to the right ones
 if sys.platform == "linux":
     _spec = importlib.util.find_spec("PyQt6")
