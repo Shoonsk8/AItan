@@ -3894,14 +3894,29 @@ class PreviewWindow(QWidget):
             for _ck, _cv in _coded_vals.items():
                 app.attrs_data[path][_ck] = _cv
         # Write matrix-field values (ModelVideo, ModelImage, X, Tool, Background)
-        # to entry[widget_key]. These used to live in tags, but the tags namespace
-        # was shared across matrix groups so codes collided.
+        # to the canonical key. For matrix sections that map to a CODED_FIELDS
+        # letter (X→x, Tool→t, Background→bg, A→a) we MUST write to the
+        # lowercase letter so the value lands in the same key parse_coded
+        # _filename uses; otherwise entry["X"]="11" and entry["x"]="80" can
+        # both exist after a rename round-trip and the filename builder picks
+        # the wrong one. Other matrix sections (ModelImage, ModelVideo,
+        # Variant) keep their full section name as the storage key.
         if _matrix_vals and path in app.attrs_data:
+            _section_to_letter = {}
+            for _l, _lbl, _d in attrs_mod.CODED_FIELDS:
+                _section_to_letter[_l] = _l.lower()
+                _section_to_letter[_lbl] = _l.lower()
             for _mk, _mv in _matrix_vals.items():
+                _store_key = _section_to_letter.get(_mk, _mk)
+                # Drop any stale alternate-cased key for the same field
+                # (entry["X"] when canonical is "x", etc.)
+                for _alt in (_mk, _store_key):
+                    if _alt and _alt != _store_key and _alt in app.attrs_data[path]:
+                        app.attrs_data[path].pop(_alt, None)
                 if _mv:
-                    app.attrs_data[path][_mk] = _mv
+                    app.attrs_data[path][_store_key] = _mv
                 else:
-                    app.attrs_data[path].pop(_mk, None)
+                    app.attrs_data[path].pop(_store_key, None)
         # PI (face-swap provenance) — dropdown from person registry, defaults
         # to the P value as placeholder. Only persist as a real PI when the
         # selection differs from the current person_id (i.e. user actually
@@ -3996,7 +4011,12 @@ class PreviewWindow(QWidget):
         # Embed AItan{} block into the file — only when auto-bake is on. When
         # off, leave the bake button in "pending" (yellow) so the user can see
         # the JSON has changed but the file is not yet baked.
-        _auto_bake = bool(getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked())
+        # Suppress auto-bake when _save_attrs is called inside _on_manual_rename.
+        # Otherwise the bake thread captures the pre-rename path and its
+        # shutil.move(tmp, old_path) re-creates the file at the old name —
+        # i.e. the duplicate the user keeps seeing after Rename.
+        _auto_bake = (bool(getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked())
+                      and not getattr(self, "_suspend_auto_bake", False))
         if _auto_bake and os.path.exists(path):
             _saved_entry = attrs_mod.get(app.attrs_data, path)
             import threading
@@ -4087,10 +4107,18 @@ class PreviewWindow(QWidget):
         if not path or not os.path.exists(path):
             return
         app = self.handler.app
+        # Suspend the auto-bake side effect of _save_attrs while renaming.
+        # _save_attrs's bake thread captures the path string at thread-start
+        # time; when the rename below changes the path, the thread's
+        # shutil.move would re-create the file at the old path. Phantom file.
+        self._suspend_auto_bake = True
         try:
-            self._save_attrs()
-        except Exception:
-            pass
+            try:
+                self._save_attrs()
+            except Exception:
+                pass
+        finally:
+            self._suspend_auto_bake = False
         path = self._attr_path
         if not path or not os.path.exists(path):
             return

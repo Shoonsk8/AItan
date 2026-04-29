@@ -452,11 +452,12 @@ class FieldWidget(QGroupBox):
                     row = QHBoxLayout(); row.setSpacing(4)
                     row.addWidget(QLabel(sub_lbl + ":", styleSheet="color:#aaa;font-size:9pt;"))
                     cb = QComboBox(); cb.setStyleSheet(_CB_SS)
-                    # Only show the "—" (no selection) entry if code "0" isn't
-                    # a valid option. If "0" is defined (e.g. Standing for PM),
-                    # "—" is redundant and confusing.
-                    if not any(str(k2) == "0" for k2, _ in sub_opts):
-                        cb.addItem("—", "")
+                    # ALWAYS add "—" (no selection) as the first option, even
+                    # when "0" is a valid value. Otherwise the most-used real
+                    # code lands at index 0 and becomes the silent default for
+                    # any unset field — every freshly-saved file ended up with
+                    # E33 HC333 PM33 etc. just because "3" was popular.
+                    cb.addItem("—", "")
                     for k2, lbl2 in sorted(sub_opts, key=lambda kv: (-get_usage(kv[0]), kv[1])):
                         cb.addItem(_lang_label(lbl2), k2)
                     cb.currentIndexChanged.connect(
@@ -616,11 +617,11 @@ class FieldWidget(QGroupBox):
                        if self._sort_freq else (kv[1],))
         self._cb.blockSignals(True)
         self._cb.clear()
-        # Skip the "—" (no selection) placeholder when the option list already
-        # contains a null-equivalent entry (e.g. "none" for audio, "0" for coded fields).
-        _keys = {str(k).lower() for k, _ in self.options}
-        if not (_keys & {"none", "0"}):
-            self._cb.addItem("—", "")
+        # ALWAYS add "—" (no selection, empty data) at the top so an unset
+        # entry shows up as empty. Was conditional on "0"/"none" not being
+        # in the options, but sort-by-usage then put the most-used real code
+        # at index 0 — every fresh file silently inherited X11 / BG11 / etc.
+        self._cb.addItem("—", "")
         for k, lbl in items:
             self._cb.addItem(_lang_label(lbl), k)
         if cur:
@@ -707,10 +708,21 @@ class FieldWidget(QGroupBox):
                             btn.blockSignals(False)
                             break
         elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "4dig", "id")):
-            # Matrix value lives in entry[widget_key] (per-field, not in tags).
-            # Fall back to the legacy tag-based lookup if entry hasn't been
-            # migrated yet — preserves backwards-compat with old saves.
-            val = entry.get(self.key, "")
+            # Matrix value lives at the canonical lowercase letter key for
+            # CODED_FIELDS sections (X→x, Tool→t, Background→bg, A→a) and at
+            # the section name for non-coded matrix sections (ModelImage,
+            # ModelVideo, Variant). Try canonical first, then fall back to
+            # the legacy uppercase/section-name key for unmigrated entries.
+            try:
+                import aisearch_attrs as _am_codedfields
+                _section_to_letter = {}
+                for _l, _lbl, _d in _am_codedfields.CODED_FIELDS:
+                    _section_to_letter[_l] = _l.lower()
+                    _section_to_letter[_lbl] = _l.lower()
+                _canon = _section_to_letter.get(self.key, self.key)
+            except Exception:
+                _canon = self.key
+            val = entry.get(_canon, "") or entry.get(self.key, "")
             if val and not any(k == val for k, _ in self.options):
                 val = ""
             if not val:

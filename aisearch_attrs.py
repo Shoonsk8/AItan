@@ -832,13 +832,11 @@ def parse_coded_filename(stem):
     stem = re.sub(r'-[0-9a-f]{3,6}$', '', stem)
     persons = re.findall(_PERSON_PAT, stem)
     persons_with = re.findall(_PW_PAT, stem)
-    if not persons:
-        # Accept date-first stems: must start with J + 8 base-36 chars
-        if not re.match(r'^J[0-9a-z]{8}', stem, re.IGNORECASE):
-            _PCF_CACHE[_orig_stem] = None
-            if len(_PCF_CACHE) > 4096:
-                _PCF_CACHE.clear()
-            return None
+    # No early-return on "no P and no leading J" — the tolerant fallback
+    # below scans for fields anywhere in the stem and is the only thing that
+    # can preserve J across renames for a stem like "E33HC333…J3bn0ryb2".
+    # If neither strict nor lenient finds a single field, we'll still return
+    # None at the end.
     # Strip all P and PW tokens before matching coded fields
     remainder = re.sub(r'PW[0-9a-f]{3}', '', stem)
     remainder = re.sub(r'P(?!W)(?:A[0-9a-f]{3}|[0-9a-f]{3})', '', remainder)
@@ -886,40 +884,17 @@ def parse_coded_filename(stem):
 
 def build_coded_filename(parts, date_first=False, field_order=None):
     """Build a coded filename stem from a dict of parts.
-    Person-first (default): P001[P002...]PW003...{fields}   — AI search files
-    Date-first (date_first=True): J{8chars}[P001...]...     — regular photos, sorts by date
+    Format: P{pid}[P{pid2}…][PW{pid}…]{fields in CODED_FIELDS order}.
     parts keys: persons (list), persons_with (list), plus lowercase coded field keys.
-    field_order: optional list of (letter, label, digits) tuples overriding CODED_FIELDS order;
-                 use get_sync_field_order(project) to derive from filename_rules.json."""
-    _fields = field_order if field_order is not None else CODED_FIELDS
+
+    The legacy date-first mode (J{j} prepended) was removed — J now lives at
+    its CODED_FIELDS position like every other field. Files with no person
+    just start at the first non-empty field; no special leading marker.
+    The date_first / field_order params are kept for signature compatibility
+    but are ignored.
+    """
+    _fields = CODED_FIELDS
     persons = parts.get("persons", [])
-    if date_first:
-        j_val = parts.get("j", "")
-        if not j_val:
-            return ""  # date-first requires a J value
-        stem = f'J{j_val.lower().zfill(8)[:8]}'
-        for p in persons:
-            stem += f'P{p}'
-        for pw in parts.get("persons_with", []):
-            pw = str(pw).strip().lower().zfill(3)[:3]
-            if pw and pw != "000":
-                stem += f'PW{pw}'
-        for letter, _, digits in _fields:
-            if letter == 'J':
-                continue  # already placed at front
-            val = parts.get(letter.lower(), "")
-            if not val:
-                continue
-            if digits == 0:
-                stem += letter
-            else:
-                val = str(val).strip().lower().zfill(digits)[:digits]
-                if val != "0" * digits:
-                    stem += f"{letter}{val}"
-        return stem
-    # Person-first (original behaviour)
-    if not persons:
-        return ""
     stem = ''.join(f'P{p}' for p in persons)
     for pw in parts.get("persons_with", []):
         pw = str(pw).strip().lower().zfill(3)[:3]
