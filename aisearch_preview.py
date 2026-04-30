@@ -1248,16 +1248,44 @@ class PreviewWindow(QWidget):
             "QPushButton:disabled { color:#555; border-color:#333; background:#222; }")
         self._btn_rename.clicked.connect(self._on_manual_rename)
         r_bake.addWidget(self._btn_rename)
-        # auto_rename checkbox was removed — the 🪪 Rename button is the only
-        # rename trigger now. Its color flips to yellow ("pending") when an
-        # attribute change would change the filename, so the user always
-        # sees that a rename is needed.
-        # Stub kept so legacy code paths that reference _chk_auto_rename
-        # still find an object with an isChecked() that returns False.
+        # Auto-rename toggle, sitting right next to the 🪪 Rename button —
+        # mirrors how ☑ Auto-bake sits next to Bake to File. When on, files
+        # rename automatically as you navigate to a different file in the
+        # preview, AND Re-apply Rules in settings does bulk renames.
         from PyQt6.QtWidgets import QCheckBox as _QCB
-        self._chk_auto_rename = _QCB()
-        self._chk_auto_rename.setVisible(False)
-        self._chk_auto_rename.setChecked(False)
+        self._chk_auto_rename = _QCB(_t("🔄 Auto-rename / 🔄 自動改名"))
+        self._chk_auto_rename.setToolTip(_t(
+            "When on, the file you're leaving gets renamed automatically "
+            "to match its attrs as you navigate. / "
+            "オンの場合、別ファイルに移動するたびに、現在のファイルが "
+            "属性に合わせて自動改名されます。"))
+        self._chk_auto_rename.setStyleSheet(
+            "QCheckBox { color:#88cc88; padding:0 4px; font-size:10pt; }")
+        # Initial state from per-project filename config.
+        try:
+            _proj0 = getattr(self.handler.app, "current_project", None)
+            _ar0 = bool(attrs_mod.load_filename_config(_proj0).get("auto_rename", False))
+        except Exception:
+            _ar0 = False
+        self._chk_auto_rename.setChecked(_ar0)
+
+        def _on_auto_rename_toggled(v):
+            _proj = getattr(self.handler.app, "current_project", None)
+            try:
+                _cfg = attrs_mod.load_filename_config(_proj)
+                _cfg["auto_rename"] = bool(v)
+                attrs_mod.save_filename_config(_cfg, _proj)
+            except Exception:
+                pass
+            # Sync the settings tab's checkbox if the dialog is built.
+            sw = getattr(self.handler.app, "_settings_win", None)
+            if sw and hasattr(sw, "check_auto_rename"):
+                if sw.check_auto_rename.isChecked() != bool(v):
+                    sw.check_auto_rename.blockSignals(True)
+                    sw.check_auto_rename.setChecked(bool(v))
+                    sw.check_auto_rename.blockSignals(False)
+        self._chk_auto_rename.toggled.connect(_on_auto_rename_toggled)
+        r_bake.addWidget(self._chk_auto_rename)
         self._protected_check = QPushButton(_t("🔓 Editable / 🔓 編集可"))
         self._protected_check.setCheckable(True)
         self._protected_check.setToolTip(_t("🔓 Editable — app may auto-rename\n🔒 Locked — app will not auto-rename / 🔓 編集可 — 自動改名される可能性あり\n🔒 ロック — 自動改名されません"))
@@ -1329,20 +1357,24 @@ class PreviewWindow(QWidget):
                 if _txt and len(_txt) > 8192:
                     _txt = _txt[:8192] + "\n…(truncated)"
                 self._raw_meta_edit.setPlainText(_txt or _t("(no embedded text) / （埋め込みテキストなし）"))
-                # Honour clip_inspect_mode — don't run inspect at all in
-                # 'never', and skip already-set fields in 'when_empty'.
-                _mode = self.handler.app.config.get("clip_inspect_mode", "never")
-                if _mode == "never":
+                # Honour face/clip inspect modes — don't run inspect at all
+                # if BOTH are 'never'. Skip already-set fields per subsystem
+                # in 'when_empty'.
+                _clip_mode = self.handler.app.config.get("clip_inspect_mode", "never")
+                _face_mode = self.handler.app.config.get("face_inspect_mode", "never")
+                if _clip_mode == "never" and _face_mode == "never":
                     return
                 _entry = attrs_mod.get(self.handler.app.attrs_data, _p)
                 _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
                 _skip = set()
-                if _mode == "when_empty":
-                    _skip = {f for f in _clip_fields if _entry.get(f)}
-                    if _entry.get("person_id"):
-                        _skip.add("person_id")
-                # Use the debounced + RSS-ceiling-guarded scheduler so this
-                # auto path also backs off at high memory.
+                if _clip_mode == "when_empty":
+                    _skip |= {f for f in _clip_fields if _entry.get(f)}
+                elif _clip_mode == "never":
+                    _skip |= set(_clip_fields)   # don't bother detecting CLIP
+                if _face_mode == "when_empty" and _entry.get("person_id"):
+                    _skip.add("person_id")
+                elif _face_mode == "never":
+                    _skip.add("person_id")
                 self._schedule_inspect(skip_fields=_skip)
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
 
@@ -1498,6 +1530,76 @@ class PreviewWindow(QWidget):
             self._save_attrs()
         elif self._text_save_timer.isActive():
             self._text_save_timer.stop()
+        # Auto-rename the previous file on navigation: when the user moves to
+        # a different file AND project config has auto_rename=True, rebuild
+        # the old file's name from its attrs (would_rename / rename_file_to_
+        # match_entry). Done synchronously here, before auto-bake, so the
+        # bake thread captures the new path. Without this hop, a folder rule
+        # that sets P=001 only takes effect when the user clicks the manual
+        # 🔄 Rename button on every file. Skip when paths are the same
+        # (canvas reload, not navigation) and when the previous path no
+        # longer exists (already renamed by something else).
+        _app = self.handler.app
+        _proj = getattr(_app, "current_project", None)
+        try:
+            from aisearch_debug import dbg as _ar_dbg
+        except Exception:
+            _ar_dbg = lambda *a, **k: None
+        if (self._attr_path and self._attr_path != path
+                and os.path.exists(self._attr_path)
+                and getattr(self, "_last_autorenamed_path", None) != self._attr_path):
+            try:
+                _fn_cfg = attrs_mod.load_filename_config(_proj)
+            except Exception:
+                _fn_cfg = {}
+            _ar_on = bool(_fn_cfg.get("auto_rename", False))
+            _ar_dbg(f"autorename: leaving={os.path.basename(self._attr_path)} auto_rename={_ar_on}")
+            if _ar_on:
+                _old = self._attr_path
+                _wr = False
+                try:
+                    _wr = attrs_mod.would_rename(_app.attrs_data, _old, _proj)
+                except Exception as e:
+                    _ar_dbg(f"autorename: would_rename raised {e}")
+                _ar_dbg(f"autorename: would_rename={_wr}")
+                if _wr:
+                    self._last_autorenamed_path = _old
+                    try:
+                        _new = attrs_mod.rename_file_to_match_entry(
+                            _app.attrs_data, _old, project=_proj)
+                        _ar_dbg(f"autorename: rename returned {os.path.basename(_new) if _new else _new!r}")
+                    except Exception as e:
+                        _ar_dbg(f"autorename: rename raised {e}")
+                        _new = _old
+                    if _new and _new != _old:
+                        if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
+                            _app.data["paths"][_app.data["paths"].index(_old)] = _new
+                        # Find the table row holding _old (not _current_row,
+                        # which may already have moved to the new file by
+                        # this point during navigation) and update it.
+                        try:
+                            for _r in range(_app.table.rowCount()):
+                                if _app.table.get_row_path(_r) == _old:
+                                    _app.table.set_row_path(_r, _new)
+                                    break
+                        except Exception:
+                            pass
+                        # Preserve the old filename in the entry's note —
+                        # mirrors the manual 🪪 Rename behavior so users
+                        # don't lose the original name when a rename fires
+                        # automatically. Skip if the last line of the note
+                        # is already the old basename to avoid dup lines on
+                        # chained renames.
+                        _entry_after = _app.attrs_data.get(_new) or _app.attrs_data.get(_old)
+                        if isinstance(_entry_after, dict):
+                            _old_bn = os.path.basename(_old)
+                            _note = (_entry_after.get("note") or "").rstrip()
+                            _last_line = _note.splitlines()[-1].strip() if _note else ""
+                            if _last_line != _old_bn:
+                                _appended = (_note + "\n" + _old_bn).lstrip("\n")
+                                _entry_after["note"] = _appended
+                        self._attr_path = _new
+                        self._last_autorenamed_path = _new
         # Auto-bake the previous file when leaving it. Run in a background
         # thread — for videos, ffmpeg-copy can take 300ms+ and would block
         # navigation otherwise. Track the last path we baked so rapid arrow
@@ -1579,14 +1681,24 @@ class PreviewWindow(QWidget):
             _dbg(f"refresh_attrs DONE  total={(_time.time()-_t0)*1000:.1f}ms")
         except Exception:
             pass
-        # Auto-run CLIP + face inspect based on clip_inspect_mode setting.
-        #   "never"      → no detection
-        #   "when_empty" → detect only fields that are empty; mark filled ones
-        #                   as ignored; skip entirely if everything is filled
-        #   "always"     → detect every time, show all scores regardless
-        #   "watch"      → only on watch-folder receive (handled elsewhere)
+        # Auto-run CLIP + face inspect. Each subsystem has its own mode flag
+        # (clip_inspect_mode, face_inspect_mode). If both are "never" we skip
+        # the auto-fire entirely. Otherwise the existing CLIP scheduling
+        # logic below decides what to dispatch; face is gated separately
+        # inside _on_inspect by face_inspect_mode + skip_fields.
         _mode = self.handler.app.config.get("clip_inspect_mode", "never")
-        if _mode in ("always", "when_empty"):
+        _face_mode_auto = self.handler.app.config.get("face_inspect_mode", "never")
+        if _mode == "never" and _face_mode_auto == "never":
+            pass  # both off → no auto-detect
+        elif _mode == "never":
+            # CLIP off, face on → skip every CLIP field, only face fires.
+            _entry_skip = attrs_mod.get(self.handler.app.attrs_data, path)
+            _clip_fields_skip = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
+            _skip_face_only = set(_clip_fields_skip)
+            if _face_mode_auto == "when_empty" and _entry_skip.get("person_id"):
+                _skip_face_only.add("person_id")
+            self._schedule_inspect(skip_fields=_skip_face_only)
+        elif _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
             _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
             if _mode == "when_empty":
@@ -2679,15 +2791,23 @@ class PreviewWindow(QWidget):
                     _dbg(f"_schedule_inspect SKIP (rss={_rss_mb:.0f}MB > {_ceiling:.0f}MB ceiling)")
                 except Exception:
                     pass
-                # Don't just silently skip — flip the AI mode to "never" so the
-                # logo shows the OFF variant and the settings combo reflects
-                # reality. The previous mode is stored under _clip_inspect_prev
-                # so a manual logo-click can restore it once memory frees up.
+                # Don't just silently skip — flip BOTH face and clip modes
+                # to "never" so the logo shows the OFF variant. Face is the
+                # leakier subsystem, so it especially must be turned off
+                # when RSS exceeds the ceiling. The previous mode is stored
+                # so a manual logo-click can restore once memory frees up.
                 try:
                     _app = self.handler.app
+                    _changed_any = False
+                    if _app.config.get("face_inspect_mode", "when_empty") != "never":
+                        _app.config["_face_inspect_prev"] = _app.config.get("face_inspect_mode", "when_empty")
+                        _app.config["face_inspect_mode"] = "never"
+                        _changed_any = True
                     if _app.config.get("clip_inspect_mode", "never") != "never":
                         _app.config["_clip_inspect_prev"] = _app.config.get("clip_inspect_mode")
                         _app.config["clip_inspect_mode"] = "never"
+                        _changed_any = True
+                    if _changed_any:
                         try:
                             import aisearch_config as _cfg
                             _cfg.save_config(_app.config, getattr(_app, "current_project", None))
@@ -2769,6 +2889,16 @@ class PreviewWindow(QWidget):
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
             _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL")
+            # In Refresh-CLIP mode (overwrite=True), wipe the canonical
+            # lowercase keys for every CLIP-detectable field BEFORE detection
+            # runs. Without this, fields that CLIP doesn't detect this round
+            # keep their stale prior values — defeating the "from scratch"
+            # promise. Detection then writes only what it actually finds.
+            if overwrite:
+                _entry_pre = attrs_mod.get(app.attrs_data, path)
+                for _cf in _CLIP_CANVAS_FIELDS:
+                    _entry_pre.pop(_cf.lower(), None)
+                    _entry_pre.pop(f"cf_{_cf.lower()}", None)
             _clip_specs = []
             try:
                 import aisearch_logic as _lg
@@ -2969,8 +3099,13 @@ class PreviewWindow(QWidget):
             _dbg("    FACE START")
             face_txt = []
             _detected_pid = None
-            # Skip face detection if person_id is in skip_fields (already set).
-            if skip_fields and "person_id" in skip_fields:
+            # Skip face detection if (a) the AI mode has face turned off, or
+            # (b) person_id is in skip_fields (already set).
+            _face_mode = app.config.get("face_inspect_mode", "when_empty")
+            if _face_mode == "never":
+                face_txt.append("(face inspect off)")
+                _dbg("      FACE skipped (face_inspect_mode=never)")
+            elif skip_fields and "person_id" in skip_fields:
                 face_txt.append("(ignored — already set)")
                 _dbg("      FACE skipped (person_id already set)")
             else:
@@ -3782,8 +3917,11 @@ class PreviewWindow(QWidget):
         _sc = getattr(self, "_soft_canvas", None)
         if _sc:
             _matrix_vals = {}
+            _pathlist_vals = {}
             _collected = _sc.collect_soft_data()
-            if len(_collected) == 4:
+            if len(_collected) == 5:
+                _extra_tags, _text_vals, _coded_vals, _matrix_vals, _pathlist_vals = _collected
+            elif len(_collected) == 4:
                 _extra_tags, _text_vals, _coded_vals, _matrix_vals = _collected
             else:
                 _extra_tags, _text_vals, _coded_vals = _collected
@@ -3893,6 +4031,15 @@ class PreviewWindow(QWidget):
         if _coded_vals and path in app.attrs_data:
             for _ck, _cv in _coded_vals.items():
                 app.attrs_data[path][_ck] = _cv
+        # Write canvas pathlist values (currently just "related"). Empty
+        # list removes the key so absent canvas state doesn't leave stale
+        # data in JSON.
+        if path in app.attrs_data:
+            for _pk, _pv in _pathlist_vals.items():
+                if _pv:
+                    app.attrs_data[path][_pk] = list(_pv)
+                else:
+                    app.attrs_data[path].pop(_pk, None)
         # Write matrix-field values (ModelVideo, ModelImage, X, Tool, Background)
         # to the canonical key. For matrix sections that map to a CODED_FIELDS
         # letter (X→x, Tool→t, Background→bg, A→a) we MUST write to the
@@ -4126,7 +4273,10 @@ class PreviewWindow(QWidget):
         def _propagate_rename(old_p, new_p):
             """Update every consumer of the old path with the new path so
             the table, the in-memory paths list, the preview window state,
-            and the visible Name column all match the renamed file."""
+            and the visible Name column all match the renamed file. Also
+            append the old basename to the entry's note so a rename history
+            accumulates (skips appending if it's already the last line —
+            avoids duplicates from chained renames in one click)."""
             attrs_mod.update_path_in_all_stores(old_p, new_p, app.current_project)
             if app.data and "paths" in app.data and old_p in app.data["paths"]:
                 app.data["paths"][app.data["paths"].index(old_p)] = new_p
@@ -4137,6 +4287,44 @@ class PreviewWindow(QWidget):
                     if _name_item:
                         _name_item.setText(os.path.basename(new_p))
                     break
+            # Append old filename to note, BUT skip if the last line of note
+            # is already the old basename — otherwise the watch-scan
+            # first-sight note (which captured the original name) gets
+            # duplicated when the user clicks the very first Rename.
+            _entry_after = app.attrs_data.get(new_p) or app.attrs_data.get(old_p)
+            if isinstance(_entry_after, dict):
+                _old_bn = os.path.basename(old_p)
+                _note = (_entry_after.get("note") or "").rstrip()
+                _last_line = _note.splitlines()[-1].strip() if _note else ""
+                if _last_line != _old_bn:
+                    _appended = (_note + "\n" + _old_bn).lstrip("\n")
+                else:
+                    _appended = _note  # already there, no change
+                _entry_after["note"] = _appended
+                # Push the appended note into BOTH note widgets so the next
+                # _save_attrs call doesn't overwrite from a stale canvas
+                # value. The canvas FieldWidget (key="note") is the one the
+                # user sees; the legacy _project_edit is only shown when the
+                # canvas doesn't have its own note widget.
+                _pe = getattr(self, "_project_edit", None)
+                if _pe is not None:
+                    try:
+                        _pe.blockSignals(True)
+                        _pe.setText(_appended)
+                    finally:
+                        _pe.blockSignals(False)
+                _sc = getattr(self, "_soft_canvas", None)
+                if _sc is not None:
+                    for _w in getattr(_sc, "widgets", []):
+                        if getattr(_w, "key", "") == "note":
+                            _te = getattr(_w, "_te", None)
+                            if _te is not None:
+                                try:
+                                    _te.blockSignals(True)
+                                    _te.setPlainText(_appended)
+                                finally:
+                                    _te.blockSignals(False)
+                            break
             self._attr_path = new_p
             if self._canvas_loaded_path is not None:
                 self._canvas_loaded_path = new_p
@@ -4749,16 +4937,17 @@ class PreviewHandler:
         self._context_menu.exec(global_pos)
 
     def _on_shift_drag_done(self, path):
-        """After shift-drag: delete original and update DB/tree."""
+        """After shift-drag: send original to trash and update DB/tree."""
         item_row = None
         for r in range(self.app.table.rowCount()):
             if os.path.normpath(self.app.table.get_row_path(r) or "") == os.path.normpath(path):
                 item_row = r; break
-        try:
-            if os.path.exists(path): os.remove(path)
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self.window, _t("Delete Error / 削除エラー"), str(e)); return
+        if os.path.exists(path):
+            from aisearch_front_page import trash_file
+            _trash_path, err = trash_file(path)
+            if err:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self.window, _t("Delete Error / 削除エラー"), err); return
 
         if self.app.data and "paths" in self.app.data:
             norm = os.path.normpath(path)

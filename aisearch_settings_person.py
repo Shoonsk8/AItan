@@ -303,6 +303,9 @@ class _PersonGroup(QWidget):
         if reassign_cb:
             self._reassign_cb = reassign_cb
             self._reassign_pids = list(sorted_pids)
+            # Stash the full registry so the dialog can check for existing
+            # owners of the target ID before applying the reassignment.
+            self._reassign_registry = dict(registry or {})
             btn_reassign = QPushButton("→")
             btn_reassign.setFixedSize(22, 22)
             btn_reassign.setToolTip(_t("Reassign all files in this group to a different person ID / このグループの全ファイルを別の人物IDに再割り当て"))
@@ -470,6 +473,27 @@ class _PersonGroup(QWidget):
             QMessageBox.warning(self, _t("Invalid ID / 無効なID"),
                                 _t(f"'{new_id}' is not a valid 3-hex person ID (000–fff). / '{new_id}' は有効な3桁16進数IDではありません（000〜fff）。"))
             return
+        # Reject if the target ID is already owned by a person OUTSIDE this
+        # group. Reassigning into one of the group's own pids is fine (it
+        # collapses the group onto that pid). The registry was stashed at
+        # build time — fresh enough for an immediate decision.
+        registry = getattr(self, "_reassign_registry", {}) or {}
+        own = {p.lower() for p in self._reassign_pids}
+        if new_id in registry and new_id not in own:
+            owner_name = registry.get(new_id, "")
+            owner_str = f"{new_id} ({owner_name})" if owner_name else new_id
+            ans = QMessageBox.question(
+                self, _t("ID already taken / ID は使用中"),
+                _t(f"Person ID '{owner_str}' is already registered.\n\n"
+                   f"Reassign anyway? Files in this group will be merged "
+                   f"into the existing person. / "
+                   f"人物ID '{owner_str}' は既に登録されています。\n\n"
+                   f"このまま再割り当てしますか？このグループのファイルは "
+                   f"既存の人物に統合されます。"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
         self._reassign_cb(self._reassign_pids, new_id)
 
 
@@ -690,6 +714,16 @@ class _PersonMixin:
         btn_refresh.setMinimumWidth(110)
         btn_refresh.clicked.connect(lambda: self._refresh_person_tab(self._person_proj_cb.currentText() or None))
         hdr.addWidget(btn_refresh)
+        btn_cleanup = QPushButton(_t("🧹 Clean up / 🧹 整理"))
+        btn_cleanup.setMinimumWidth(130)
+        btn_cleanup.setStyleSheet(cfg.btn_ss("btn_remove", self.app.config, "border:none; border-radius:3px;"))
+        btn_cleanup.setToolTip(_t(
+            "Remove every person whose source image is missing AND has no "
+            "file in attrs_data tagged with that ID. / "
+            "ソース画像が見つからず、attrs_data にも該当ファイルがない "
+            "パーソンをすべて削除します。"))
+        btn_cleanup.clicked.connect(self._cleanup_invalid_persons)
+        hdr.addWidget(btn_cleanup)
 
         def _do_person_load():
             name = self._person_proj_cb.currentText() or None
@@ -981,7 +1015,91 @@ class _PersonMixin:
                 if ph:
                     ph.show(fpath)
                 return
-        # No image found — do nothing (source may have moved or not been set yet)
+        # No image found anywhere — the person has no surviving source file
+        # AND no file in attrs_data is tagged with this pid. The card points
+        # at a path that no longer exists, so remove the person from the
+        # registry/faces DB/aliases and rebuild the list. Confirm first so
+        # a missed mount or transient I/O issue doesn't auto-purge data.
+        from PyQt6.QtWidgets import QMessageBox
+        bad = src if src else _t("(no source)")
+        ans = QMessageBox.question(
+            self, _t("Invalid path / 無効なパス"),
+            _t(f"No image found for {pid}.\nSource: {bad}\n\n"
+               f"Delete this person from the list? / "
+               f"{pid} の画像が見つかりません。\nソース: {bad}\n\n"
+               f"このパーソンをリストから削除しますか？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans == QMessageBox.StandardButton.Yes:
+            self._delete_person(pid)
+
+    def _cleanup_invalid_persons(self):
+        """Bulk-remove every person ID whose source image path is missing
+        AND has no file in attrs_data tagged with that pid. Confirms with
+        a preview list of pids before deleting so a missed mount doesn't
+        wipe real data."""
+        proj = getattr(self, "_person_tab_project", None) or getattr(self.app, "current_project", "")
+        registry = attrs_mod.load_person_registry(proj)
+        if not registry:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self, _t("Clean up / 整理"),
+                                    _t("No persons registered. / パーソンが登録されていません。"))
+            return
+        # Build pid → set of paths from attrs_data once
+        attrs_data = getattr(self.app, "attrs_data", {}) or {}
+        pid_has_attrs_file = {}
+        for fpath, entry in attrs_data.items():
+            _pid = (entry.get("person_id") or "").strip()
+            if not _pid:
+                continue
+            if pid_has_attrs_file.get(_pid):
+                continue
+            if os.path.exists(fpath):
+                pid_has_attrs_file[_pid] = True
+        # Pid → source image path (face_card sources are stored in faces DB)
+        faces_db = attrs_mod.load_faces_db(proj)
+        pid_src = {}
+        for _pid, _entries in (faces_db.get("faces", {}) or {}).items():
+            # entries is a list of {emb, source_path} dicts
+            if isinstance(_entries, list):
+                for e in _entries:
+                    sp = e.get("source_path") if isinstance(e, dict) else None
+                    if sp:
+                        pid_src.setdefault(_pid, sp)
+                        break
+        # Find invalid pids
+        invalid = []
+        for _pid in registry.keys():
+            src = pid_src.get(_pid, "")
+            src_ok = bool(src) and os.path.exists(src)
+            attrs_ok = bool(pid_has_attrs_file.get(_pid))
+            if not src_ok and not attrs_ok:
+                invalid.append(_pid)
+        if not invalid:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, _t("Clean up / 整理"),
+                _t(f"Nothing to clean — all {len(registry)} persons have a valid image. / "
+                   f"整理対象なし — {len(registry)} 名すべての画像が有効です。"))
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        preview = "\n".join(f"  • {p}" for p in invalid[:30])
+        more = f"\n  …and {len(invalid)-30} more" if len(invalid) > 30 else ""
+        ans = QMessageBox.question(
+            self, _t("Clean up invalid persons / 無効パーソン整理"),
+            _t(f"Delete {len(invalid)} person(s) with no surviving image?\n\n"
+               f"{preview}{more}\n\n"
+               f"This removes them from the registry, faces DB, and aliases. / "
+               f"画像のないパーソン {len(invalid)} 名を削除しますか？\n\n"
+               f"{preview}{more}\n\n"
+               f"レジストリ、顔 DB、エイリアスから削除されます。"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        for _pid in invalid:
+            self._delete_person(_pid)
+        QMessageBox.information(
+            self, _t("Clean up / 整理"),
+            _t(f"Removed {len(invalid)} person(s). / {len(invalid)} 名を削除しました。"))
 
     def _delete_person(self, pid):
         """Remove a person ID from registry, faces DB, and aliases."""

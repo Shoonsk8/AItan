@@ -12,6 +12,162 @@ from attr_viewer import _lang_label as _t
 import aisearch_config as cfg
 
 
+class _ValCombo(QWidget):
+    """Value cell for a filename rule row.
+
+    Has two modes:
+      * "single" — one editable QComboBox (boolean fields, P, tag groups,
+        single-digit coded fields, taglist values, etc.).
+      * "multi"  — N small QComboBoxes side by side, one per sub-table of a
+        multi-digit coded field (HC = 3 combos for Color / Style / Length).
+        currentData/currentText return the digits concatenated in the
+        digit-position order so a 3-digit HC value like "012" round-trips.
+
+    Exposes the subset of QComboBox API the rule-row code uses, so the
+    caller doesn't have to know which mode is active.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(2)
+        self._mode = None
+        self._combos = []
+        # _digit_positions[i] = the 1-based digit position the i-th combo
+        # controls. Position 1 is the rightmost digit. Used to assemble the
+        # concatenated value for currentData/currentText.
+        self._digit_positions = []
+        self.set_single()
+
+    # ── Layout switches ─────────────────────────────────────────────────
+    def _clear_combos(self):
+        while self._lay.count():
+            it = self._lay.takeAt(0)
+            w = it.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        self._combos = []
+        self._digit_positions = []
+
+    def _new_combo(self, editable):
+        cb = QComboBox()
+        cb.wheelEvent = lambda e: e.ignore()
+        cb.setEditable(editable)
+        if editable:
+            cb.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        cb.setStyleSheet(
+            "background:#252525; color:#e0e0e0; border:1px solid #444; padding:1px 3px;")
+        return cb
+
+    def set_single(self):
+        if self._mode == "single" and len(self._combos) == 1:
+            return
+        self._clear_combos()
+        cb = self._new_combo(editable=True)
+        self._lay.addWidget(cb, stretch=1)
+        self._combos = [cb]
+        self._digit_positions = []
+        self._mode = "single"
+
+    def set_multi(self, sub_specs):
+        """sub_specs = [(label, options, position), ...] in display order
+        (left → right). options = [(display, key), ...]. position = 1-based
+        digit position (1 = rightmost). The combos are rendered in
+        descending position so the user reads them left-to-right matching
+        the digit order in the stored value."""
+        self._clear_combos()
+        # Sort by descending position — leftmost combo = highest digit.
+        ordered = sorted(sub_specs, key=lambda s: -s[2])
+        for lbl, opts, pos in ordered:
+            cb = self._new_combo(editable=False)
+            cb.setMinimumWidth(110)
+            cb.setToolTip(lbl)
+            cb.addItem(f"— {lbl} —", "")
+            for disp, k in opts:
+                cb.addItem(disp, k)
+            self._lay.addWidget(cb, stretch=1)
+            self._combos.append(cb)
+            self._digit_positions.append(pos)
+        self._mode = "multi"
+
+    # ── QComboBox-mimic API used by the row builder ────────────────────
+    def blockSignals(self, b):
+        for c in self._combos:
+            c.blockSignals(b)
+        return super().blockSignals(b)
+
+    def setEnabled(self, b):
+        for c in self._combos:
+            c.setEnabled(b)
+        super().setEnabled(b)
+
+    @property
+    def currentIndexChanged(self):
+        # Forward only the first combo's signal — rule-row code uses this
+        # to enable/hide the +Person button, only relevant in single mode.
+        return self._combos[0].currentIndexChanged
+
+    def clear(self):
+        if self._mode == "single":
+            self._combos[0].clear()
+
+    def addItem(self, disp, key):
+        if self._mode == "single":
+            self._combos[0].addItem(disp, key)
+
+    def findData(self, d):
+        if self._mode == "single":
+            return self._combos[0].findData(d)
+        return -1
+
+    def setCurrentIndex(self, i):
+        if self._mode == "single":
+            self._combos[0].setCurrentIndex(i)
+
+    def setEditText(self, s):
+        if self._mode == "single":
+            self._combos[0].setEditText(s or "")
+            return
+        # Distribute the string across digit-position combos. Pad on the
+        # left with zeros so a shorter saved value still selects sensibly.
+        s = (s or "").strip()
+        if not self._digit_positions:
+            return
+        max_pos = max(self._digit_positions)
+        padded = s.zfill(max_pos)[-max_pos:]
+        for i, cb in enumerate(self._combos):
+            pos = self._digit_positions[i]
+            ch = padded[max_pos - pos] if len(padded) >= pos else ""
+            idx = cb.findData(ch)
+            cb.blockSignals(True)
+            cb.setCurrentIndex(idx if idx >= 0 else 0)
+            cb.blockSignals(False)
+
+    def currentData(self):
+        if self._mode == "single":
+            return self._combos[0].currentData()
+        # Build value: digit at position p comes from the combo whose
+        # _digit_positions entry == p. Use "0" when the combo is on the
+        # placeholder.
+        if not self._digit_positions:
+            return ""
+        max_pos = max(self._digit_positions)
+        digits = ["0"] * max_pos
+        for i, cb in enumerate(self._combos):
+            pos = self._digit_positions[i]
+            digits[max_pos - pos] = (cb.currentData() or "0")
+        joined = "".join(digits)
+        # All-zero means "nothing selected" — return empty so save skips it.
+        return "" if all(d == "0" for d in joined) else joined
+
+    def currentText(self):
+        if self._mode == "single":
+            return self._combos[0].currentText()
+        return self.currentData()
+
+
 class _FilenameMixin:
     """Mixin: Filename Rules tab builder + related methods."""
 
@@ -63,19 +219,16 @@ class _FilenameMixin:
         fn_l.addLayout(proj_bar)
         fn_l.addWidget(_hsep())
 
-        # Auto-rename was a checkbox here; it's been removed. Rename is now
-        # explicit via the 🪪 Rename button on the preview window, which
-        # turns yellow when an attribute change makes the filename stale.
-        # Stub kept so legacy code that toggles check_auto_rename still finds
-        # an object; setting its state is a no-op.
-        from PyQt6.QtWidgets import QCheckBox as _QCBStub
+        # The user-facing auto-rename toggle lives on the preview window
+        # (next to the 🪪 Rename button). Keep a hidden stub here so the
+        # existing handlers / sync code that touches check_auto_rename
+        # still works without crashing.
         _cur_fn_proj = self._fn_proj_cb.currentText().strip() or None
-        self.check_auto_rename = _QCBStub()
+        self.check_auto_rename = QCheckBox()
         self.check_auto_rename.setVisible(False)
-        # Banner stub — same reason. Kept so toggle handlers don't break.
+        # Banner stub for compat with toggle handlers; not shown.
         self._fn_sync_warning = QLabel("")
         self._fn_sync_warning.setVisible(False)
-        fn_l.addWidget(_hsep())
 
         # Container for rule segments — always editable. The auto_rename flag
         # only controls whether files get RENAMED on attribute change; the
@@ -252,14 +405,49 @@ class _FilenameMixin:
             idx = attr_cb.findData(attr_key)
             if idx >= 0: attr_cb.setCurrentIndex(idx)
 
-            val_cb = QComboBox()
-            val_cb.wheelEvent = lambda e: e.ignore()
-            val_cb.setEditable(True)
-            val_cb.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-            val_cb.setStyleSheet(
-                "background:#252525; color:#e0e0e0; border:1px solid #444; padding:1px 3px;")
+            val_cb = _ValCombo()
 
             def _refresh_val(key, cur_val=None):
+                # Multi-digit coded fields (HC, E, FA, CS, etc.) need one
+                # combo per sub-table. Detect by checking how many sub-tables
+                # exist in TAG_GROUPS for this prefix; if more than one, use
+                # multi mode so each digit position gets its own picker.
+                _coded_digits = 0
+                for _l, _, _d in _am.CODED_FIELDS:
+                    if _l == key:
+                        _coded_digits = _d
+                        break
+                _sub_specs = []
+                if _coded_digits >= 2 and not _attr_is_boolean(key) and not extract:
+                    _SUBPOS = {
+                        "HC": {"Length": 1, "Style": 2, "Color": 3},
+                        "FA": {"Direction": 1, "Vert": 2, "Vertical": 2},
+                        "PM": {"Motion": 1, "Posture": 2},
+                        "CS": {"Light": 1, "Lighting": 1, "Angle": 2, "Shot": 3},
+                        "E":  {"Color": 1, "Additional": 2, "Modifier": 2},
+                        "B":  {"Shape": 1, "Size": 2},
+                        "WH": {"Hip": 1, "Waist": 2},
+                        "SK": {"Type": 1},
+                    }
+                    _pos_map = _SUBPOS.get(key, {})
+                    for _grp_key, _opts in _am.TAG_GROUPS.items():
+                        if not _grp_key.startswith(key + "_"):
+                            continue
+                        if not isinstance(_opts, list) or not _opts:
+                            continue
+                        _suffix = _grp_key[len(key)+1:]
+                        _pos = _pos_map.get(_suffix)
+                        if not _pos:
+                            continue
+                        _opt_pairs = [(f"{lbl}  ({k})", k) for k, lbl in _opts]
+                        _sub_specs.append((_suffix, _opt_pairs, _pos))
+                if _sub_specs:
+                    val_cb.set_multi(_sub_specs)
+                    val_cb.setEnabled(True)
+                    val_cb.setEditText(cur_val or "")
+                    return
+                # Single-combo path
+                val_cb.set_single()
                 val_cb.blockSignals(True)
                 val_cb.clear()
                 if extract:
@@ -739,8 +927,18 @@ class _FilenameMixin:
         self._rename_timer.start(150)
 
     def _reapply_fn_rules(self):
-        """Re-run one-way filename rules on all existing DB files.
-        Only writes fields the rules explicitly match — everything else untouched."""
+        """Re-run filename rules on all existing DB files.
+
+        Two phases:
+          1. Detect — read each filename, apply detect/extract/path-scoped
+             rules, write the matched fields into attrs.
+          2. Sync (rename) — for files whose entry now disagrees with the
+             current filename (because of step 1 OR prior attr edits),
+             rename the file on disk via rename_file_to_match_entry.
+
+        Phase 2 is gated by a confirmation that lists how many files would
+        be renamed so a stray rule doesn't silently rewrite the library.
+        """
         import aisearch_attrs as _am
         app = self.app
         if not app.data or not app.attrs_data:
@@ -750,7 +948,39 @@ class _FilenameMixin:
         if not paths:
             QMessageBox.information(self, "Re-apply Rules", "No files in database.")
             return
-        proj = getattr(app, "current_project", None)
+        # Use the project from the rules editor combo when present —
+        # otherwise rules saved for project "AIX" but viewed under project
+        # "AI" produce zero matches because both rules and paths must come
+        # from the same project.
+        _editor_proj = ""
+        if hasattr(self, "_fn_proj_cb"):
+            _editor_proj = (self._fn_proj_cb.currentText() or "").strip()
+        _app_proj = getattr(app, "current_project", "") or ""
+        if _editor_proj and _editor_proj != "default" and _editor_proj != _app_proj:
+            ans = QMessageBox.question(
+                self, "Project mismatch",
+                f"Rules editor is set to '{_editor_proj}' but the currently "
+                f"loaded project is '{_app_proj or '(none)'}'.\n\n"
+                f"Rules and files must come from the same project. "
+                f"Switch the loaded project to '{_editor_proj}' first?\n\n"
+                f"Yes → cancel; switch project, then click Re-apply again.\n"
+                f"No → run anyway using rules for '{_app_proj or '(none)'}'.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ans == QMessageBox.StandardButton.Yes:
+                return
+        proj = _app_proj or None
+        # Persist any unsaved rule edits to disk first. Without this, a user
+        # who just added a folder rule and clicked Re-apply would see no
+        # effect — load_filename_rules reads from JSON, not from the live
+        # rule rows. _save_fn_rules pops a confirmation dialog; suppress it
+        # by setting the skip flag for this run only.
+        try:
+            _prev_skip = getattr(self, "_fn_overwrite_skip_warn", False)
+            self._fn_overwrite_skip_warn = True
+            self._save_fn_rules()
+            self._fn_overwrite_skip_warn = _prev_skip
+        except Exception:
+            pass
         fn_rules = _am.load_filename_rules(proj)
         one_way = [
             r for r in fn_rules
@@ -758,31 +988,43 @@ class _FilenameMixin:
                 r.get("one_way") or r.get("extract") or '/' in r.get("pattern", "")
             )
         ]
-        if not one_way:
-            QMessageBox.information(self, "Re-apply Rules",
-                "No detect or path-scoped rules found.\nAdd rules with '→ Detect' mode or a directory pattern first.")
+        # ── Re-apply Rules = one Down-arrow press ─────────────────────
+        # The user said: clicking this button should do exactly what the
+        # Down arrow key does. Apply detect rules to the currently-selected
+        # file's entry, then send a real Down-arrow key event to the table.
+        # Single click = single step = one row down = auto-rename fires on
+        # the file we just left.
+        tbl = getattr(app, "table", None)
+        if tbl is None or tbl.rowCount() == 0:
             return
-        updated = 0
-        for path in paths:
-            bn = os.path.basename(path)
+        # Apply detect rules to the current row's file BEFORE leaving it.
+        sel = tbl.selectionModel().selectedRows()
+        cur_row = max((idx.row() for idx in sel), default=tbl.currentRow())
+        if cur_row < 0:
+            cur_row = 0
+        cur_path = tbl.get_row_path(cur_row)
+        if cur_path and one_way:
+            bn = os.path.basename(cur_path)
             stem = os.path.splitext(bn)[0]
-            od = _am.parse_filename_rules(stem, one_way, basename=bn, fullpath=path)
-            if not od:
-                continue
-            entry = app.attrs_data.setdefault(path, {})
-            changed = False
-            if "P" in od and od["P"]:
-                entry["person_id"] = od["P"]
-                changed = True
-            for field, value in od.items():
-                if field != "P" and value:
-                    custom_key = f"cf_{field.lower()}"
-                    entry[custom_key] = value
-                    changed = True
-            if changed:
-                updated += 1
-        if updated:
-            _am.save(proj, app.attrs_data)
-        QMessageBox.information(self, "Re-apply Rules",
-            f"Updated {updated} of {len(paths)} files.\n"
-            "Only rule-matched fields were changed.")
+            od = _am.parse_filename_rules(stem, one_way, basename=bn, fullpath=cur_path)
+            if od:
+                entry = app.attrs_data.setdefault(cur_path, {})
+                if "P" in od and od["P"] and entry.get("person_id") != od["P"]:
+                    entry["person_id"] = od["P"]
+                for field, value in od.items():
+                    if field == "P" or not value:
+                        continue
+                    if entry.get(field.lower()) != value:
+                        entry[field.lower()] = value
+        # Send the real Down-arrow key event.
+        from PyQt6.QtCore import QEvent, Qt
+        from PyQt6.QtGui import QKeyEvent
+        from PyQt6.QtWidgets import QApplication
+        tbl.setFocus()
+        QApplication.sendEvent(tbl, QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Down,
+            Qt.KeyboardModifier.NoModifier))
+        QApplication.sendEvent(tbl, QKeyEvent(
+            QEvent.Type.KeyRelease, Qt.Key.Key_Down,
+            Qt.KeyboardModifier.NoModifier))
+

@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.991"
+VERSION = "1.992"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -275,6 +275,39 @@ class FileTable(QTableWidget):
     def set_row_path(self, row, path):
         item = self.item(row, 0)
         if item: item.setData(Qt.ItemDataRole.UserRole, path)
+        # Refresh the visible Name + Path columns so a rename actually
+        # shows up in the table. Header layout depends on the current view,
+        # so we look up by header text rather than hard-coding indices.
+        # _mask_path lives on the AISearchApp parent, but FileTable is
+        # constructed without a Qt parent, so we walk up to find it.
+        try:
+            import os as _os
+            _app = None
+            _w = self
+            for _ in range(8):
+                _w = _w.parent() if _w else None
+                if _w and hasattr(_w, "_mask_path"):
+                    _app = _w
+                    break
+            _hdr_to_col = {}
+            for _c in range(self.columnCount()):
+                _h = self.horizontalHeaderItem(_c)
+                if _h:
+                    _hdr_to_col[_h.text().split(" / ")[0].strip()] = _c
+            _name_col = _hdr_to_col.get("Name")
+            if _name_col is not None:
+                _it = self.item(row, _name_col)
+                if _it: _it.setText(_os.path.basename(path))
+            _path_col = _hdr_to_col.get("Path")
+            if _path_col is not None:
+                _it = self.item(row, _path_col)
+                if _it:
+                    if _app is not None:
+                        _it.setText(_app._mask_path(path))
+                    else:
+                        _it.setText(_os.path.dirname(path))
+        except Exception:
+            pass
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -521,18 +554,37 @@ class AISearchApp(QMainWindow):
         # off-variant is shown when clip_inspect_mode is "never"; clicking
         # the logo toggles between off and the previously-used active mode.
         _logo_dir = os.path.dirname(os.path.abspath(__file__))
-        # Prefer the user-supplied "AI smile" / "No AI No smile" logos when
-        # available; fall back to the bundled PNGs.
-        _user_on  = "/mnt/1TBSSD/Test/AItan/logo/1/AI smile.jpeg"
-        _user_off = "/mnt/1TBSSD/Test/AItan/logo/1/No AI No smile.jpeg"
-        _on_path  = _user_on  if os.path.exists(_user_on)  else os.path.join(_logo_dir, "aisearch_logo.png")
-        _off_path = _user_off if os.path.exists(_user_off) else os.path.join(_logo_dir, "aisearch_logo_off.png")
+        # Four AI inspect modes — rotational toggle on logo click cycles
+        # none → face → clip → both → none. Each mode has its own pixmap.
+        # User will supply face-only / clip-only images later; until then
+        # the loader falls back to existing on/off pictures so the toggle
+        # still functions visually.
+        _user_dir   = "/mnt/1TBSSD/Test/AItan/logo/1"
+        _both_path  = (f"{_user_dir}/AI smile.jpeg"
+                       if os.path.exists(f"{_user_dir}/AI smile.jpeg")
+                       else os.path.join(_logo_dir, "aisearch_logo.png"))
+        _none_path  = (f"{_user_dir}/No AI No smile.jpeg"
+                       if os.path.exists(f"{_user_dir}/No AI No smile.jpeg")
+                       else os.path.join(_logo_dir, "aisearch_logo_off.png"))
+        # Placeholders for face-only / clip-only — user will drop new images
+        # at these paths and they'll auto-pick up.
+        _face_path  = (f"{_user_dir}/AI face only.jpeg"
+                       if os.path.exists(f"{_user_dir}/AI face only.jpeg")
+                       else _both_path)
+        _clip_path  = (f"{_user_dir}/AI clip only.jpeg"
+                       if os.path.exists(f"{_user_dir}/AI clip only.jpeg")
+                       else _both_path)
         def _load(p):
             return QPixmap(p).scaled(240, 240,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation) if os.path.exists(p) else None
-        self._logo_pix_on  = _load(_on_path)
-        self._logo_pix_off = _load(_off_path) or self._logo_pix_on
+        self._logo_pix_both = _load(_both_path)
+        self._logo_pix_none = _load(_none_path) or self._logo_pix_both
+        self._logo_pix_face = _load(_face_path) or self._logo_pix_both
+        self._logo_pix_clip = _load(_clip_path) or self._logo_pix_both
+        # Back-compat aliases — older code still references _logo_pix_on/off
+        self._logo_pix_on  = self._logo_pix_both
+        self._logo_pix_off = self._logo_pix_none
         self._refresh_logo_pixmap()
         # Make the QLabel clickable — a left click toggles inspection mode.
         self._lbl_logo.mousePressEvent = lambda ev: (
@@ -551,6 +603,9 @@ class AISearchApp(QMainWindow):
         info_layout.addWidget(self.lbl_project)
 
         self.lbl_base_dir = QLabel(_t("Base:  / ベース： "))
+        self.lbl_base_dir.setWordWrap(True)
+        # Show each base dir on its own line.
+        self.lbl_base_dir.setTextFormat(Qt.TextFormat.PlainText)
         info_layout.addWidget(self.lbl_base_dir)
 
         # Mode buttons (vertical) + dup controls (right)
@@ -590,10 +645,12 @@ class AISearchApp(QMainWindow):
         # detection. Hidden outside browse mode.
         self.btn_apply_rules = QPushButton(_t("🔧 Apply Rules / 🔧 規則適用"))
         self.btn_apply_rules.setToolTip(_t(
-            "Apply path rules to every file under this folder (recursive). "
-            "Overrides existing tags for matching path rules. / "
-            "このフォルダ配下の全ファイルにパス規則を適用（再帰）。"))
-        self.btn_apply_rules.clicked.connect(self._apply_path_rules_to_browse_dir)
+            "One click = one Down-arrow press: apply rules to the current "
+            "file and move selection one row down. The file you leave gets "
+            "auto-renamed by the navigation hook. / "
+            "1クリック＝下矢印キー1回。現在のファイルにルール適用後、"
+            "1行下へ移動。離れたファイルは自動改名されます。"))
+        self.btn_apply_rules.clicked.connect(self._apply_rules_step)
         self.btn_apply_rules.hide()
         mode_col.addWidget(self.btn_apply_rules)
 
@@ -674,6 +731,82 @@ class AISearchApp(QMainWindow):
         dup_row3.addWidget(self.btn_hide_confirmed)
         dup_row3.addStretch()
         dup_controls.addLayout(dup_row3)
+
+        # Rules + actions split across multiple rows so the dup-control bar
+        # doesn't push the layout absurdly wide.
+        # Row 4a: per-file rules (Smaller / Larger / Deeper / Shallower
+        # / Older / Newer) — UNION semantics, multiple can be active.
+        # Row 4b: group-level + invert + main action buttons.
+        # Row 4c: media-type filters.
+        self._dup_rule_checks = {}
+        def _make_check(key, label):
+            cb = QCheckBox(label)
+            cb.setStyleSheet("color:#ddd; font-size:9pt; padding:0 4px;")
+            cb.toggled.connect(self._refresh_dup_delete_marks)
+            self._dup_rule_checks[key] = cb
+            return cb
+
+        dup_row4a = QHBoxLayout()
+        for _k, _l in [
+            ("smaller",   _t("Smaller / 小")),
+            ("larger",    _t("Larger / 大")),
+            ("deeper",    _t("Deeper / 深")),
+            ("shallower", _t("Shallower / 浅")),
+            ("older",     _t("Older / 旧")),
+            ("newer",     _t("Newer / 新")),
+        ]:
+            dup_row4a.addWidget(_make_check(_k, _l))
+        dup_row4a.addStretch()
+        dup_controls.addLayout(dup_row4a)
+
+        dup_row4b = QHBoxLayout()
+        dup_row4b.addWidget(_make_check("same",    _t("Same size / 同サイズ")))
+        dup_row4b.addWidget(_make_check("reverse", _t("Reverse / 反転")))
+        self.btn_dup_collapse = QPushButton(_t("📁 Collapse / 📁 折畳"))
+        self.btn_dup_collapse.setToolTip(_t(
+            "Collapse groups whose active rules mark at least one file. / "
+            "選択条件に該当するファイルがあるグループを折り畳み。"))
+        self.btn_dup_collapse.setStyleSheet(
+            "QPushButton { background:#2e3a5e; color:#aaccff; "
+            "border:1px solid #446699; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#3a4a7a; }")
+        self.btn_dup_collapse.clicked.connect(self._collapse_dups_by_rule)
+        dup_row4b.addWidget(self.btn_dup_collapse)
+        self.btn_dup_uncollapse = QPushButton(_t("📂 Uncollapse / 📂 展開"))
+        self.btn_dup_uncollapse.setToolTip(_t(
+            "Expand all collapsed groups. / すべての折畳グループを展開。"))
+        self.btn_dup_uncollapse.setStyleSheet(
+            "QPushButton { background:#3a4a3a; color:#aaccaa; "
+            "border:1px solid #557755; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#4a5e4a; }")
+        self.btn_dup_uncollapse.clicked.connect(self._uncollapse_all_dups)
+        dup_row4b.addWidget(self.btn_dup_uncollapse)
+        self.btn_dup_delete = QPushButton(_t("🗑 Delete / 🗑 削除"))
+        self.btn_dup_delete.setToolTip(_t(
+            "Delete files matching any active rule across all groups. / "
+            "選択条件に該当するファイルを全グループから削除。"))
+        self.btn_dup_delete.setStyleSheet(
+            "QPushButton { background:#7a2020; color:#ffaaaa; "
+            "border:1px solid #aa3333; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#9a2020; }"
+            "QPushButton:disabled { color:#666; background:#333; border-color:#555; }")
+        self.btn_dup_delete.clicked.connect(self._delete_dups_by_rule)
+        dup_row4b.addWidget(self.btn_dup_delete)
+        dup_row4b.addStretch()
+        dup_controls.addLayout(dup_row4b)
+
+        # Row 4c — media-type filters; hide groups made entirely of one type.
+        dup_row4c = QHBoxLayout()
+        self._chk_hide_pictures = QCheckBox(_t("📷 Hide pics / 📷 画像非表示"))
+        self._chk_hide_pictures.setStyleSheet("color:#ddd; font-size:9pt; padding:0 4px;")
+        self._chk_hide_pictures.toggled.connect(lambda _: self._apply_row_visibility())
+        self._chk_hide_videos = QCheckBox(_t("🎬 Hide videos / 🎬 動画非表示"))
+        self._chk_hide_videos.setStyleSheet("color:#ddd; font-size:9pt; padding:0 4px;")
+        self._chk_hide_videos.toggled.connect(lambda _: self._apply_row_visibility())
+        dup_row4c.addWidget(self._chk_hide_pictures)
+        dup_row4c.addWidget(self._chk_hide_videos)
+        dup_row4c.addStretch()
+        dup_controls.addLayout(dup_row4c)
 
         self._dup_controls_widget.hide()
         mode_and_dup.addWidget(self._dup_controls_widget)
@@ -895,6 +1028,9 @@ class AISearchApp(QMainWindow):
         self.table.customContextMenuRequested.connect(self._on_right_click)
         self.table.itemSelectionChanged.connect(self.handle_preview)
         self.table.itemSelectionChanged.connect(self._update_row_position_label)
+        # Keep the dup-delete button label in sync with the live selection
+        # count — Ctrl+click after a rule fires updates the count.
+        self.table.itemSelectionChanged.connect(self._sync_dup_delete_btn)
         self.table.model().rowsInserted.connect(lambda *a: self._update_row_position_label())
         self.table.model().rowsRemoved.connect(lambda *a: self._update_row_position_label())
         self.table.cellDoubleClicked.connect(lambda r, c: self.on_double_click())
@@ -954,8 +1090,27 @@ class AISearchApp(QMainWindow):
         sel = c.get("selection", cfg.DEFAULT_COLORS["selection"])
         r, g, b = int(sel[1:3], 16), int(sel[3:5], 16), int(sel[5:7], 16)
         text_color = "black" if (r * 299 + g * 587 + b * 114) / 1000 > 128 else "white"
+        # Selection highlight in three places so per-item brushes
+        # (group shading, dup-mark red) can't hide it:
+        #   1. QTableView selection-* properties — outranks per-item
+        #      foregrounds for the selected row's text.
+        #   2. ::item:selected stylesheet — covers the background.
+        #   3. QPalette Highlight/HighlightedText — fallback for any
+        #      delegate that bypasses the stylesheet.
         self.table.setStyleSheet(
-            f"QTableWidget::item:selected {{ background-color: {sel}; color: {text_color}; }}")
+            f"QTableView {{ selection-background-color: {sel}; "
+            f"              selection-color: {text_color}; }} "
+            f"QTableWidget::item:selected {{ background-color: {sel}; "
+            f"                               color: {text_color}; }}")
+        from PyQt6.QtGui import QPalette as _QP, QColor as _QC
+        _pal = self.table.palette()
+        _pal.setColor(_QP.ColorRole.Highlight, _QC(sel))
+        _pal.setColor(_QP.ColorRole.HighlightedText, _QC(text_color))
+        # Also set the inactive variants so the highlight stays readable
+        # when the table loses focus (otherwise Qt washes them out).
+        _pal.setColor(_QP.ColorGroup.Inactive, _QP.ColorRole.Highlight, _QC(sel))
+        _pal.setColor(_QP.ColorGroup.Inactive, _QP.ColorRole.HighlightedText, _QC(text_color))
+        self.table.setPalette(_pal)
         da = c.get("dup_a", cfg.DEFAULT_COLORS["dup_a"])
         db = c.get("dup_b", cfg.DEFAULT_COLORS["dup_b"])
         self._dup_shades = [
@@ -983,7 +1138,16 @@ class AISearchApp(QMainWindow):
         _base = ""
         if hasattr(self, '_base_dir_label_value'):
             _base = self._base_dir_label_value
-        self.lbl_base_dir.setText(_t(f"Base: {_base} / ベース： {_base}") if _base else _t("Base:  / ベース： "))
+        if _base:
+            # _base is already EN-indented; rebuild JA indent for the JA half
+            _lines = _base.split("\n")
+            # Strip leading EN indent ("Base: " = 6 spaces) on lines 2+
+            _stripped = [_lines[0]] + [ln.lstrip(" ") for ln in _lines[1:]]
+            _indent_ja = " " * len("ベース： ")
+            _ja_label = ("\n" + _indent_ja).join(_stripped)
+            self.lbl_base_dir.setText(_t(f"Base: {_base} / ベース： {_ja_label}"))
+        else:
+            self.lbl_base_dir.setText(_t("Base:  / ベース： "))
         # Mode buttons
         self.btn_mode_search.setText(_t("🔍 Search / 🔍 検索"))
         self.btn_mode_search.setToolTip(_t("Switch to Search mode / 検索モードに切り替え"))
@@ -1802,26 +1966,57 @@ class AISearchApp(QMainWindow):
                 order.append(label)
             groups[label].append(r)
 
-        # Determine which groups are fully confirmed-hidden
+        # "Hide confirmed" now hides COLLAPSED groups. Collapsing a group
+        # (▶ arrow) is the user's way of saying "I've reviewed this — done".
+        # Plus the picture/video filter toggles. Both are user-driven; no
+        # auto-hide based on attrs entries.
         hidden_confirmed = set()
-        if hide_confirmed:
+        _hide_pic = bool(getattr(self, "_chk_hide_pictures", None) and self._chk_hide_pictures.isChecked())
+        _hide_vid = bool(getattr(self, "_chk_hide_videos", None) and self._chk_hide_videos.isChecked())
+        if hide_confirmed or _hide_pic or _hide_vid:
+            import aisearch_logic as _logic
             for label, rows in groups.items():
-                if all(bool(attrs_mod.get(self.attrs_data, self.table.get_row_path(r)))
-                       for r in rows):
+                _paths = [self.table.get_row_path(r) for r in rows]
+                if hide_confirmed and label in self._collapsed_groups:
                     hidden_confirmed.add(label)
+                    continue
+                if _hide_pic and all(p.lower().endswith(_logic.EXT_IMG) for p in _paths if p):
+                    hidden_confirmed.add(label)
+                    continue
+                if _hide_vid and all(p.lower().endswith(_logic.EXT_VID) for p in _paths if p):
+                    hidden_confirmed.add(label)
+                    continue
 
+        # Track which currently-selected rows are about to be hidden so we
+        # can drop them from the selection model — otherwise an action like
+        # Delete would silently include rows the user can no longer see.
+        _hidden_selected = set()
+        _selected = {idx.row() for idx in self.table.selectionModel().selectedRows()}
         for label in order:
             rows = groups[label]
             if label in hidden_confirmed:
                 for r in rows:
                     self.table.setRowHidden(r, True)
+                    if r in _selected:
+                        _hidden_selected.add(r)
             elif label in self._collapsed_groups:
                 # Show only first (representative) row
                 for i, r in enumerate(rows):
                     self.table.setRowHidden(r, i > 0)
+                    if i > 0 and r in _selected:
+                        _hidden_selected.add(r)
             else:
                 for r in rows:
                     self.table.setRowHidden(r, False)
+        # Drop now-hidden rows from the selection so subsequent actions
+        # (Delete, Move To, etc.) only operate on rows the user can see.
+        if _hidden_selected:
+            from PyQt6.QtCore import QItemSelectionModel
+            sel_model = self.table.selectionModel()
+            for r in _hidden_selected:
+                sel_model.select(self.table.model().index(r, 0),
+                                 QItemSelectionModel.SelectionFlag.Rows
+                                 | QItemSelectionModel.SelectionFlag.Deselect)
         self._recolor_dup_groups()
         self._highlight_unmarked_rows()
 
@@ -1927,29 +2122,33 @@ class AISearchApp(QMainWindow):
         except Exception:
             pass
 
-    def _refresh_logo_pixmap(self):
-        """Show the on or off variant based on the current clip_inspect_mode."""
-        _mode = self.config.get("clip_inspect_mode", "when_empty")
-        _px = self._logo_pix_off if _mode == "never" else self._logo_pix_on
-        if _px is not None:
-            self._lbl_logo.setPixmap(_px)
+    def _ai_mode(self):
+        """Return current AI inspect mode: 'none' | 'face' | 'clip' | 'both'.
+        Derived from face_inspect_mode + clip_inspect_mode (each 'never' or
+        'when_empty'). Falls back to legacy clip_inspect_mode for unmigrated
+        configs: clip_inspect_mode == 'never' → 'none', else → 'both'."""
+        _f = self.config.get("face_inspect_mode")
+        _c = self.config.get("clip_inspect_mode", "when_empty")
+        # First-time migration from single-flag legacy config
+        if _f is None:
+            _f = "never" if _c == "never" else "when_empty"
+            self.config["face_inspect_mode"] = _f
+        face_on = (_f != "never")
+        clip_on = (_c != "never")
+        if face_on and clip_on:  return "both"
+        if face_on:              return "face"
+        if clip_on:              return "clip"
+        return "none"
 
-    def _toggle_inspect_mode(self):
-        """Click handler on the logo: toggle AI inspection between off
-        ("never") and the user's previous active mode (default "when_empty").
-        Persists to config and updates any open settings dialog dropdown."""
-        _mode = self.config.get("clip_inspect_mode", "when_empty")
-        if _mode == "never":
-            _restore = self.config.get("_clip_inspect_prev", "when_empty")
-            if _restore == "never":
-                _restore = "when_empty"
-            self.config["clip_inspect_mode"] = _restore
-        else:
-            self.config["_clip_inspect_prev"] = _mode
-            self.config["clip_inspect_mode"] = "never"
+    def _set_ai_mode(self, mode):
+        """Apply 'none' | 'face' | 'clip' | 'both' to face/clip flags."""
+        face_on = mode in ("face", "both")
+        clip_on = mode in ("clip", "both")
+        self.config["face_inspect_mode"] = "when_empty" if face_on else "never"
+        self.config["clip_inspect_mode"] = "when_empty" if clip_on else "never"
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._refresh_logo_pixmap()
-        # Sync the settings dialog combo if open
+        # Sync the settings dialog combo if open (legacy CLIP-only dropdown)
         _sw = getattr(self, "_settings_win", None)
         if _sw is not None:
             _cb = getattr(_sw, "_clip_inspect_mode_cb", None)
@@ -1959,6 +2158,34 @@ class AISearchApp(QMainWindow):
                     _cb.blockSignals(True)
                     _cb.setCurrentIndex(_i)
                     _cb.blockSignals(False)
+
+    def _refresh_logo_pixmap(self):
+        """Show the pixmap matching the current AI mode."""
+        _m = self._ai_mode()
+        _px = {
+            "none": self._logo_pix_none,
+            "face": self._logo_pix_face,
+            "clip": self._logo_pix_clip,
+            "both": self._logo_pix_both,
+        }.get(_m, self._logo_pix_both)
+        if _px is not None:
+            self._lbl_logo.setPixmap(_px)
+        # Tooltip reflects what's currently active so the user can tell at a
+        # glance which subsystem(s) are running.
+        _tt = {
+            "none": _t("AI off (click to cycle: face → clip → both → off)"),
+            "face": _t("Face only — click for CLIP only"),
+            "clip": _t("CLIP only — click for both"),
+            "both": _t("Face + CLIP — click for off"),
+        }.get(_m, "")
+        if _tt:
+            self._lbl_logo.setToolTip(_tt)
+
+    def _toggle_inspect_mode(self):
+        """Logo click — rotate through none → face → clip → both → none."""
+        _next = {"none": "face", "face": "clip",
+                 "clip": "both", "both": "none"}
+        self._set_ai_mode(_next.get(self._ai_mode(), "both"))
 
     def _open_settings(self, tab=0):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
@@ -2137,9 +2364,20 @@ class AISearchApp(QMainWindow):
                 except (ValueError, IndexError):
                     pass
 
-        label = ", ".join(self.base_dirs) if self.base_dirs else ""
-        self._base_dir_label_value = label
-        self.lbl_base_dir.setText(_t(f"Base: {label} / ベース： {label}") if label else _t("Base:  / ベース： "))
+        # One base dir per line so long lists don't truncate or stretch the
+        # header. The label has setWordWrap(True) so it lays out vertically.
+        # Subsequent lines get an "Base: "-width indent so paths line up
+        # under the first one rather than starting at column zero.
+        if self.base_dirs:
+            _indent = " " * len("Base: ")
+            label_en = ("\n" + _indent).join(self.base_dirs)
+            _indent_ja = " " * len("ベース： ")
+            label_ja = ("\n" + _indent_ja).join(self.base_dirs)
+            self._base_dir_label_value = label_en
+            self.lbl_base_dir.setText(_t(f"Base: {label_en} / ベース： {label_ja}"))
+        else:
+            self._base_dir_label_value = ""
+            self.lbl_base_dir.setText(_t("Base:  / ベース： "))
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.table.setSortingEnabled(True)
@@ -2997,8 +3235,16 @@ class AISearchApp(QMainWindow):
         self._dup_controls_widget.show()
         self.config["last_mode"] = "dup"
         if os.path.exists(self._dup_file_path()):
+            # Cache exists — _load_dup_results syncs spinner to the cache's
+            # threshold so the displayed number always matches the result.
             self._load_dup_results(update_spinner=False)
         else:
+            # No cache for this project — clear any leftover table content
+            # from a previous mode so the user doesn't see stale rows. The
+            # spinner keeps the user's saved preference; results will come
+            # from clicking ⟳ Scan.
+            self.table.setRowCount(0)
+            self._dup_display_data = None
             self.lbl_dup_status.setText(_t("Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
         # Ensure the first thumb is populated even if no row is selected yet —
         # show the top-of-list image so the section isn't blank.
@@ -3473,15 +3719,334 @@ class AISearchApp(QMainWindow):
         suffix = "hash" if pct >= 100 else f"{pct}pct"
         return os.path.join(attrs_mod.DATA_DIR, f"dups_{self.current_project}_{suffix}.json")
 
+    def _compute_dup_marks(self):
+        """Walk _dup_display_data and apply the active rule checkboxes to
+        produce a set of paths marked for deletion. UNION of rules: a file
+        is marked if ANY active rule matches it within its group. Reverse
+        flips the per-group selection (marks become unmarks and vice
+        versa). Empty rules (none active) → empty set."""
+        marks = set()
+        if not self._dup_display_data:
+            return marks
+        active = {k for k, cb in self._dup_rule_checks.items() if cb.isChecked()}
+        if not active:
+            return marks
+        reverse = "reverse" in active
+        criteria = active - {"reverse"}
+        for group in self._dup_display_data:
+            paths = []
+            for m in group:
+                p = m.get("path", "") if isinstance(m, dict) else str(m)
+                if p:
+                    paths.append(p)
+            if len(paths) < 2:
+                continue
+            stats = {}
+            for p in paths:
+                try:
+                    st = os.stat(p)
+                    stats[p] = (st.st_size, st.st_mtime)
+                except OSError:
+                    stats[p] = (0, 0)
+            sizes = {p: stats[p][0] for p in paths}
+            mtimes = {p: stats[p][1] for p in paths}
+            depths = {p: p.count(os.sep) for p in paths}
+            mark_set = set()
+            if "smaller" in criteria:
+                _max = max(sizes.values())
+                mark_set |= {p for p in paths if sizes[p] < _max}
+            if "larger" in criteria:
+                _min = min(sizes.values())
+                mark_set |= {p for p in paths if sizes[p] > _min}
+            if "deeper" in criteria:
+                _min_d = min(depths.values())
+                mark_set |= {p for p in paths if depths[p] > _min_d}
+            if "shallower" in criteria:
+                _max_d = max(depths.values())
+                mark_set |= {p for p in paths if depths[p] < _max_d}
+            if "older" in criteria:
+                _newest = max(mtimes.values())
+                mark_set |= {p for p in paths if mtimes[p] < _newest}
+            if "newer" in criteria:
+                _oldest = min(mtimes.values())
+                mark_set |= {p for p in paths if mtimes[p] > _oldest}
+            if "same" in criteria:
+                # Group-level rule: if ALL files in this group share the same
+                # byte size, mark every file in the group. Used by Collapse
+                # (which collapses groups where every file is marked) — for
+                # Delete this would mark all duplicates by hash, only useful
+                # combined with another rule like Smaller/Older.
+                if len(set(sizes.values())) == 1:
+                    mark_set |= set(paths)
+            if reverse:
+                mark_set = set(paths) - mark_set
+            marks |= mark_set
+        return marks
+
+    def _collapse_dups_by_rule(self):
+        """Collapse every group where the active rules mark AT LEAST one
+        file. The semantic is "I've decided about this group — hide it."
+        Used after the user picks a deletion rule (e.g. Smaller): every
+        multi-file group has a smaller file, so every group collapses,
+        which matches the workflow: review → mark → hide → next round.
+
+        For per-group rules like Same size, the same threshold applies —
+        groups where every file shares a size mark every member, so they
+        also qualify. Reverse flips the per-group selection inside
+        _compute_dup_marks before this function sees the result."""
+        if not self._dup_display_data:
+            return
+        marks = self._compute_dup_marks()
+        if not marks:
+            self.lbl_dup_status.setText(
+                _t("No active rules — check at least one to collapse / "
+                   "条件が選択されていません — 折畳には1つ以上選択"))
+            return
+        n_collapsed = 0
+        # Re-derive group labels from the table since _dup_display_data
+        # doesn't carry labels (just member lists).
+        seen_labels = set()
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if not item:
+                continue
+            label = item.data(Qt.ItemDataRole.UserRole + 2)
+            if not label or label in seen_labels:
+                continue
+            seen_labels.add(label)
+            if label in self._collapsed_groups:
+                continue
+            group_rows = [_r for _r in range(self.table.rowCount())
+                          if (self.table.item(_r, 0) and
+                              self.table.item(_r, 0).data(Qt.ItemDataRole.UserRole + 2) == label)]
+            group_paths = [self.table.get_row_path(_r) for _r in group_rows if self.table.get_row_path(_r)]
+            if not group_paths:
+                continue
+            # Collapse if ANY file in the group is marked. With "Smaller"
+            # alone this is every multi-file group; with "Same size" it's
+            # every all-equal group; combinations work intuitively.
+            if any(p in marks for p in group_paths):
+                self._collapsed_groups.add(label)
+                head_item = self.table.item(group_rows[0], 0)
+                if head_item:
+                    head_item.setText(f"▶ {label}")
+                n_collapsed += 1
+        # Reset rule checkboxes and clear delete marks so the row coloring
+        # returns to normal group shading.
+        for cb in self._dup_rule_checks.values():
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        self._refresh_dup_delete_marks()  # clears red marks
+        self._apply_row_visibility()
+        # Clear the table selection so that any subsequent action (delete,
+        # context menu, etc.) doesn't operate on rows the user can no
+        # longer see — collapsing hides non-representative rows but they
+        # stay in the selection model otherwise.
+        self.table.clearSelection()
+        self.lbl_dup_status.setText(
+            _t(f"{n_collapsed} groups collapsed / {n_collapsed} グループ折畳"))
+
+    def _uncollapse_all_dups(self):
+        """Expand every collapsed group (clear _collapsed_groups). Restores
+        the ▼ arrow on representative rows and re-shows hidden non-rep
+        rows via _apply_row_visibility."""
+        if not self._collapsed_groups:
+            self.lbl_dup_status.setText(
+                _t("Nothing to uncollapse / 展開する折畳グループなし"))
+            return
+        n = len(self._collapsed_groups)
+        self._collapsed_groups.clear()
+        # Restore arrows on representative rows
+        seen_labels = set()
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if not item:
+                continue
+            label = item.data(Qt.ItemDataRole.UserRole + 2)
+            if not label or label in seen_labels:
+                continue
+            seen_labels.add(label)
+            # First row of each group is the representative — set ▼
+            if item.text().startswith("▶"):
+                item.setText(f"▼ {label}")
+        self._apply_row_visibility()
+        self.lbl_dup_status.setText(
+            _t(f"{n} groups expanded / {n} グループ展開"))
+
+    def _refresh_dup_delete_marks(self):
+        """Recompute the rule-based mark set and apply it to the table's
+        SELECTION (not a custom background brush). Now the rule output is
+        seeded into Qt's selection model — meaning it looks identical to a
+        normal selected row (yellow), Ctrl+click removes individual rows
+        from the selection, Shift+click extends, etc. Delete operates on
+        whatever's currently selected."""
+        if self.config.get("last_mode") != "dup":
+            return
+        marks = self._compute_dup_marks()
+        self._dup_marked_for_delete = marks
+        from PyQt6.QtCore import QItemSelection, QItemSelectionModel
+        sel_model = self.table.selectionModel()
+        # Always clear first. Qt6's ClearAndSelect with an empty
+        # QItemSelection is effectively a no-op — without an explicit
+        # clear(), unchecking all rules would leave the previously
+        # rule-marked rows visually selected, and Delete would still
+        # operate on them.
+        sel_model.clear()
+        if not marks:
+            self._sync_dup_delete_btn()
+            return
+        new_sel = QItemSelection()
+        ncols = self.table.columnCount()
+        for row in range(self.table.rowCount()):
+            path = self.table.get_row_path(row)
+            if path in marks:
+                top_left = self.table.model().index(row, 0)
+                bot_right = self.table.model().index(row, ncols - 1)
+                new_sel.select(top_left, bot_right)
+        sel_model.select(new_sel,
+                         QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        # Update Delete button — count from selection so user-adjusted
+        # selection (Ctrl+click after) reflects in the count.
+        self._sync_dup_delete_btn()
+
+    def _sync_dup_delete_btn(self):
+        """Reflect the current visible-selected row count on the Delete
+        button. Connected to the selection model so manual Ctrl+click
+        adjustments after a rule fires update the label live."""
+        if not hasattr(self, "btn_dup_delete"):
+            return
+        sel_paths = set()
+        for idx in self.table.selectionModel().selectedRows():
+            p = self.table.get_row_path(idx.row())
+            if p:
+                sel_paths.add(p)
+        n = len(sel_paths)
+        if n:
+            self.btn_dup_delete.setText(_t(f"🗑 Delete {n} / 🗑 削除 {n}"))
+            self.btn_dup_delete.setEnabled(True)
+        else:
+            self.btn_dup_delete.setText(_t("🗑 Delete / 🗑 削除"))
+            self.btn_dup_delete.setEnabled(False)
+
+    def _delete_dups_by_rule(self):
+        """Delete every file in the current table selection (which a rule
+        check seeded, and which Ctrl+click may have refined). Prompts for
+        confirmation, then removes from disk + attrs_data + app.data['paths']
+        and re-runs the dup display."""
+        sel_paths = set()
+        for idx in self.table.selectionModel().selectedRows():
+            p = self.table.get_row_path(idx.row())
+            if p:
+                sel_paths.add(p)
+        marks = list(sel_paths)
+        if not marks:
+            return
+        _msg = _t(
+            f"Move {len(marks)} files to trash? You can recover them from the "
+            f"OS trash folder. / "
+            f"{len(marks)} 件をゴミ箱へ移動しますか？OS のゴミ箱から復元可能。")
+        if QMessageBox.question(self, _t("Trash duplicates / 重複ゴミ箱へ"), _msg,
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                                ) != QMessageBox.StandardButton.Yes:
+            return
+        # Use the same XDG-compliant trash mechanism as the rest of the
+        # app (front_page.trash_file). Files land in ~/.local/share/Trash
+        # with proper .trashinfo metadata so the file manager can show
+        # and restore them. Never falls back to os.remove — if trashing
+        # fails, the file is left in place and the error is reported.
+        from aisearch_front_page import trash_file
+        deleted = 0
+        errors = []
+        for p in marks:
+            try:
+                if os.path.exists(p):
+                    _tp, err = trash_file(p)
+                    if err:
+                        errors.append(f"{os.path.basename(p)}: {err}")
+                        continue
+                    deleted += 1
+                # Remove from attrs_data
+                self.attrs_data.pop(p, None)
+                # Remove from app.data["paths"]
+                if self.data and "paths" in self.data and p in self.data["paths"]:
+                    idx = self.data["paths"].index(p)
+                    self.data["paths"].pop(idx)
+                    if "embeddings" in self.data:
+                        try:
+                            import torch as _torch
+                            mask = _torch.ones(len(self.data["embeddings"]), dtype=_torch.bool)
+                            mask[idx] = False
+                            self.data["embeddings"] = self.data["embeddings"][mask]
+                        except Exception:
+                            pass
+            except Exception as e:
+                errors.append(f"{os.path.basename(p)}: {e}")
+        # Strip deleted paths out of the dup groups, drop singleton groups
+        if self._dup_display_data:
+            new_groups = []
+            for grp in self._dup_display_data:
+                kept = [m for m in grp
+                        if (m.get("path", "") if isinstance(m, dict) else m) not in marks]
+                if len(kept) > 1:
+                    new_groups.append(kept)
+            self._dup_display_data = new_groups
+        attrs_mod.save(self.current_project, self.attrs_data)
+        self._dup_marked_for_delete = set()
+        # Reset all rule checkboxes
+        for cb in self._dup_rule_checks.values():
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        # Explicitly clear table selection so deleted rows don't linger as
+        # selected ghosts in the selection model. Rule checkbox signals
+        # were blocked above, so _refresh_dup_delete_marks doesn't fire —
+        # without this clear, the about-to-be-removed rows could remain
+        # in the selection until the next user click.
+        self.table.clearSelection()
+        # Redisplay
+        if self._dup_display_data:
+            self._display_dup_from_data(self._dup_display_data)
+            total_files = sum(len(g) for g in self._dup_display_data)
+            self._set_dup_result(
+                f"{len(self._dup_display_data)} groups, {total_files} files",
+                self._dup_result_threshold or self.spin_threshold.value())
+        else:
+            self.table.setRowCount(0)
+            self._set_dup_result("0 groups, 0 files",
+                                 self._dup_result_threshold or self.spin_threshold.value())
+        self._save_dup_results()
+        msg = f"Deleted {deleted} of {len(marks)} files."
+        if errors:
+            msg += f"\n{len(errors)} errors:\n" + "\n".join(errors[:5])
+            if len(errors) > 5:
+                msg += f"\n…and {len(errors) - 5} more"
+        QMessageBox.information(self, _t("Delete complete / 削除完了"), msg)
+
     def _save_dup_results(self):
         if not self._dup_display_data:
             return
+        # Save under the threshold that PRODUCED the data, NOT whatever the
+        # spinner happens to read right now. The spinner can drift away
+        # from the actual scan (user changes it without re-scanning) — if
+        # we save with the spinner value the cache file ends up labelled
+        # with a threshold that doesn't match its groups, and on next load
+        # the user sees groups that violate the claimed threshold (e.g.
+        # different-sized files clustered under "100%").
+        actual_thr = getattr(self, "_dup_result_threshold", None)
+        if not actual_thr:
+            actual_thr = self.spin_threshold.value()
+        # Path is keyed by the actual threshold's mode bucket, so a 100%
+        # spinner-but-70%-data scenario lands in the right file.
+        suffix = "hash" if actual_thr >= 100 else f"{actual_thr}pct"
+        save_path = os.path.join(attrs_mod.DATA_DIR,
+                                  f"dups_{self.current_project}_{suffix}.json")
         data = {
             "project":   self.current_project,
-            "threshold": self.spin_threshold.value(),
+            "threshold": actual_thr,
             "groups":    self._dup_display_data,
         }
-        with open(self._dup_file_path(), "w", encoding="utf-8") as f:
+        with open(save_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
 
     def _load_dup_results(self, update_spinner=True):
@@ -3572,6 +4137,10 @@ class AISearchApp(QMainWindow):
                     self.table.item(row, col).setBackground(color)
         self._cleanup_singleton_groups()
         self._highlight_unmarked_rows()
+        # Re-apply rule-based delete highlighting if any rules are active.
+        # Without this, switching projects or rescanning loses the marks.
+        if hasattr(self, "_dup_rule_checks"):
+            self._refresh_dup_delete_marks()
         if self.table.rowCount():
             self._select_row(0)
 
@@ -4187,6 +4756,137 @@ class AISearchApp(QMainWindow):
             self._select_row(0)
             self.table.scrollToTop()
         self.table.setFocus()
+
+    def _apply_rules_step(self):
+        """Toggle the bulk Apply Rules walk.
+
+        First click: starts a QTimer that processes every visible table
+        row directly — parse filename rules → write to attrs → rename on
+        disk if needed. Second click: stops mid-walk.
+
+        Direct calls (no Down-arrow simulation, no preview rebuild per
+        file). Status bar shows progress. One save at the end.
+        """
+        from PyQt6.QtCore import QTimer
+        # Toggle off if already running.
+        if getattr(self, "_apply_rules_running", False):
+            self._apply_rules_running = False
+            return
+        tbl = self.table
+        if tbl is None or tbl.rowCount() == 0:
+            return
+        proj = getattr(self, "current_project", None)
+        rules = attrs_mod.load_filename_rules(proj)
+        one_way = [r for r in rules
+                   if r.get("field") and (
+                       r.get("one_way") or r.get("extract")
+                       or '/' in r.get("pattern", ""))]
+        # Snapshot the row → path map at start of run so concurrent table
+        # mutations (e.g. row removal) don't shift indices mid-walk.
+        paths = []
+        for r in range(tbl.rowCount()):
+            p = tbl.get_row_path(r)
+            if p:
+                paths.append((r, p))
+        if not paths:
+            return
+        self._apply_rules_running = True
+        self._apply_rules_paths = paths
+        self._apply_rules_idx = 0
+        self._apply_rules_one_way = one_way
+        self._apply_rules_proj = proj
+        self._apply_rules_renamed = 0
+        try:
+            self.btn_apply_rules.setText(_t("⏸ Stop / ⏸ 停止"))
+        except Exception:
+            pass
+        if not hasattr(self, "_apply_rules_timer") or self._apply_rules_timer is None:
+            self._apply_rules_timer = QTimer(self)
+            self._apply_rules_timer.setSingleShot(False)
+            self._apply_rules_timer.timeout.connect(self._apply_rules_tick)
+        # Tick every 30ms, processing 25 files per tick → ~800 files/sec.
+        # Fast enough to fly through 1000 files in 1.5s, slow enough that
+        # the status bar update is readable and the toggle stays responsive.
+        self._apply_rules_timer.start(30)
+
+    def _apply_rules_tick(self):
+        """One tick: process up to BATCH files directly. Updates status bar
+        with progress. Stops when paths exhausted or toggle is turned off."""
+        BATCH = 25
+        if not getattr(self, "_apply_rules_running", False):
+            self._apply_rules_finish()
+            return
+        paths = self._apply_rules_paths
+        one_way = self._apply_rules_one_way
+        proj = self._apply_rules_proj
+        i = self._apply_rules_idx
+        n = len(paths)
+        if i >= n:
+            self._apply_rules_finish()
+            return
+        end = min(i + BATCH, n)
+        for k in range(i, end):
+            row, path = paths[k]
+            if not os.path.exists(path):
+                continue
+            # 1. Apply detect rules to entry.
+            if one_way:
+                bn = os.path.basename(path)
+                stem = os.path.splitext(bn)[0]
+                od = attrs_mod.parse_filename_rules(stem, one_way, basename=bn, fullpath=path)
+                if od:
+                    entry = self.attrs_data.setdefault(path, {})
+                    if "P" in od and od["P"] and entry.get("person_id") != od["P"]:
+                        entry["person_id"] = od["P"]
+                    for field, value in od.items():
+                        if field == "P" or not value:
+                            continue
+                        if entry.get(field.lower()) != value:
+                            entry[field.lower()] = value
+            # 2. Rename if attrs disagree with filename. defer_save so we
+            # don't write the JSON N times during the walk.
+            if attrs_mod.would_rename(self.attrs_data, path, proj):
+                try:
+                    new_path = attrs_mod.rename_file_to_match_entry(
+                        self.attrs_data, path, project=proj, defer_save=True)
+                    if new_path and new_path != path:
+                        self._apply_rules_renamed += 1
+                        # Update app.data["paths"] + the table row in place.
+                        if self.data and "paths" in self.data and path in self.data["paths"]:
+                            self.data["paths"][self.data["paths"].index(path)] = new_path
+                        try:
+                            self.table.set_row_path(row, new_path)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        self._apply_rules_idx = end
+        try:
+            self.statusBar().showMessage(
+                f"Apply Rules: {end} / {n} files, {self._apply_rules_renamed} renamed", 2000)
+        except Exception:
+            pass
+
+    def _apply_rules_finish(self):
+        """Stop the walk, save attrs once, restore button text."""
+        if getattr(self, "_apply_rules_timer", None):
+            self._apply_rules_timer.stop()
+        try:
+            attrs_mod.save(getattr(self, "current_project", None), self.attrs_data)
+        except Exception:
+            pass
+        renamed = getattr(self, "_apply_rules_renamed", 0)
+        total = len(getattr(self, "_apply_rules_paths", []))
+        self._apply_rules_running = False
+        try:
+            self.btn_apply_rules.setText(_t("🔧 Apply Rules / 🔧 規則適用"))
+        except Exception:
+            pass
+        try:
+            self.statusBar().showMessage(
+                f"Apply Rules done: {renamed} of {total} files renamed.", 5000)
+        except Exception:
+            pass
 
     def _apply_path_rules_to_browse_dir(self):
         """Walk the currently-browsed directory recursively and re-apply path

@@ -48,6 +48,11 @@ FIELD_DEFS = {
     "negative_prompt": ("text",     []),
     "seed":            ("text",     []),
     "speech":          ("text",     []),
+    # Per-file list of arbitrary related paths (parent file, derivatives,
+    # source folder, etc.). Renders as a list widget with add-file /
+    # add-folder / remove buttons; double-click opens path in OS file
+    # manager. Stored in attrs as entry["related"] = [path, ...].
+    "related":         ("pathlist", []),
 }
 
 # Style → zero-padding width
@@ -71,15 +76,21 @@ BLUE_PREFIXES = {
     "O", "R", "K", "audio", "Watermark",
     # ID structural markers — A removed (now a yellow user-editable matrix)
     "P", "J", "PI", "PW",
+    # Per-file lineage list — universal/system attribute
+    "related",
 }
 
 
 def is_blue_prefix(prefix: str) -> bool:
     if prefix in BLUE_PREFIXES:
         return True
-    if isinstance(prefix, str) and (prefix == "FACE"
-                                     or prefix == "CLIP"
-                                     or prefix.startswith("CLIP_")):
+    # All AI-detection debug tiles (CLIP*, FACE*) are locked/blue. The
+    # FACE_PW tile was a regression — it's the same kind of dump as FACE,
+    # not a user-edited field, so it must follow the same rule.
+    if isinstance(prefix, str) and (prefix == "CLIP"
+                                     or prefix.startswith("CLIP_")
+                                     or prefix == "FACE"
+                                     or prefix.startswith("FACE_")):
         return True
     return False
 

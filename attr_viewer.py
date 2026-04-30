@@ -388,6 +388,98 @@ class FieldWidget(QGroupBox):
             self._te.focusOutEvent = _focus_out_save
             vlay.addWidget(self._te)
 
+        elif style == "pathlist":
+            # List widget of file/folder paths. Double-click opens a path in
+            # the OS file manager. Add-file / add-folder / remove buttons.
+            from PyQt6.QtWidgets import QListWidget, QFileDialog
+            from PyQt6.QtGui import QDesktopServices
+            self._pathlist = QListWidget()
+            self._pathlist.setMinimumHeight(0)
+            self._pathlist.setStyleSheet(
+                "QListWidget { background:#262626; color:#cce0ff; "
+                "border:1px solid #555; font-size:9pt; }"
+                "QListWidget::item { padding:2px 4px; }"
+                "QListWidget::item:selected { background:#3a5a8a; color:#fff; }")
+            self._pathlist.setToolTip(
+                "Double-click to open in file manager")
+            def _open_item(item, _qd=QDesktopServices):
+                p = item.text().strip()
+                if p:
+                    from PyQt6.QtCore import QUrl as _QU
+                    _qd.openUrl(_QU.fromLocalFile(p))
+            self._pathlist.itemDoubleClicked.connect(_open_item)
+            vlay.addWidget(self._pathlist)
+
+            def _emit_changed(_self=self):
+                # Walk up to AttrViewerWidget and fire data_changed so the
+                # parent saves through the normal canvas pipeline.
+                p = _self.parent()
+                while p is not None and not hasattr(p, "data_changed"):
+                    p = p.parent()
+                if p is not None:
+                    p.data_changed.emit()
+
+            def _add_path(want_dir, _self=self):
+                # Open the picker in the current file's directory so the
+                # user lands next to the asset they're tagging. Fall back
+                # to home only when no current path is set yet.
+                _cur = getattr(_self, "_cur_file_path", "") or ""
+                if _cur and os.path.isfile(_cur):
+                    start = os.path.dirname(_cur)
+                elif _cur and os.path.isdir(_cur):
+                    start = _cur
+                else:
+                    start = os.path.expanduser("~")
+                if want_dir:
+                    picked = QFileDialog.getExistingDirectory(
+                        _self, "Add related folder", start)
+                else:
+                    picked, _ = QFileDialog.getOpenFileName(
+                        _self, "Add related file", start)
+                if not picked:
+                    return
+                existing = {_self._pathlist.item(i).text().strip()
+                            for i in range(_self._pathlist.count())}
+                if picked in existing:
+                    return
+                _self._pathlist.addItem(picked)
+                _emit_changed()
+
+            def _remove_paths(_self=self):
+                rows = sorted({_self._pathlist.row(it)
+                               for it in _self._pathlist.selectedItems()},
+                              reverse=True)
+                if not rows:
+                    return
+                for r in rows:
+                    _self._pathlist.takeItem(r)
+                _emit_changed()
+
+            row_btns = QHBoxLayout()
+            row_btns.setContentsMargins(0, 0, 0, 0)
+            row_btns.setSpacing(3)
+            btn_addf = QPushButton("📄")
+            btn_addf.setToolTip("Add file")
+            btn_addf.setFixedWidth(30)
+            btn_addf.clicked.connect(lambda: _add_path(False))
+            row_btns.addWidget(btn_addf)
+            btn_addd = QPushButton("📂")
+            btn_addd.setToolTip("Add folder")
+            btn_addd.setFixedWidth(30)
+            btn_addd.clicked.connect(lambda: _add_path(True))
+            row_btns.addWidget(btn_addd)
+            btn_rm = QPushButton("×")
+            btn_rm.setToolTip("Remove selected")
+            btn_rm.setFixedWidth(30)
+            btn_rm.clicked.connect(_remove_paths)
+            row_btns.addWidget(btn_rm)
+            row_btns.addStretch()
+            vlay.addLayout(row_btns)
+            # Delete key removes selected
+            from PyQt6.QtGui import QShortcut, QKeySequence
+            _del_sc = QShortcut(QKeySequence("Delete"), self._pathlist)
+            _del_sc.activated.connect(_remove_paths)
+
         elif style in ("taglist", "boolean", "radio"):
             self._btns = {}
             from PyQt6.QtWidgets import QButtonGroup
@@ -886,6 +978,20 @@ class FieldWidget(QGroupBox):
                 te.blockSignals(True)
                 te.setPlainText(text)
                 te.blockSignals(False)
+        elif self.style == "pathlist":
+            db_key = _TEXT_KEY_MAP.get(self.key, self.key)
+            paths = entry.get(db_key, []) or []
+            pl = getattr(self, "_pathlist", None)
+            if pl is not None:
+                pl.blockSignals(True)
+                pl.clear()
+                for p in paths:
+                    if isinstance(p, str) and p.strip():
+                        pl.addItem(p)
+                pl.blockSignals(False)
+            # Remember the current file's path so the file/folder picker
+            # opens next to it instead of home.
+            self._cur_file_path = entry.get("path", "") or ""
 
     def collect_soft(self):
         """Return current widget value for saving back to attrs.
@@ -953,6 +1059,18 @@ class FieldWidget(QGroupBox):
             db_key = _TEXT_KEY_MAP.get(self.key, self.key)
             te = getattr(self, "_te", None)
             return ("text", db_key, te.toPlainText() if te else "")
+        elif self.style == "pathlist":
+            db_key = _TEXT_KEY_MAP.get(self.key, self.key)
+            pl = getattr(self, "_pathlist", None)
+            paths = []
+            if pl is not None:
+                seen = set()
+                for i in range(pl.count()):
+                    t = pl.item(i).text().strip()
+                    if t and t not in seen:
+                        seen.add(t)
+                        paths.append(t)
+            return ("pathlist", db_key, paths)
         return None
 
     def set_edit_mode(self, on: bool):
@@ -2376,18 +2494,20 @@ class AttrViewerWidget(QWidget):
 
     def collect_soft_data(self):
         """Collect current canvas widget values.
-        Returns (extra_tags, text_dict, coded_dict, matrix_dict).
-        - extra_tags : set of tag keys (taglist/boolean/radio)
-        - text_dict  : {db_key: str} for text fields
-        - coded_dict : {field_key: val} for O/R/K-style combos
-        - matrix_dict: {widget_key: val} for matrix widgets — written to
-                        entry[widget_key] so codes don't share the tags namespace
-                        across matrix groups.
+        Returns (extra_tags, text_dict, coded_dict, matrix_dict, pathlist_dict).
+        - extra_tags    : set of tag keys (taglist/boolean/radio)
+        - text_dict     : {db_key: str} for text fields
+        - coded_dict    : {field_key: val} for O/R/K-style combos
+        - matrix_dict   : {widget_key: val} for matrix widgets — written to
+                           entry[widget_key] so codes don't share the tags
+                           namespace across matrix groups.
+        - pathlist_dict : {db_key: [path, ...]} for pathlist widgets.
         """
-        extra_tags  = set()
-        text_dict   = {}
-        coded_dict  = {}
-        matrix_dict = {}
+        extra_tags    = set()
+        text_dict     = {}
+        coded_dict    = {}
+        matrix_dict   = {}
+        pathlist_dict = {}
         for w in self.widgets:
             result = w.collect_soft()
             if result is None:
@@ -2403,7 +2523,10 @@ class AttrViewerWidget(QWidget):
             elif result[0] == "matrix_field":
                 # Always include — empty value means "cleared selection"
                 matrix_dict[result[1]] = result[2]
-        return extra_tags, text_dict, coded_dict, matrix_dict
+            elif result[0] == "pathlist":
+                # Always include so empty list overwrites a previous value
+                pathlist_dict[result[1]] = result[2]
+        return extra_tags, text_dict, coded_dict, matrix_dict, pathlist_dict
 
     def refresh_language(self):
         """Re-populate all combo labels and tile titles after a language change."""

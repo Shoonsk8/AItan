@@ -3630,7 +3630,7 @@ def _bool_flag_on(entry_val):
     return entry_val.strip().lower() not in _FLAG_OFF_VALUES
 
 
-def rename_file_to_match_entry(attrs_data, path, project=None):
+def rename_file_to_match_entry(attrs_data, path, project=None, defer_save=False):
     """The single rename function. Reads entry's canonical lowercase keys
     for every CODED_FIELDS letter (plus person_id, persons_with), rebuilds
     the stem via build_coded_filename, and renames the file on disk.
@@ -3638,6 +3638,10 @@ def rename_file_to_match_entry(attrs_data, path, project=None):
     Replaces sync_filename_from_entry, apply_tag_sync_rules,
     apply_boolean_sync_rules, rename_with_person_id, rename_to_date_first.
     Boolean flags and per-field values flow through the same path here.
+
+    defer_save: when True, do NOT write attrs_data to disk after the rename.
+      Batch callers (Re-apply Rules) pass this and call save() once at the
+      end so a 1000-file run isn't 1000 round-trips through json.dump.
 
     Returns new path (same as path if unchanged or rename failed)."""
     entry = get(attrs_data, path)
@@ -3692,11 +3696,13 @@ def rename_file_to_match_entry(attrs_data, path, project=None):
         update_path_in_all_stores(path, new_path, project)
     # Persist immediately — without this, a concurrent watch-dir scan or any
     # stale-path consumer can see the old key in attrs_data and re-introduce
-    # it (the "phantom file" reappearing after rename).
-    try:
-        save(project, attrs_data)
-    except Exception:
-        pass
+    # it (the "phantom file" reappearing after rename). Skipped during
+    # batch runs (Re-apply Rules) where the caller saves once at the end.
+    if not defer_save:
+        try:
+            save(project, attrs_data)
+        except Exception:
+            pass
     return new_path
 
 
