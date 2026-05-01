@@ -1527,6 +1527,14 @@ class _DbMixin:
         self.proj_combo.setCurrentText(name)
         self.proj_combo.blockSignals(False)
         self.new_proj_entry.setText(name)
+        # Refresh the per-tab project dropdowns (Attributes / Filename Rules /
+        # Meta Map) so the new project appears immediately. Without this they
+        # only show projects that existed when Settings was opened, so a
+        # freshly registered project would show only "default" until reopen.
+        for _cb_name in ("_attr_proj_cb", "_fn_proj_cb", "_meta_proj_cb"):
+            _cb = getattr(self, _cb_name, None)
+            if _cb is not None and _cb.findText(name) < 0:
+                _cb.addItem(name)
         self.app.set_project(name)
         self._update_scan_project_label()
         self.lbl_scan.setText(f"Registered '{name}' with {len(base_dirs)} dir(s).")
