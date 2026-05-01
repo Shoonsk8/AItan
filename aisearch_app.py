@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.992"
+VERSION = "1.993"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
