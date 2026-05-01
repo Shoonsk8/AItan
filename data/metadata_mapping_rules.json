@@ -1,0 +1,18 @@
+[
+  {
+    "source": "Prompt",
+    "target": "prompt"
+  },
+  {
+    "source": "NegPrompt",
+    "target": "neg_prompt"
+  },
+  {
+    "source": "Seed",
+    "target": "seed"
+  },
+  {
+    "source": "Model",
+    "target": "model"
+  }
+]

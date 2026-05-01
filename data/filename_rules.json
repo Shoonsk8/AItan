@@ -1,0 +1,185 @@
+{
+  "auto_rename": false,
+  "rules": [
+    {
+      "field": "P",
+      "digits": 3,
+      "extract": true
+    },
+    {
+      "field": "A",
+      "digits": 3,
+      "extract": true
+    },
+    {
+      "field": "PI",
+      "digits": 3,
+      "extract": true
+    },
+    {
+      "field": "E",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "HC",
+      "digits": 3,
+      "extract": true
+    },
+    {
+      "field": "FA",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "X",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "SK",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "B",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "WH",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "PM",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "T",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "CS",
+      "digits": 3,
+      "extract": true
+    },
+    {
+      "field": "O",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "R",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "K",
+      "digits": 2,
+      "extract": true
+    },
+    {
+      "field": "J",
+      "digits": 8,
+      "extract": true
+    },
+    {
+      "pattern": "WM",
+      "field": "WM",
+      "value": "true"
+    },
+    {
+      "pattern": "-0-",
+      "field": "P",
+      "value": "001",
+      "one_way": true
+    },
+    {
+      "pattern": "-0.",
+      "field": "P",
+      "value": "001",
+      "one_way": true
+    },
+    {
+      "pattern": "BG",
+      "tag_group": "Background_Table",
+      "value": "ff",
+      "one_way": true
+    },
+    {
+      "pattern": "-watermark",
+      "field": "WM",
+      "value": "true",
+      "one_way": true
+    },
+    {
+      "pattern": "Gemini_Generated_Image_",
+      "tag_group": "ModelImage",
+      "value": "03",
+      "one_way": true
+    },
+    {
+      "pattern": "Gemini_",
+      "field": "WM",
+      "value": "true",
+      "one_way": true
+    },
+    {
+      "pattern": "image.jpg",
+      "tag_group": "ModelImage",
+      "value": "80",
+      "one_way": true
+    },
+    {
+      "pattern": "video.mp4",
+      "tag_group": "ModelVideo",
+      "value": "90",
+      "one_way": true
+    },
+    {
+      "pattern": "Gemini",
+      "tag_group": "Variant",
+      "value": "origin",
+      "one_way": true
+    },
+    {
+      "pattern": "Nastia/",
+      "tag_group": "ModelImage",
+      "value": "a0",
+      "one_way": true
+    },
+    {
+      "pattern": "Nastia/",
+      "tag_group": "Variant",
+      "value": "base",
+      "one_way": true
+    },
+    {
+      "pattern": "Nastia/",
+      "tag_group": "Variant",
+      "value": "origin",
+      "one_way": true
+    },
+    {
+      "pattern": "image-",
+      "tag_group": "ModelImage",
+      "value": "90",
+      "one_way": true
+    },
+    {
+      "pattern": "image-",
+      "tag_group": "Variant",
+      "value": "origin",
+      "one_way": true
+    },
+    {
+      "pattern": "Video_Generation",
+      "tag_group": "ModelVideo",
+      "value": "07",
+      "one_way": true
+    }
+  ]
+}

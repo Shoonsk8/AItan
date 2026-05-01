@@ -1,0 +1,563 @@
+[
+  {
+    "field": "hc",
+    "pos": 1,
+    "zero_is_none": true,
+    "threshold": 0.2,
+    "options": [
+      [
+        "1",
+        "a person with black hair"
+      ],
+      [
+        "2",
+        "a person with dark brown hair"
+      ],
+      [
+        "3",
+        "a person with light brown hair"
+      ],
+      [
+        "4",
+        "a person with blonde or golden hair"
+      ],
+      [
+        "5",
+        "a person with platinum blonde very light hair"
+      ],
+      [
+        "6",
+        "a person with red hair"
+      ],
+      [
+        "7",
+        "a person with pink hair"
+      ],
+      [
+        "8",
+        "a person with ginger or orange hair"
+      ],
+      [
+        "9",
+        "a person with gray or silver-gray hair"
+      ],
+      [
+        "a",
+        "a person with white hair"
+      ],
+      [
+        "b",
+        "a person with blue hair"
+      ],
+      [
+        "c",
+        "a person with yellow hair"
+      ],
+      [
+        "d",
+        "a person with green hair"
+      ],
+      [
+        "e",
+        "a person with rainbow or multi-colored hair"
+      ],
+      [
+        "f",
+        "a person with neon colored hair"
+      ]
+    ]
+  },
+  {
+    "field": "hc",
+    "pos": 2,
+    "zero_is_none": true,
+    "threshold": 0.2,
+    "options": [
+      [
+        "1",
+        "a person with straight hair"
+      ],
+      [
+        "2",
+        "a person with wavy hair"
+      ],
+      [
+        "3",
+        "a person with curly hair"
+      ],
+      [
+        "4",
+        "a person with voluminous puffy hair"
+      ],
+      [
+        "5",
+        "a person with bob cut hair"
+      ],
+      [
+        "6",
+        "a person with hair in a ponytail"
+      ],
+      [
+        "7",
+        "a person with braided hair"
+      ],
+      [
+        "8",
+        "a person with hair in a bun or tied up"
+      ],
+      [
+        "9",
+        "a person with buzz cut or very short shaved head"
+      ]
+    ]
+  },
+  {
+    "field": "hc",
+    "pos": 3,
+    "zero_is_none": true,
+    "threshold": 0.2,
+    "options": [
+      [
+        "1",
+        "a person with very short hair nearly shaved"
+      ],
+      [
+        "2",
+        "a person with short hair above the ears"
+      ],
+      [
+        "3",
+        "a person with medium length hair to the shoulders"
+      ],
+      [
+        "4",
+        "a person with long hair below the shoulders"
+      ],
+      [
+        "5",
+        "a person with very long hair down to the waist or lower"
+      ]
+    ]
+  },
+  {
+    "field": "fa",
+    "pos": 1,
+    "zero_is_none": false,
+    "threshold": 0.0,
+    "options": [
+      [
+        "0",
+        "a person facing directly forward toward camera"
+      ],
+      [
+        "1",
+        "a person facing right full profile side view"
+      ],
+      [
+        "2",
+        "a person facing slightly right three-quarter view"
+      ],
+      [
+        "3",
+        "a person facing left full profile side view"
+      ],
+      [
+        "4",
+        "a person facing slightly left three-quarter view"
+      ],
+      [
+        "5",
+        "a person facing away from camera showing back of head"
+      ]
+    ]
+  },
+  {
+    "field": "fa",
+    "pos": 2,
+    "zero_is_none": false,
+    "threshold": 0.0,
+    "options": [
+      [
+        "0",
+        "a person with head at normal horizontal level"
+      ],
+      [
+        "1",
+        "a person with head tilted upward chin raised"
+      ],
+      [
+        "2",
+        "a person with head bowed or tilted downward"
+      ]
+    ]
+  },
+  {
+    "field": "sk",
+    "pos": 1,
+    "zero_is_none": false,
+    "threshold": 0.0,
+    "options": [
+      [
+        "0",
+        "a person with very fair or pale white skin"
+      ],
+      [
+        "1",
+        "a person with fair light skin tone"
+      ],
+      [
+        "2",
+        "a person with medium beige or light tan skin"
+      ],
+      [
+        "3",
+        "a person with olive or medium brown skin"
+      ],
+      [
+        "4",
+        "a person with dark brown skin"
+      ],
+      [
+        "5",
+        "a person with very dark deeply pigmented skin"
+      ]
+    ]
+  },
+  {
+    "field": "pm",
+    "pos": 2,
+    "zero_is_none": true,
+    "threshold": 0.2,
+    "options": [
+      [
+        "1",
+        "a person standing upright"
+      ],
+      [
+        "2",
+        "a person sitting down on chair or floor"
+      ],
+      [
+        "3",
+        "a person kneeling on one or both knees"
+      ],
+      [
+        "4",
+        "a person lying down horizontally"
+      ],
+      [
+        "5",
+        "a person leaning against a wall or surface"
+      ],
+      [
+        "6",
+        "a person crouching or squatting down"
+      ],
+      [
+        "7",
+        "a person doing a handstand upside down"
+      ]
+    ]
+  },
+  {
+    "field": "pm",
+    "pos": 1,
+    "zero_is_none": true,
+    "threshold": 0.22,
+    "options": [
+      [
+        "0",
+        "a person posing still not moving"
+      ],
+      [
+        "2",
+        "a person walking"
+      ],
+      [
+        "3",
+        "a person running"
+      ],
+      [
+        "4",
+        "a person dancing"
+      ],
+      [
+        "5",
+        "a person looking directly at the camera"
+      ],
+      [
+        "6",
+        "a person talking or speaking with mouth open"
+      ],
+      [
+        "7",
+        "a person gesturing with their hands"
+      ],
+      [
+        "8",
+        "a person fighting or in combat action pose"
+      ]
+    ],
+    "default_is_zero": true
+  },
+  {
+    "field": "cs",
+    "pos": 3,
+    "zero_is_none": true,
+    "threshold": 0.18,
+    "options": [
+      [
+        "1",
+        "extreme close-up shot of eyes lips or small facial detail only"
+      ],
+      [
+        "2",
+        "close-up shot showing only the face tightly framed"
+      ],
+      [
+        "3",
+        "big close-up showing face and very top of shoulders"
+      ],
+      [
+        "4",
+        "close-up portrait showing face and shoulders"
+      ],
+      [
+        "5",
+        "bust shot showing head and chest"
+      ],
+      [
+        "6",
+        "medium close-up showing head to upper chest"
+      ],
+      [
+        "7",
+        "medium shot showing person from waist up"
+      ],
+      [
+        "8",
+        "cowboy shot showing person from mid-thigh up"
+      ],
+      [
+        "9",
+        "full body shot showing entire person head to toe"
+      ],
+      [
+        "a",
+        "wide shot showing person and surrounding environment"
+      ],
+      [
+        "b",
+        "extreme wide shot with small distant figure in large environment"
+      ]
+    ]
+  },
+  {
+    "field": "cs",
+    "pos": 2,
+    "zero_is_none": true,
+    "threshold": 0.22,
+    "options": [
+      [
+        "1",
+        "low angle shot looking upward at the subject"
+      ],
+      [
+        "2",
+        "high angle shot looking downward at the subject"
+      ],
+      [
+        "3",
+        "over-the-shoulder shot from behind a person"
+      ],
+      [
+        "4",
+        "dutch angle or tilted camera creating strong diagonal"
+      ],
+      [
+        "5",
+        "bird's eye view shot directly from overhead above"
+      ]
+    ]
+  },
+  {
+    "field": "cs",
+    "pos": 1,
+    "zero_is_none": true,
+    "threshold": 0.2,
+    "options": [
+      [
+        "1",
+        "bright sunny daylight outdoor lighting"
+      ],
+      [
+        "2",
+        "warm golden sunset or sunrise lighting"
+      ],
+      [
+        "3",
+        "clean professional studio lighting white background"
+      ],
+      [
+        "4",
+        "dramatic cinematic lighting with strong shadows and contrast"
+      ],
+      [
+        "5",
+        "flat colorful anime or illustration style"
+      ],
+      [
+        "6",
+        "dark nighttime or very low-light scene"
+      ]
+    ]
+  },
+  {
+    "field": "bg",
+    "pos": 3,
+    "zero_is_none": false,
+    "threshold": 0.2,
+    "options": [
+      [
+        "0",
+        "solid pure black background no details"
+      ],
+      [
+        "1",
+        "solid pure white background no details"
+      ],
+      [
+        "2",
+        "bright green screen or chromakey green background"
+      ],
+      [
+        "3",
+        "indoor room or interior home setting"
+      ],
+      [
+        "4",
+        "commercial indoor location restaurant office store cafe"
+      ],
+      [
+        "5",
+        "outdoor urban street city buildings"
+      ],
+      [
+        "6",
+        "natural outdoor setting trees grass forest field beach water"
+      ],
+      [
+        "8",
+        "outer space stars cosmos planets"
+      ]
+    ]
+  },
+  {
+    "field": "x",
+    "pos": 2,
+    "zero_is_none": true,
+    "threshold": 0.18,
+    "options": [
+      [
+        "0",
+        "a person with a neutral blank expressionless face"
+      ],
+      [
+        "1",
+        "a person smiling or laughing with a happy expression"
+      ],
+      [
+        "2",
+        "a person sneering or showing contempt disgust"
+      ],
+      [
+        "3",
+        "a person crying or looking sad with tears"
+      ],
+      [
+        "4",
+        "a person frowning or looking angry displeased"
+      ],
+      [
+        "5",
+        "a person looking surprised or shocked with wide eyes"
+      ],
+      [
+        "6",
+        "a person looking scared or fearful frightened"
+      ],
+      [
+        "7",
+        "a person looking sleepy tired or drowsy with heavy eyelids"
+      ],
+      [
+        "8",
+        "a person with a flirty seductive coy expression"
+      ],
+      [
+        "9",
+        "a person looking shy bashful or embarrassed"
+      ],
+      [
+        "a",
+        "a person with a mischievous impish smirk"
+      ],
+      [
+        "b",
+        "a person grimacing wincing in pain"
+      ],
+      [
+        "c",
+        "a person with an intense fierce dramatic stare"
+      ]
+    ]
+  },
+  {
+    "field": "e",
+    "pos": 1,
+    "zero_is_none": true,
+    "threshold": 0.16,
+    "options": [
+      [
+        "1",
+        "a person with brown eyes"
+      ],
+      [
+        "2",
+        "a person with blue eyes"
+      ],
+      [
+        "3",
+        "a person with hazel green-brown eyes"
+      ],
+      [
+        "4",
+        "a person with amber or golden yellow eyes"
+      ],
+      [
+        "5",
+        "a person with gray eyes"
+      ],
+      [
+        "6",
+        "a person with green eyes"
+      ],
+      [
+        "7",
+        "a person with purple or violet eyes"
+      ],
+      [
+        "8",
+        "a person with red or pink eyes"
+      ],
+      [
+        "9",
+        "a person with silver metallic eyes"
+      ],
+      [
+        "a",
+        "a person with very dark black eyes"
+      ]
+    ]
+  }
+]

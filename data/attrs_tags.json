@@ -1,0 +1,2158 @@
+{
+  "E_Color": [
+    [
+      "0",
+      "Closed / No eyes / 閉じている／目なし"
+    ],
+    [
+      "1",
+      "Brown / 茶"
+    ],
+    [
+      "2",
+      "Blue / 青"
+    ],
+    [
+      "3",
+      "Hazel / ヘーゼル"
+    ],
+    [
+      "4",
+      "Amber / 琥珀"
+    ],
+    [
+      "5",
+      "Gray / 灰"
+    ],
+    [
+      "6",
+      "Green / 緑"
+    ],
+    [
+      "7",
+      "Violet / 紫"
+    ],
+    [
+      "8",
+      "Red / 赤"
+    ],
+    [
+      "9",
+      "Silver / 銀"
+    ],
+    [
+      "a",
+      "Black / 黒"
+    ],
+    [
+      "b",
+      "Heterochromia (Complete) / 虹彩異色（完全）"
+    ],
+    [
+      "c",
+      "Heterochromia (Sectoral) / 虹彩異色（部分）"
+    ],
+    [
+      "d",
+      "Heterochromia (Central) / 虹彩異色（中心）"
+    ],
+    [
+      "e",
+      "Aniridia / 無虹彩症"
+    ]
+  ],
+  "E_Additional": [
+    [
+      "0",
+      "Naked eye / 裸眼"
+    ],
+    [
+      "1",
+      "Glasses / 眼鏡"
+    ],
+    [
+      "2",
+      "Neon / ネオン"
+    ],
+    [
+      "3",
+      "Glasses + Neon / 眼鏡＋ネオン"
+    ],
+    [
+      "b",
+      "Bad / 不良"
+    ],
+    [
+      "f",
+      "Detail / 詳細"
+    ]
+  ],
+  "HC_Color": [
+    [
+      "0",
+      "No hair / 髪なし"
+    ],
+    [
+      "1",
+      "Black / 黒"
+    ],
+    [
+      "2",
+      "Dark Brown / 黒髪"
+    ],
+    [
+      "3",
+      "Light Brown / 茶髪"
+    ],
+    [
+      "4",
+      "Blonde / 金髪"
+    ],
+    [
+      "5",
+      "Platinum Blonde / プラチナブロンド"
+    ],
+    [
+      "6",
+      "Red / 赤"
+    ],
+    [
+      "7",
+      "Pink / ピンク"
+    ],
+    [
+      "8",
+      "Ginger / 赤毛"
+    ],
+    [
+      "9",
+      "Gray / 灰"
+    ],
+    [
+      "a",
+      "White / 白"
+    ],
+    [
+      "b",
+      "Blue / 青"
+    ],
+    [
+      "c",
+      "Yellow / 黄"
+    ],
+    [
+      "d",
+      "Green / 緑"
+    ],
+    [
+      "e",
+      "Rainbow / レインボー"
+    ],
+    [
+      "f",
+      "Neon / ネオン"
+    ]
+  ],
+  "HC_Style": [
+    [
+      "0",
+      "(none) / （なし）"
+    ],
+    [
+      "1",
+      "Straight / ストレート"
+    ],
+    [
+      "2",
+      "Wavy / ウェーブ"
+    ],
+    [
+      "3",
+      "Curly / カール"
+    ],
+    [
+      "4",
+      "Voluminous / ボリューム"
+    ],
+    [
+      "5",
+      "Bob / ボブ"
+    ],
+    [
+      "6",
+      "Ponytail / ポニーテール"
+    ],
+    [
+      "7",
+      "Braid / 三つ編み"
+    ],
+    [
+      "8",
+      "Tied / 結び髪"
+    ],
+    [
+      "9",
+      "Buzz / 坊主"
+    ]
+  ],
+  "HC_Length": [
+    [
+      "0",
+      "(none) / （なし）"
+    ],
+    [
+      "1",
+      "Very Short / ごく短い"
+    ],
+    [
+      "2",
+      "Short / 短い"
+    ],
+    [
+      "3",
+      "Medium / 中くらい"
+    ],
+    [
+      "4",
+      "Long / 長い"
+    ],
+    [
+      "5",
+      "Very Long / 非常に長い"
+    ],
+    [
+      "6",
+      "Bald"
+    ],
+    [
+      "7",
+      "Partially Bald"
+    ]
+  ],
+  "FA_Dir": [
+    [
+      "0",
+      "Front / 正面"
+    ],
+    [
+      "1",
+      "Right / 右"
+    ],
+    [
+      "2",
+      "Right 3/4 / 右斜め"
+    ],
+    [
+      "3",
+      "Left / 左"
+    ],
+    [
+      "4",
+      "Left 3/4 / 左斜め"
+    ],
+    [
+      "5",
+      "Back / 後ろ"
+    ]
+  ],
+  "FA_Vert": [
+    [
+      "0",
+      "Horizontal / 水平"
+    ],
+    [
+      "1",
+      "Upward / 上向き"
+    ],
+    [
+      "2",
+      "Downward / 下向き"
+    ]
+  ],
+  "SK_Type": [
+    [
+      "0",
+      "Type I — Very Fair / タイプI — 非常に白い"
+    ],
+    [
+      "1",
+      "Type II — Fair / タイプII — 白い"
+    ],
+    [
+      "2",
+      "Type III — Medium / タイプIII — 普通"
+    ],
+    [
+      "3",
+      "Type IV — Olive / タイプIV — オリーブ"
+    ],
+    [
+      "4",
+      "Type V — Dark Brown / タイプV — 濃褐色"
+    ],
+    [
+      "5",
+      "Type VI — Deeply Pigmented / タイプVI — 極濃色素"
+    ]
+  ],
+  "PM_Motion": [
+    [
+      "0",
+      "Still / 静止"
+    ],
+    [
+      "1",
+      "Pose / 格好つける"
+    ],
+    [
+      "2",
+      "Walking / 歩く"
+    ],
+    [
+      "3",
+      "Running / 走る"
+    ],
+    [
+      "4",
+      "Dancing / 踊る"
+    ],
+    [
+      "5",
+      "Looking at Camera / カメラ目線"
+    ],
+    [
+      "6",
+      "Talking / 話す"
+    ],
+    [
+      "7",
+      "Gesturing / 身振り"
+    ],
+    [
+      "8",
+      "Fighting / 戦う"
+    ],
+    [
+      "9",
+      "Fingering / フィンガリング"
+    ],
+    [
+      "a",
+      "Jumping / 跳躍"
+    ]
+  ],
+  "PM_Posture": [
+    [
+      "0",
+      "Standing / 立つ"
+    ],
+    [
+      "1",
+      "Standing in style / 格好つけ立ち"
+    ],
+    [
+      "2",
+      "Sitting / 座る"
+    ],
+    [
+      "3",
+      "Kneeling / 膝立ち"
+    ],
+    [
+      "4",
+      "Lying / 横になる"
+    ],
+    [
+      "5",
+      "Leaning / もたれる"
+    ],
+    [
+      "6",
+      "Crouching / しゃがむ"
+    ],
+    [
+      "7",
+      "Handstand / 逆立ち"
+    ],
+    [
+      "8",
+      "Spreading legs / 脚を広げる"
+    ]
+  ],
+  "CS_Light": [
+    [
+      "0",
+      "Natural / 自然光"
+    ],
+    [
+      "1",
+      "Sunshine / 日光"
+    ],
+    [
+      "2",
+      "Sunset / 夕焼け"
+    ],
+    [
+      "3",
+      "Studio / スタジオ"
+    ],
+    [
+      "4",
+      "Cinematic / シネマ調"
+    ],
+    [
+      "5",
+      "Anime / アニメ調"
+    ],
+    [
+      "6",
+      "Night / 夜"
+    ]
+  ],
+  "CS_Angle": [
+    [
+      "0",
+      "Eye Level / 目線"
+    ],
+    [
+      "1",
+      "Low Angle / ローアングル"
+    ],
+    [
+      "2",
+      "High Angle / ハイアングル"
+    ],
+    [
+      "3",
+      "Over-Shoulder / 肩越し"
+    ],
+    [
+      "4",
+      "Dutch Angle / ダッチアングル"
+    ],
+    [
+      "5",
+      "Bird's Eye / 俯瞰"
+    ]
+  ],
+  "CS_Shot": [
+    [
+      "0",
+      "(none) / （なし）"
+    ],
+    [
+      "1",
+      "Extreme Close-Up / 超クローズアップ"
+    ],
+    [
+      "2",
+      "Face Close-Up / フェイスアップ"
+    ],
+    [
+      "3",
+      "Big Close-Up / ビッグクローズアップ"
+    ],
+    [
+      "4",
+      "Close-Up / クローズアップ"
+    ],
+    [
+      "5",
+      "Bust Shot / バストショット"
+    ],
+    [
+      "6",
+      "Medium Close-Up / ミディアムクローズアップ"
+    ],
+    [
+      "7",
+      "Medium Shot / ミディアムショット"
+    ],
+    [
+      "8",
+      "Cowboy Shot / カウボーイショット"
+    ],
+    [
+      "9",
+      "Full Shot / フルショット"
+    ],
+    [
+      "a",
+      "Wide Shot / ワイドショット"
+    ],
+    [
+      "b",
+      "Extreme Wide / 超ワイド"
+    ]
+  ],
+  "X_Table": [
+    [
+      "00",
+      "Neutral ニュートラル"
+    ],
+    [
+      "01",
+      "Deadpan 無表情"
+    ],
+    [
+      "02",
+      "Resting 休憩顔"
+    ],
+    [
+      "03",
+      "Vacant 虚ろ"
+    ],
+    [
+      "04",
+      "Composed 落ち着いた"
+    ],
+    [
+      "05",
+      "Masked 仮面"
+    ],
+    [
+      "06",
+      "Serene 穏やか"
+    ],
+    [
+      "07",
+      "Impassive 無感動"
+    ],
+    [
+      "10",
+      "Smile 笑顔"
+    ],
+    [
+      "11",
+      "Grin 満面の笑み"
+    ],
+    [
+      "12",
+      "Laugh 笑い"
+    ],
+    [
+      "13",
+      "Giggle くすくす笑い"
+    ],
+    [
+      "14",
+      "Smirky Snicker にやにや笑い"
+    ],
+    [
+      "15",
+      "Beaming 満面笑顔"
+    ],
+    [
+      "16",
+      "Playful Glee 無邪気な喜び"
+    ],
+    [
+      "17",
+      "Wink ウィンク"
+    ],
+    [
+      "18",
+      "Exultant 歓喜"
+    ],
+    [
+      "19",
+      "Tender Smile 優しい笑顔"
+    ],
+    [
+      "20",
+      "Sneer せせら笑い"
+    ],
+    [
+      "21",
+      "Smug 自己満足"
+    ],
+    [
+      "22",
+      "Disgusted 嫌悪"
+    ],
+    [
+      "23",
+      "Disdain 軽蔑"
+    ],
+    [
+      "24",
+      "Condescending 見下す"
+    ],
+    [
+      "25",
+      "Eye Roll 白目"
+    ],
+    [
+      "26",
+      "Bitter 苦い"
+    ],
+    [
+      "27",
+      "Withering 冷たい視線"
+    ],
+    [
+      "28",
+      "Repulsed 嫌悪感"
+    ],
+    [
+      "30",
+      "Cry 泣く"
+    ],
+    [
+      "31",
+      "Pout 拗ねる"
+    ],
+    [
+      "32",
+      "Whimper すすり泣き"
+    ],
+    [
+      "33",
+      "Wistful 物悲しい"
+    ],
+    [
+      "34",
+      "Melancholy 憂鬱"
+    ],
+    [
+      "35",
+      "Dejected 落胆"
+    ],
+    [
+      "36",
+      "Grief 悲嘆"
+    ],
+    [
+      "37",
+      "Despairing 絶望"
+    ],
+    [
+      "38",
+      "Forlorn わびしい"
+    ],
+    [
+      "40",
+      "Frown しかめっ面"
+    ],
+    [
+      "41",
+      "Stern 厳しい"
+    ],
+    [
+      "42",
+      "Scowl にらみつける"
+    ],
+    [
+      "43",
+      "Glare 睨む"
+    ],
+    [
+      "44",
+      "Furious 激怒"
+    ],
+    [
+      "45",
+      "Brooding 沈思"
+    ],
+    [
+      "46",
+      "Seething 煮えたぎる怒り"
+    ],
+    [
+      "47",
+      "Outraged 憤慨"
+    ],
+    [
+      "48",
+      "Cold Fury 冷たい怒り"
+    ],
+    [
+      "50",
+      "Surprised 驚き"
+    ],
+    [
+      "51",
+      "Shocked ショック"
+    ],
+    [
+      "52",
+      "Amazed 唖然"
+    ],
+    [
+      "53",
+      "Startled びっくり"
+    ],
+    [
+      "54",
+      "Bewildered 困惑"
+    ],
+    [
+      "55",
+      "Astonished 驚愕"
+    ],
+    [
+      "56",
+      "Dumbfounded 茫然"
+    ],
+    [
+      "57",
+      "Aghast 青ざめた"
+    ],
+    [
+      "60",
+      "Scared 怖い"
+    ],
+    [
+      "61",
+      "Nervous 緊張"
+    ],
+    [
+      "62",
+      "Anxious 不安"
+    ],
+    [
+      "63",
+      "Horrified 恐怖"
+    ],
+    [
+      "64",
+      "On-Guard 警戒"
+    ],
+    [
+      "65",
+      "Panicked パニック"
+    ],
+    [
+      "66",
+      "Frozen 凍りついた"
+    ],
+    [
+      "67",
+      "Cowering おびえる"
+    ],
+    [
+      "70",
+      "Sleepy 眠い"
+    ],
+    [
+      "71",
+      "Drowsy うとうと"
+    ],
+    [
+      "72",
+      "Relaxed リラックス"
+    ],
+    [
+      "73",
+      "Dazed ぼんやり"
+    ],
+    [
+      "74",
+      "Content 満足"
+    ],
+    [
+      "75",
+      "Peaceful 平和"
+    ],
+    [
+      "76",
+      "Languid 気だるい"
+    ],
+    [
+      "77",
+      "Bored 退屈"
+    ],
+    [
+      "78",
+      "Zoned Out ぼーっとした"
+    ],
+    [
+      "80",
+      "Flirty 色っぽい"
+    ],
+    [
+      "81",
+      "Sultry セクシー"
+    ],
+    [
+      "82",
+      "Bedroom Eyes 流し目"
+    ],
+    [
+      "83",
+      "Biting Lip 唇を噛む"
+    ],
+    [
+      "84",
+      "Inviting 誘う"
+    ],
+    [
+      "85",
+      "Smoldering 燃えるような目"
+    ],
+    [
+      "86",
+      "Yearning 切望"
+    ],
+    [
+      "87",
+      "Possessive 独占欲"
+    ],
+    [
+      "88",
+      "Alluring 魅惑的"
+    ],
+    [
+      "90",
+      "Shy 恥ずかしい"
+    ],
+    [
+      "91",
+      "Embarrassed 照れ"
+    ],
+    [
+      "92",
+      "Blushing 頬を染める"
+    ],
+    [
+      "93",
+      "Bashful 内気"
+    ],
+    [
+      "94",
+      "Timid 臆病"
+    ],
+    [
+      "95",
+      "Flustered あわてる"
+    ],
+    [
+      "96",
+      "Self-Conscious 自意識過剰"
+    ],
+    [
+      "97",
+      "Meek おとなしい"
+    ],
+    [
+      "a0",
+      "Mischievous いたずら"
+    ],
+    [
+      "a1",
+      "Teasing からかう"
+    ],
+    [
+      "a2",
+      "Cheeky 生意気"
+    ],
+    [
+      "a3",
+      "Devious Grin したたかな笑み"
+    ],
+    [
+      "a4",
+      "Tongue Out 舌を出す"
+    ],
+    [
+      "a5",
+      "Conspiratorial 共謀"
+    ],
+    [
+      "a6",
+      "Sly ずる賢い"
+    ],
+    [
+      "a7",
+      "Impudent 図々しい"
+    ],
+    [
+      "b0",
+      "Grimace 苦悶"
+    ],
+    [
+      "b1",
+      "Cringe 縮み上がる"
+    ],
+    [
+      "b2",
+      "Anguish 苦悩"
+    ],
+    [
+      "b3",
+      "Exhausted Pain 疲弊した痛み"
+    ],
+    [
+      "b4",
+      "Wince 顔をしかめる"
+    ],
+    [
+      "b5",
+      "Agony 苦痛"
+    ],
+    [
+      "b6",
+      "Suffering 苦しみ"
+    ],
+    [
+      "b7",
+      "Tearful Pain 涙の痛み"
+    ],
+    [
+      "c0",
+      "Intense Stare 強い視線"
+    ],
+    [
+      "c1",
+      "Fierce 激しい"
+    ],
+    [
+      "c2",
+      "Stoic ストイック"
+    ],
+    [
+      "c3",
+      "Determined 決意"
+    ],
+    [
+      "c4",
+      "Resolute 断固"
+    ],
+    [
+      "c5",
+      "Commanding 威圧的"
+    ],
+    [
+      "c6",
+      "Piercing 鋭い"
+    ],
+    [
+      "c7",
+      "Formidable 恐るべき"
+    ],
+    [
+      "d0",
+      "Feels good 気持ちいい"
+    ],
+    [
+      "d1",
+      "Moan 喘ぎ声"
+    ]
+  ],
+  "B_Shape": [
+    [
+      "0",
+      "(undefined) / （未定義）"
+    ],
+    [
+      "1",
+      "Square (Pecs) / スクエア（胸筋）"
+    ],
+    [
+      "2",
+      "Round / 丸型"
+    ],
+    [
+      "3",
+      "Teardrop / しずく"
+    ],
+    [
+      "4",
+      "Broad / 広い"
+    ],
+    [
+      "5",
+      "Side Set / サイドセット"
+    ],
+    [
+      "6",
+      "Slender / 細い"
+    ]
+  ],
+  "B_Size": [
+    [
+      "0",
+      "(none) / （なし）"
+    ],
+    [
+      "1",
+      "Flat / Male / Neutral / フラット"
+    ],
+    [
+      "2",
+      "Athletic / Pectorals / アスレチック"
+    ],
+    [
+      "3",
+      "Petite / AAA-A / 小さめ"
+    ],
+    [
+      "4",
+      "Small / B-C / 小"
+    ],
+    [
+      "5",
+      "Medium / D-E / 中"
+    ],
+    [
+      "6",
+      "Large / F-G / 大"
+    ],
+    [
+      "7",
+      "Extra Large / H+ / 特大"
+    ],
+    [
+      "8",
+      "Enhanced / 豊胸"
+    ]
+  ],
+  "WH_Hip": [
+    [
+      "0",
+      "Normal / 普通"
+    ],
+    [
+      "1",
+      "Thin / 細い"
+    ],
+    [
+      "2",
+      "Athletic / Firm / 引き締まった"
+    ],
+    [
+      "3",
+      "Average / 普通"
+    ],
+    [
+      "4",
+      "Curvy / Full / 豊満"
+    ],
+    [
+      "5",
+      "Large / Wide / 大きい"
+    ],
+    [
+      "6",
+      "Extra Large / 特大"
+    ],
+    [
+      "7",
+      "Sticks out / 突き出し"
+    ]
+  ],
+  "WH_Waist": [
+    [
+      "0",
+      "Normal / 普通"
+    ],
+    [
+      "1",
+      "Flat / Thin / 細い"
+    ],
+    [
+      "2",
+      "Athletic / Firm / 引き締まった"
+    ],
+    [
+      "3",
+      "Average / 普通"
+    ],
+    [
+      "4",
+      "Curvy / Full / 豊満"
+    ],
+    [
+      "5",
+      "Large / Wide / 大きい"
+    ],
+    [
+      "6",
+      "Extra Large / 特大"
+    ],
+    [
+      "7",
+      "Pregnant / 妊婦"
+    ]
+  ],
+  "Tool_Table": [
+    [
+      "00",
+      "Nothing / なし"
+    ],
+    [
+      "10",
+      "Sword / 刀"
+    ],
+    [
+      "f0",
+      "Dildo / ディルド"
+    ],
+    [
+      "f1",
+      "Black Dildo / 黒ディルド"
+    ],
+    [
+      "f2",
+      "Purple Dildo / 紫ディルド"
+    ]
+  ],
+  "Background_Table": [
+    [
+      "00",
+      "Solid BG / 単色背景"
+    ],
+    [
+      "01",
+      "Black BG / 黒背景"
+    ],
+    [
+      "02",
+      "White BG / 白背景"
+    ],
+    [
+      "03",
+      "Green BG / 緑背景"
+    ],
+    [
+      "10",
+      "Indoor / 屋内"
+    ],
+    [
+      "11",
+      "Bedroom / 寝室"
+    ],
+    [
+      "12",
+      "Living Room / リビング"
+    ],
+    [
+      "13",
+      "GymRoom"
+    ],
+    [
+      "20",
+      "Outdoor / 屋外"
+    ],
+    [
+      "21",
+      "Outside of House / 家の外"
+    ],
+    [
+      "22",
+      "Swimming pool / プール"
+    ],
+    [
+      "30",
+      "Commercial / 商業施設"
+    ],
+    [
+      "31",
+      "Store / Shop / 店舗"
+    ],
+    [
+      "32",
+      "Restaurant / Cafe / 飲食店"
+    ],
+    [
+      "33",
+      "Office / オフィス"
+    ],
+    [
+      "34",
+      "Hospital / 病院"
+    ],
+    [
+      "35",
+      "School / 学校"
+    ],
+    [
+      "36",
+      "Commercial Gym"
+    ],
+    [
+      "40",
+      "Nature / 自然"
+    ],
+    [
+      "41",
+      "Beach / 浜辺"
+    ],
+    [
+      "42",
+      "Ocean / 海"
+    ],
+    [
+      "43",
+      "Lake / 湖"
+    ],
+    [
+      "44",
+      "Forest / 森"
+    ],
+    [
+      "45",
+      "Mountain / 山"
+    ],
+    [
+      "50",
+      "City / 街"
+    ],
+    [
+      "51",
+      "Street / 通り"
+    ],
+    [
+      "52",
+      "Park / 公園"
+    ],
+    [
+      "60",
+      "Space / 宇宙"
+    ],
+    [
+      "61",
+      "Stars / 星"
+    ],
+    [
+      "62",
+      "Moon Surface / 月面"
+    ]
+  ],
+  "ModelImage": [
+    [
+      "00",
+      "Digen"
+    ],
+    [
+      "01",
+      "Image Motion"
+    ],
+    [
+      "02",
+      "FLUX.2 [klein]"
+    ],
+    [
+      "03",
+      "Nano Banana Pro"
+    ],
+    [
+      "04",
+      "Nano Banana 2"
+    ],
+    [
+      "05",
+      "Seedream 5.0 Lite"
+    ],
+    [
+      "06",
+      "Nano Banana"
+    ],
+    [
+      "07",
+      "Z-Image"
+    ],
+    [
+      "08",
+      "GPT Image 1.5"
+    ],
+    [
+      "09",
+      "FLUX.2 Dev"
+    ],
+    [
+      "0a",
+      "Sora Image"
+    ],
+    [
+      "0b",
+      "FLUX Dev"
+    ],
+    [
+      "10",
+      "Gemini"
+    ],
+    [
+      "13",
+      "Nano Banana Pro"
+    ],
+    [
+      "14",
+      "Nano Banana 2"
+    ],
+    [
+      "20",
+      "Screen Shot"
+    ],
+    [
+      "80",
+      "Promptchan"
+    ],
+    [
+      "90",
+      "Fanvue"
+    ],
+    [
+      "a0",
+      "Nastia"
+    ],
+    [
+      "b0",
+      "APOB"
+    ]
+  ],
+  "ModelVideo": [
+    [
+      "00",
+      "Digen"
+    ],
+    [
+      "01",
+      "Real Motion 2.6"
+    ],
+    [
+      "02",
+      "Real Motion 2.6 Pro"
+    ],
+    [
+      "03",
+      "Real Motion 2.6 Remix"
+    ],
+    [
+      "04",
+      "Real Motion Turbo"
+    ],
+    [
+      "05",
+      "Real Motion 3.1"
+    ],
+    [
+      "06",
+      "Real Motion 3.1 Turbo"
+    ],
+    [
+      "07",
+      "Google Veo 3.1 Fast"
+    ],
+    [
+      "08",
+      "Grok Video"
+    ],
+    [
+      "09",
+      "Runway 4.5"
+    ],
+    [
+      "10",
+      "Gemini"
+    ],
+    [
+      "17",
+      "Google Veo 3.1 Fast"
+    ],
+    [
+      "90",
+      "Promptchan"
+    ]
+  ],
+  "__text_fields__": {
+    "FACE": {
+      "label": "FACE",
+      "placeholder": ""
+    },
+    "CLIP_HC": {
+      "label": "HC Hair",
+      "placeholder": ""
+    },
+    "CLIP_FA": {
+      "label": "FA Face",
+      "placeholder": ""
+    },
+    "CLIP_E": {
+      "label": "E Eyes",
+      "placeholder": ""
+    },
+    "CLIP_X": {
+      "label": "X Extra",
+      "placeholder": ""
+    },
+    "CLIP_SK": {
+      "label": "SK Skin",
+      "placeholder": ""
+    },
+    "CLIP_PM": {
+      "label": "PM Posture",
+      "placeholder": ""
+    },
+    "CLIP_BG": {
+      "label": "BG Background",
+      "placeholder": ""
+    },
+    "CLIP_CS": {
+      "label": "Camera Shot",
+      "placeholder": ""
+    },
+    "FACE_PW": {
+      "label": "FACE PW",
+      "placeholder": ""
+    }
+  },
+  "Watermark": [
+    [
+      "watermark",
+      "True"
+    ],
+    [
+      "no_watermark",
+      "False"
+    ]
+  ],
+  "Variant": [
+    [
+      "origin",
+      "Origin / オリジン"
+    ],
+    [
+      "base",
+      "Base / ベース"
+    ],
+    [
+      "expression",
+      "Expression / 表情"
+    ],
+    [
+      "clothing",
+      "Clothing / 衣装"
+    ],
+    [
+      "body_parts",
+      "Body Parts / 体の部位"
+    ],
+    [
+      "action",
+      "Action / 動作"
+    ],
+    [
+      "background",
+      "Background / 背景"
+    ],
+    [
+      "hair",
+      "Hair / 髪"
+    ],
+    [
+      "style",
+      "Style / スタイル"
+    ],
+    [
+      "accessories",
+      "Accessories / アクセサリー"
+    ],
+    [
+      "mutant",
+      "Mutant / 変形"
+    ],
+    [
+      "other",
+      "Other / その他"
+    ],
+    [
+      "gbreast",
+      "Good Breast / 良い胸"
+    ],
+    [
+      "bbreast",
+      "Bad Breast / 不良胸"
+    ],
+    [
+      "naked",
+      "Naked / 裸"
+    ],
+    [
+      "topls",
+      "Topless / トップレス"
+    ]
+  ],
+  "__section_order__": [
+    "P",
+    "FACE",
+    "A",
+    "PI",
+    "PW",
+    "FACE_PW",
+    "CLIP_HC",
+    "CLIP_FA",
+    "CLIP_E",
+    "CLIP_X",
+    "E",
+    "HC",
+    "SK",
+    "CLIP_SK",
+    "X",
+    "FA",
+    "CL",
+    "Tool",
+    "B",
+    "WH",
+    "PM",
+    "CLIP_PM",
+    "Background",
+    "CS",
+    "CLIP_BG",
+    "CLIP_CS",
+    "J",
+    "O",
+    "R",
+    "K",
+    "Watermark",
+    "note",
+    "ModelImage",
+    "ModelVideo",
+    "seed",
+    "positive_prompt",
+    "negative_prompt",
+    "audio",
+    "speech",
+    "Variant"
+  ],
+  "__section_styles__": {
+    "P": "id",
+    "FACE": "text",
+    "A": "id",
+    "PI": "id",
+    "PW": "id",
+    "CLIP_HC": "text",
+    "CLIP_FA": "text",
+    "CLIP_E": "text",
+    "CLIP_X": "text",
+    "E": "2dig",
+    "HC": "3dig",
+    "SK": "1dig",
+    "CLIP_SK": "text",
+    "X": "matrix",
+    "FA": "2dig",
+    "CL": "4dig",
+    "Tool": "matrix",
+    "B": "2dig",
+    "WH": "2dig",
+    "PM": "2dig",
+    "CLIP_PM": "text",
+    "Background": "matrix",
+    "CS": "3dig",
+    "CLIP_BG": "text",
+    "CLIP_CS": "text",
+    "J": "id",
+    "Watermark": "radio",
+    "note": "text",
+    "ModelImage": "matrix",
+    "ModelVideo": "matrix",
+    "seed": "text",
+    "positive_prompt": "text",
+    "negative_prompt": "text",
+    "speech": "text",
+    "Variant": "taglist",
+    "audio": "combo"
+  },
+  "__section_groups__": {
+    "Head": [
+      "P",
+      "FACE",
+      "A",
+      "PI",
+      "PW",
+      "CLIP_HC",
+      "CLIP_FA",
+      "CLIP_E",
+      "CLIP_X",
+      "E",
+      "HC",
+      "SK",
+      "CLIP_SK",
+      "X",
+      "FA"
+    ],
+    "Body": [
+      "CL",
+      "Tool",
+      "B",
+      "WH",
+      "PM",
+      "CLIP_PM"
+    ],
+    "Sight": [
+      "Background",
+      "CS",
+      "CLIP_BG",
+      "CLIP_CS",
+      "J",
+      "O",
+      "R",
+      "K",
+      "Watermark"
+    ],
+    "Internal": [
+      "note",
+      "ModelImage",
+      "ModelVideo",
+      "seed",
+      "positive_prompt",
+      "negative_prompt",
+      "audio",
+      "speech",
+      "Variant"
+    ]
+  },
+  "__group_order__": [
+    "Head",
+    "Body",
+    "Sight",
+    "Internal"
+  ],
+  "__col_names__": {
+    "CL": [
+      "Top Color",
+      "Top Type",
+      "Bottom Color",
+      "Bottom Type"
+    ],
+    "E": [
+      "Eyes_color",
+      "Eyes_additional"
+    ],
+    "HC": [
+      "Hair_color",
+      "Hair_style",
+      "Hair_length"
+    ],
+    "SK": [
+      "SkinColor_skin"
+    ],
+    "X": [
+      "Expression / 表情"
+    ],
+    "FA": [
+      "FaceAngle_direction",
+      "FaceAngle_vertical"
+    ],
+    "Tool": [
+      "Tool"
+    ],
+    "B": [
+      "Bust_shape",
+      "Bust_size"
+    ],
+    "WH": [
+      "WaistHip_hip",
+      "WaistHip_waist"
+    ],
+    "PM": [
+      "PostureMotion_motion",
+      "PostureMotion_posture"
+    ],
+    "Background": [
+      "Background"
+    ],
+    "CS": [
+      "CameraShot_lighting",
+      "CameraShot_angle",
+      "CameraShot_shot"
+    ],
+    "ModelImage": [
+      "ModelImage"
+    ],
+    "ModelVideo": [
+      "ModelVideo"
+    ]
+  },
+  "__col_defs__": {
+    "B": [
+      [
+        "Shape 1st",
+        "shape_1st",
+        "B_Shape"
+      ],
+      [
+        "Size 2nd",
+        "size_2nd",
+        "B_Size"
+      ]
+    ],
+    "WH": [
+      [
+        "Hip 1st",
+        "hip_1st",
+        "WH_Hip"
+      ],
+      [
+        "Waist 2nd",
+        "waist_2nd",
+        "WH_Waist"
+      ]
+    ],
+    "CL": [
+      [
+        "Top Color 4th",
+        "top_color_4th",
+        "CL_TopColor"
+      ],
+      [
+        "Top Type 3rd",
+        "top_type_3rd",
+        "CL_Top"
+      ],
+      [
+        "Bottom Color 2nd",
+        "bot_color_2nd",
+        "CL_BotColor"
+      ],
+      [
+        "Bottom Type 1st",
+        "bot_type_1st",
+        "CL_Bot"
+      ]
+    ]
+  },
+  "__parent_names__": {
+    "CL": "clothing",
+    "E": "Eyes",
+    "HC": "Hair",
+    "SK": "Skin",
+    "FA": "FaceAngle",
+    "B": "Bust",
+    "WH": "WaistHip",
+    "PM": "PostureMotion",
+    "CS": "CameraShot"
+  },
+  "__deleted_sections__": [
+    "CLIP",
+    "Quality"
+  ],
+  "Quality": [],
+  "bbb_Table": [],
+  "__hidden_for__": {
+    "Audio": [
+      "image"
+    ],
+    "speech": [
+      "image"
+    ],
+    "negative_prompt": [
+      "video"
+    ],
+    "ModelVideo": [
+      "image"
+    ],
+    "ModelImage": [
+      "video"
+    ],
+    "audio": [
+      "image"
+    ],
+    "K": [
+      "image"
+    ]
+  },
+  "__not_collapsible__": [
+    "note",
+    "positive_prompt",
+    "negative_prompt",
+    "speech"
+  ],
+  "__conditions__": {
+    "speech": [
+      {
+        "source": "audio",
+        "op": "empty",
+        "value": ""
+      }
+    ]
+  },
+  "O_Preset": [
+    [
+      "f1",
+      "15:1"
+    ],
+    [
+      "73",
+      "21:9"
+    ],
+    [
+      "09",
+      "16:9"
+    ],
+    [
+      "32",
+      "3:2"
+    ],
+    [
+      "43",
+      "4:3"
+    ],
+    [
+      "11",
+      "1:1"
+    ],
+    [
+      "34",
+      "3:4"
+    ],
+    [
+      "23",
+      "2:3"
+    ],
+    [
+      "90",
+      "9:16"
+    ]
+  ],
+  "R_Preset": [
+    [
+      "36",
+      "360p"
+    ],
+    [
+      "48",
+      "480p"
+    ],
+    [
+      "72",
+      "720p"
+    ],
+    [
+      "a8",
+      "1080p"
+    ],
+    [
+      "a4",
+      "1440p"
+    ],
+    [
+      "04",
+      "4K"
+    ],
+    [
+      "08",
+      "8K"
+    ]
+  ],
+  "K_Preset": [
+    [
+      "24",
+      "24 fps"
+    ],
+    [
+      "30",
+      "30 fps"
+    ],
+    [
+      "60",
+      "60 fps"
+    ],
+    [
+      "b0",
+      "120 fps"
+    ]
+  ],
+  "audio": [
+    [
+      "none",
+      "None"
+    ],
+    [
+      "aac",
+      "AAC"
+    ],
+    [
+      "mp3",
+      "MP3"
+    ],
+    [
+      "opus",
+      "Opus"
+    ],
+    [
+      "vorbis",
+      "Vorbis"
+    ],
+    [
+      "flac",
+      "FLAC"
+    ],
+    [
+      "ac3",
+      "AC3"
+    ],
+    [
+      "eac3",
+      "E-AC3"
+    ],
+    [
+      "sound",
+      "Sound"
+    ]
+  ],
+  "CL_Top": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Topless"
+    ],
+    [
+      "2",
+      "T-shirt"
+    ],
+    [
+      "3",
+      "Blouse / Shirt"
+    ],
+    [
+      "4",
+      "Sweater / Knit"
+    ],
+    [
+      "5",
+      "Tank / Crop"
+    ],
+    [
+      "6",
+      "Hoodie"
+    ],
+    [
+      "7",
+      "Jacket"
+    ],
+    [
+      "8",
+      "Coat"
+    ],
+    [
+      "9",
+      "Dress (upper)"
+    ],
+    [
+      "a",
+      "Lingerie / Bra"
+    ],
+    [
+      "b",
+      "Swimsuit Top"
+    ],
+    [
+      "c",
+      "Kimono"
+    ],
+    [
+      "d",
+      "School Uniform"
+    ],
+    [
+      "e",
+      "Costume"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_Bot": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Bare"
+    ],
+    [
+      "2",
+      "Jeans"
+    ],
+    [
+      "3",
+      "Trousers"
+    ],
+    [
+      "4",
+      "Shorts"
+    ],
+    [
+      "5",
+      "Skirt (Mini)"
+    ],
+    [
+      "6",
+      "Skirt (Long)"
+    ],
+    [
+      "7",
+      "Leggings"
+    ],
+    [
+      "8",
+      "Sweatpants"
+    ],
+    [
+      "9",
+      "Dress (full)"
+    ],
+    [
+      "a",
+      "Panties"
+    ],
+    [
+      "b",
+      "Bikini Bottom"
+    ],
+    [
+      "c",
+      "Hakama / Kimono"
+    ],
+    [
+      "d",
+      "School Skirt"
+    ],
+    [
+      "e",
+      "Stockings"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_TopColor": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Skin"
+    ],
+    [
+      "2",
+      "Black"
+    ],
+    [
+      "3",
+      "White"
+    ],
+    [
+      "4",
+      "Red"
+    ],
+    [
+      "5",
+      "Blue"
+    ],
+    [
+      "6",
+      "Green"
+    ],
+    [
+      "7",
+      "Yellow"
+    ],
+    [
+      "8",
+      "Pink"
+    ],
+    [
+      "9",
+      "Purple"
+    ],
+    [
+      "a",
+      "Orange"
+    ],
+    [
+      "b",
+      "Brown"
+    ],
+    [
+      "c",
+      "Gray"
+    ],
+    [
+      "d",
+      "Beige"
+    ],
+    [
+      "e",
+      "Multi"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_BotColor": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Skin"
+    ],
+    [
+      "2",
+      "Black"
+    ],
+    [
+      "3",
+      "White"
+    ],
+    [
+      "4",
+      "Red"
+    ],
+    [
+      "5",
+      "Blue"
+    ],
+    [
+      "6",
+      "Green"
+    ],
+    [
+      "7",
+      "Yellow"
+    ],
+    [
+      "8",
+      "Pink"
+    ],
+    [
+      "9",
+      "Purple"
+    ],
+    [
+      "a",
+      "Orange"
+    ],
+    [
+      "b",
+      "Brown"
+    ],
+    [
+      "c",
+      "Gray"
+    ],
+    [
+      "d",
+      "Beige"
+    ],
+    [
+      "e",
+      "Multi"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ]
+}
