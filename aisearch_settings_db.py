@@ -84,7 +84,7 @@ class _DbMixin:
         def _on_proj_name_changed(text):
             text = text.strip()
             existing = [f.replace('features_', '').replace('.pt', '')
-                        for f in os.listdir(_am.DATA_DIR) if f.startswith('features_') and f.endswith('.pt')]
+                        for f in os.listdir(attrs_mod.DATA_DIR) if f.startswith('features_') and f.endswith('.pt')]
             if text in existing:
                 # Load that project's dirs
                 self.dir_listbox.setRowCount(0)
