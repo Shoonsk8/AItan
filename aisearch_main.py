@@ -1,5 +1,13 @@
 import os, sys, importlib.util
 
+# faulthandler prints a Python stack trace if a fatal C-level error
+# (segfault, abort, etc.) takes the process down. Without this, native
+# crashes from mediapipe / face_recognition / cv2 just show "Killed"
+# in the shell with no clue where it died. Output goes to stderr by
+# default — your terminal log will capture it before the crash.
+import faulthandler
+faulthandler.enable()
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Suppress libavformat/libwebp warnings about malformed EXIF segments in

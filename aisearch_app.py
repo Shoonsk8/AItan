@@ -22,7 +22,7 @@ import aisearch_preview
 import aisearch_attrs as attrs_mod
 from attr_viewer import _lang_label as _t
 
-VERSION = "1.993"
+VERSION = "2.0"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -470,6 +470,9 @@ class AISearchApp(QMainWindow):
         self._collapsed_groups = set()
         self._watcher          = None
         self._browse_dir       = None
+        # Resume position for stopped dup scans (survives restart via
+        # dups_<PROJECT>_progress.json sidecar).
+        self._dup_resume_index = 0
 
         self.preview_handler = aisearch_preview.PreviewHandler(self, self)
 
@@ -748,50 +751,24 @@ class AISearchApp(QMainWindow):
 
         dup_row4a = QHBoxLayout()
         for _k, _l in [
+            ("same",      _t("Same size / 同サイズ")),
             ("smaller",   _t("Smaller / 小")),
             ("larger",    _t("Larger / 大")),
-            ("deeper",    _t("Deeper / 深")),
-            ("shallower", _t("Shallower / 浅")),
-            ("older",     _t("Older / 旧")),
-            ("newer",     _t("Newer / 新")),
         ]:
             dup_row4a.addWidget(_make_check(_k, _l))
         dup_row4a.addStretch()
         dup_controls.addLayout(dup_row4a)
 
+        dup_row4a2 = QHBoxLayout()
+        dup_row4a2.addWidget(_make_check("deeper",    _t("Deeper / 深")))
+        dup_row4a2.addWidget(_make_check("shallower", _t("Shallower / 浅")))
+        dup_row4a2.addStretch()
+        dup_controls.addLayout(dup_row4a2)
+
         dup_row4b = QHBoxLayout()
-        dup_row4b.addWidget(_make_check("same",    _t("Same size / 同サイズ")))
+        dup_row4b.addWidget(_make_check("older",   _t("Older / 旧")))
+        dup_row4b.addWidget(_make_check("newer",   _t("Newer / 新")))
         dup_row4b.addWidget(_make_check("reverse", _t("Reverse / 反転")))
-        self.btn_dup_collapse = QPushButton(_t("📁 Collapse / 📁 折畳"))
-        self.btn_dup_collapse.setToolTip(_t(
-            "Collapse groups whose active rules mark at least one file. / "
-            "選択条件に該当するファイルがあるグループを折り畳み。"))
-        self.btn_dup_collapse.setStyleSheet(
-            "QPushButton { background:#2e3a5e; color:#aaccff; "
-            "border:1px solid #446699; padding:3px 10px; font-weight:bold; }"
-            "QPushButton:hover { background:#3a4a7a; }")
-        self.btn_dup_collapse.clicked.connect(self._collapse_dups_by_rule)
-        dup_row4b.addWidget(self.btn_dup_collapse)
-        self.btn_dup_uncollapse = QPushButton(_t("📂 Uncollapse / 📂 展開"))
-        self.btn_dup_uncollapse.setToolTip(_t(
-            "Expand all collapsed groups. / すべての折畳グループを展開。"))
-        self.btn_dup_uncollapse.setStyleSheet(
-            "QPushButton { background:#3a4a3a; color:#aaccaa; "
-            "border:1px solid #557755; padding:3px 10px; font-weight:bold; }"
-            "QPushButton:hover { background:#4a5e4a; }")
-        self.btn_dup_uncollapse.clicked.connect(self._uncollapse_all_dups)
-        dup_row4b.addWidget(self.btn_dup_uncollapse)
-        self.btn_dup_delete = QPushButton(_t("🗑 Delete / 🗑 削除"))
-        self.btn_dup_delete.setToolTip(_t(
-            "Delete files matching any active rule across all groups. / "
-            "選択条件に該当するファイルを全グループから削除。"))
-        self.btn_dup_delete.setStyleSheet(
-            "QPushButton { background:#7a2020; color:#ffaaaa; "
-            "border:1px solid #aa3333; padding:3px 10px; font-weight:bold; }"
-            "QPushButton:hover { background:#9a2020; }"
-            "QPushButton:disabled { color:#666; background:#333; border-color:#555; }")
-        self.btn_dup_delete.clicked.connect(self._delete_dups_by_rule)
-        dup_row4b.addWidget(self.btn_dup_delete)
         dup_row4b.addStretch()
         dup_controls.addLayout(dup_row4b)
 
@@ -807,6 +784,42 @@ class AISearchApp(QMainWindow):
         dup_row4c.addWidget(self._chk_hide_videos)
         dup_row4c.addStretch()
         dup_controls.addLayout(dup_row4c)
+
+        # Row 4d — bulk action buttons (collapse/uncollapse/delete) under
+        # the hide-pics/videos checkboxes.
+        dup_row4d = QHBoxLayout()
+        self.btn_dup_collapse = QPushButton(_t("📁 Collapse / 📁 折畳"))
+        self.btn_dup_collapse.setToolTip(_t(
+            "Collapse groups whose active rules mark at least one file. / "
+            "選択条件に該当するファイルがあるグループを折り畳み。"))
+        self.btn_dup_collapse.setStyleSheet(
+            "QPushButton { background:#2e3a5e; color:#aaccff; "
+            "border:1px solid #446699; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#3a4a7a; }")
+        self.btn_dup_collapse.clicked.connect(self._collapse_dups_by_rule)
+        dup_row4d.addWidget(self.btn_dup_collapse)
+        self.btn_dup_uncollapse = QPushButton(_t("📂 Uncollapse / 📂 展開"))
+        self.btn_dup_uncollapse.setToolTip(_t(
+            "Expand all collapsed groups. / すべての折畳グループを展開。"))
+        self.btn_dup_uncollapse.setStyleSheet(
+            "QPushButton { background:#3a4a3a; color:#aaccaa; "
+            "border:1px solid #557755; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#4a5e4a; }")
+        self.btn_dup_uncollapse.clicked.connect(self._uncollapse_all_dups)
+        dup_row4d.addWidget(self.btn_dup_uncollapse)
+        self.btn_dup_delete = QPushButton(_t("🗑 Delete / 🗑 削除"))
+        self.btn_dup_delete.setToolTip(_t(
+            "Delete files matching any active rule across all groups. / "
+            "選択条件に該当するファイルを全グループから削除。"))
+        self.btn_dup_delete.setStyleSheet(
+            "QPushButton { background:#7a2020; color:#ffaaaa; "
+            "border:1px solid #aa3333; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#9a2020; }"
+            "QPushButton:disabled { color:#666; background:#333; border-color:#555; }")
+        self.btn_dup_delete.clicked.connect(self._delete_dups_by_rule)
+        dup_row4d.addWidget(self.btn_dup_delete)
+        dup_row4d.addStretch()
+        dup_controls.addLayout(dup_row4d)
 
         self._dup_controls_widget.hide()
         mode_and_dup.addWidget(self._dup_controls_widget)
@@ -901,10 +914,22 @@ class AISearchApp(QMainWindow):
         _ceil_lbl.setStyleSheet("color:#bbb; font-size:9pt;")
         _ceil_row.addWidget(_ceil_lbl)
         self._rss_ceiling_sb = _QSB()
-        self._rss_ceiling_sb.setRange(500, 16000)
+        # Scale the ceiling range to actual system RAM. A 29 GB host
+        # shouldn't be capped at 16 GB, and a low-RAM host shouldn't
+        # display absurdly large defaults. Max = 90% of total RAM (with
+        # a floor of 16 GB so high-RAM users always have headroom);
+        # default = 50% of total RAM (capped at 8 GB).
+        try:
+            import psutil as _psutil
+            _total_ram_mb = int(_psutil.virtual_memory().total / (1024 * 1024))
+        except Exception:
+            _total_ram_mb = 8000
+        _max_ceiling = max(16000, int(_total_ram_mb * 0.9))
+        _default_ceiling = max(1500, min(8000, int(_total_ram_mb * 0.5)))
+        self._rss_ceiling_sb.setRange(500, _max_ceiling)
         self._rss_ceiling_sb.setSingleStep(100)
         self._rss_ceiling_sb.setSuffix(" MB")
-        self._rss_ceiling_sb.setValue(int(self.config.get("clip_inspect_rss_limit_mb", 1500)))
+        self._rss_ceiling_sb.setValue(int(self.config.get("clip_inspect_rss_limit_mb", _default_ceiling)))
         self._rss_ceiling_sb.setFixedWidth(110)
         self._rss_ceiling_sb.setToolTip(_t(
             "Above this RSS the app flips AI to 'never' to avoid OOM. / "
@@ -2109,6 +2134,30 @@ class AISearchApp(QMainWindow):
                         except Exception: pass
         # Drop the CLIP feature DB / embeddings tensor
         self.data = None
+        # Drop dup-scan results and clear the table — without this the old
+        # project's dup list (which can be 100s of MB after a low-threshold
+        # scan) stays resident, and the gc/malloc_trim below has nothing to
+        # release. Must happen BEFORE the trim, not after the new project
+        # loads.
+        self._dup_display_data = None
+        self._dup_result_summary = ""
+        try:
+            self.table.setSortingEnabled(False)
+            self.table.setRowCount(0)
+            self.table.setSortingEnabled(True)
+        except Exception:
+            pass
+        # Drop project-keyed module caches in aisearch_attrs — these survive
+        # project switches because they're keyed by project name, so the old
+        # project's face DB / corrections / rules stay resident forever.
+        try:
+            for _name in ("_faces_db_cache", "_corrections_cache",
+                          "_fn_rules_cache", "_person_registry_cache"):
+                _c = getattr(attrs_mod, _name, None)
+                if isinstance(_c, dict):
+                    _c.clear()
+        except Exception:
+            pass
         # Force collection
         try:
             import gc as _gc
@@ -2119,6 +2168,20 @@ class AISearchApp(QMainWindow):
                     _torch.cuda.empty_cache()
             except Exception:
                 pass
+        except Exception:
+            pass
+        # Ask glibc to return freed arenas to the OS so the system monitor
+        # actually shows a drop. Run on a daemon thread because malloc_trim
+        # can take a noticeable time on a large heap, and we don't want to
+        # freeze the GUI during a project switch.
+        try:
+            import threading as _thr, ctypes as _ct
+            def _trim():
+                try:
+                    _ct.CDLL("libc.so.6").malloc_trim(0)
+                except Exception:
+                    pass
+            _thr.Thread(target=_trim, daemon=True).start()
         except Exception:
             pass
 
@@ -2960,6 +3023,18 @@ class AISearchApp(QMainWindow):
             def _stop_scan():
                 self._dup_paused = True
                 self._dup_show_partial = True   # worker will pause when it reaches a check
+                # Save the resume position so a future relaunch picks up
+                # from where the user stopped, not from the top.
+                try:
+                    _idx = int(getattr(self, "_dup_current_index", 0) or 0)
+                    self._dup_resume_index = _idx
+                    _prog_path = os.path.join(
+                        attrs_mod.DATA_DIR,
+                        f"dups_{self.current_project}_progress.json")
+                    with open(_prog_path, "w") as _pf:
+                        json.dump({"index": _idx}, _pf)
+                except Exception:
+                    pass
                 # Build partial groups RIGHT NOW from the shared hash_map —
                 # don't wait for worker to reach its next pause check.
                 partial = []
@@ -2983,6 +3058,14 @@ class AISearchApp(QMainWindow):
                     self._collapsed_groups.clear()
                     self._display_dup_from_data(partial)
                     self._dup_display_data = partial
+                    # Persist partial results so they survive app close.
+                    # Without this, Stop showed groups in memory only —
+                    # exit + relaunch lost everything found so far.
+                    try:
+                        self._dup_result_threshold = int(self.spin_threshold.value())
+                        self._save_dup_results()
+                    except Exception:
+                        pass
                 else:
                     self.lbl_dup_status.setText(_t("Stopped — nothing found yet / 停止中 — まだ何も見つかっていません"))
                 self.btn_scan.hide()
@@ -3070,6 +3153,11 @@ class AISearchApp(QMainWindow):
                 if hasattr(self, "search_status_label"):
                     self.search_status_label.hide()
                 self.lbl_dup_status.setText("")
+                # Drop partial dup results so the table doesn't show a stale
+                # half-complete list after the user cancels.
+                self.table.setRowCount(0)
+                self._dup_display_data = None
+                self._dup_result_summary = ""
             self.btn_dup_rescan.clicked.connect(_cancel_paused)
             self.btn_dup_rescan.hide()
         # Clear existing results immediately so the user sees a fresh slate.
@@ -3186,7 +3274,22 @@ class AISearchApp(QMainWindow):
                         partial.append(members)
                     partial.sort(key=len, reverse=True)
                     return partial
-                for _i, (size, fpath) in enumerate(_to_hash, 1):
+                # Rotate the start position so a stopped scan resumes from
+                # where it left off — and wraps around so the skipped early
+                # files still get hashed in the same run. Without this, a
+                # second scan starts from the top and the user has to wait
+                # through the same "no results" stretch (often deleted /
+                # already-checked files) before live results reappear.
+                _N = len(_to_hash)
+                _start_off = int(getattr(self, "_dup_resume_index", 0)) % _N if _N else 0
+                _persist_path = os.path.join(
+                    attrs_mod.DATA_DIR,
+                    f"dups_{self.current_project}_progress.json")
+                for _step in range(1, _N + 1):
+                    _idx = (_start_off + _step - 1) % _N
+                    _i = _step  # progress counter (1..N)
+                    size, fpath = _to_hash[_idx]
+                    self._dup_current_index = _idx   # so Stop can capture
                     # Pause: block until resumed or cancelled. While paused,
                     # if the UI has asked for partial results (Stop pressed),
                     # emit them once.
@@ -3196,6 +3299,14 @@ class AISearchApp(QMainWindow):
                             self._dup_queue.put(("partial", _build_partial_groups()))
                         _time.sleep(0.1)
                     if self._dup_cancel:
+                        # Persist the resume position so a future relaunch
+                        # picks up here too (file is small JSON).
+                        try:
+                            with open(_persist_path, "w") as _pf:
+                                json.dump({"index": _idx, "total": _N}, _pf)
+                        except Exception:
+                            pass
+                        self._dup_resume_index = _idx
                         self._dup_queue.put(("hash_done", _build_partial_groups()))
                         return
                     try:
@@ -3204,8 +3315,21 @@ class AISearchApp(QMainWindow):
                     except OSError:
                         pass
                     if _i % 50 == 0 or _i == _hash_total:
+                        # Count groups with 2+ members so the user sees
+                        # progress feedback during long hash scans —
+                        # how many duplicate groups have been discovered
+                        # so far.
+                        _found = sum(1 for v in hash_map.values() if len(v) >= 2)
                         self._dup_queue.put(("progress",
-                            _t(f"Hashing… {_i}/{_hash_total} / ハッシュ化… {_i}/{_hash_total}")))
+                            _t(f"Hashing… {_i}/{_hash_total}  ·  found {_found} groups / "
+                               f"ハッシュ化… {_i}/{_hash_total}  ·  {_found} グループ発見")))
+                    # Live results: every 500 files, emit a partial groups
+                    # snapshot so the table populates as duplicates appear,
+                    # not just at the end. The "partial" handler in
+                    # _poll_dup_queue re-renders the table without ending
+                    # the scan.
+                    if _i % 500 == 0 or _i == _hash_total:
+                        self._dup_queue.put(("partial", _build_partial_groups()))
 
                 # 3. Build groups — same hash = same bytes = duplicate regardless of extension
                 self._dup_queue.put(("progress", _t("Grouping… / グループ化中…")))
@@ -3219,6 +3343,14 @@ class AISearchApp(QMainWindow):
 
                 # Sort: most files in group first
                 groups_data.sort(key=len, reverse=True)
+                # Full pass complete — clear the resume pointer so the next
+                # scan starts fresh from index 0.
+                self._dup_resume_index = 0
+                try:
+                    if os.path.exists(_persist_path):
+                        os.remove(_persist_path)
+                except Exception:
+                    pass
                 self._dup_queue.put(("hash_done", groups_data))
             except Exception as e:
                 self._dup_queue.put(("error", str(e)))
@@ -3235,6 +3367,19 @@ class AISearchApp(QMainWindow):
         self._update_mode_buttons("dup")
         self._dup_controls_widget.show()
         self.config["last_mode"] = "dup"
+        # Restore resume position from the persisted sidecar so a stopped
+        # scan continues from where it left off across restarts.
+        try:
+            _prog_path = os.path.join(
+                attrs_mod.DATA_DIR,
+                f"dups_{self.current_project}_progress.json")
+            if os.path.exists(_prog_path):
+                with open(_prog_path) as _pf:
+                    self._dup_resume_index = int(json.load(_pf).get("index", 0))
+            else:
+                self._dup_resume_index = 0
+        except Exception:
+            self._dup_resume_index = 0
         # Find any saved dup file for this project, regardless of which
         # threshold the spinner is currently showing. The spinner gets
         # synced to whichever file we actually load. Without this, scans
@@ -3243,6 +3388,11 @@ class AISearchApp(QMainWindow):
         proj = self.current_project or ""
         cache_files = _glob.glob(os.path.join(
             attrs_mod.DATA_DIR, f"dups_{proj}_*.json"))
+        # Exclude the resume-position sidecar — it shares the prefix but
+        # holds {"index": N}, not scan groups. Loading it as a result
+        # cache shows an empty dup view.
+        cache_files = [p for p in cache_files
+                       if not p.endswith("_progress.json")]
         # Pick the most recently modified one — that's what the user most
         # recently produced, even if they scrolled the spinner since.
         cache_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
@@ -3373,6 +3523,11 @@ class AISearchApp(QMainWindow):
                 if hasattr(self, "search_status_label"):
                     self.search_status_label.hide()
                 self.lbl_dup_status.setText("")
+                # Drop partial dup results so the table doesn't show a stale
+                # half-complete list after the user cancels.
+                self.table.setRowCount(0)
+                self._dup_display_data = None
+                self._dup_result_summary = ""
             self.btn_dup_rescan.clicked.connect(_cancel_clip)
             self.btn_dup_rescan.hide()
         self.lbl_dup_status.setText("")
@@ -3593,7 +3748,7 @@ class AISearchApp(QMainWindow):
             self.search_progress.show()
             return                        # keep polling
         if msg == "partial":
-            # Render partial results from a paused worker without ending scan
+            # Render partial results from an in-progress / paused worker.
             groups_data = payload
             total_files = sum(len(g) for g in groups_data)
             if groups_data:
@@ -3603,6 +3758,13 @@ class AISearchApp(QMainWindow):
                 self._collapsed_groups.clear()
                 self._display_dup_from_data(groups_data)
                 self._dup_display_data = groups_data
+                # Persist live partial results to disk so a crash / kill /
+                # close mid-scan doesn't lose what was already found.
+                try:
+                    self._dup_result_threshold = int(self.spin_threshold.value())
+                    self._save_dup_results()
+                except Exception:
+                    pass
             else:
                 self.lbl_dup_status.setText(_t("Stopped — nothing found yet / 停止中 — まだ何も見つかっていません"))
             return                        # keep polling — worker still alive
@@ -3701,8 +3863,10 @@ class AISearchApp(QMainWindow):
                 sim_score = 1.0 if rank == 0 else sim[idx][rep].item()
                 item0.setData(Qt.ItemDataRole.UserRole + 1, sim_score)
                 color = self._dup_color(sim_score, g_idx)
+                fg = self._contrast_fg(color)
                 for col in range(self.table.columnCount()):
                     self.table.item(row, col).setBackground(color)
+                    self.table.item(row, col).setForeground(fg)
         # Keep sorting OFF for dup results — enabling it scatters the groups
         if self.table.rowCount():
             self._select_row(0)
@@ -4000,15 +4164,26 @@ class AISearchApp(QMainWindow):
                             pass
             except Exception as e:
                 errors.append(f"{os.path.basename(p)}: {e}")
-        # Strip deleted paths out of the dup groups, drop singleton groups
+        # Strip deleted paths out of the dup groups, drop singleton groups.
+        # Filter the parallel `_dup_group_labels` list in lockstep so
+        # surviving groups keep their original G-numbers — without this,
+        # later groups shift up to fill the gaps and the user loses track
+        # of what they were working on.
         if self._dup_display_data:
+            old_labels = getattr(self, "_dup_group_labels", None)
             new_groups = []
-            for grp in self._dup_display_data:
+            new_labels = []
+            for g_idx, grp in enumerate(self._dup_display_data):
                 kept = [m for m in grp
                         if (m.get("path", "") if isinstance(m, dict) else m) not in marks]
                 if len(kept) > 1:
                     new_groups.append(kept)
+                    if old_labels and g_idx < len(old_labels):
+                        new_labels.append(old_labels[g_idx])
+                    else:
+                        new_labels.append(f"G{len(new_labels)+1}")
             self._dup_display_data = new_groups
+            self._dup_group_labels = new_labels
         attrs_mod.save(self.current_project, self.attrs_data)
         self._dup_marked_for_delete = set()
         # Reset all rule checkboxes
@@ -4106,9 +4281,20 @@ class AISearchApp(QMainWindow):
                     return b'\x00' in _f.read(512)
             except OSError:
                 return True  # missing file — keep so user can see/clean it up
+        # Defensive: if the cache lacks "groups" (malformed, sidecar
+        # mistakenly loaded, etc.), bail out cleanly so the dup view
+        # shows nothing rather than crashing the whole flow.
+        _src_groups = data.get("groups")
+        if not isinstance(_src_groups, list):
+            self._dup_display_data = None
+            self.table.setRowCount(0)
+            self.lbl_dup_status.setText(_t(
+                "No valid scan cache. Press ⟳ Scan. / "
+                "有効なスキャンキャッシュなし。⟳スキャンを押してください。"))
+            return
         groups_data = [
             [e for e in g if _is_media_path(e)]
-            for g in data["groups"]
+            for g in _src_groups
         ]
         groups_data = [g for g in groups_data if len(g) > 1]
         total_files = sum(len(g) for g in groups_data)
@@ -4171,12 +4357,29 @@ class AISearchApp(QMainWindow):
             groups[label].append({"path": path, "sim": sim})
         self._dup_display_data = [groups[k] for k in order if len(groups[k]) > 1] or None
 
-    def _display_dup_from_data(self, groups_data):
-        """Display duplicate groups from saved/loaded data (no sim tensor needed)."""
+    def _display_dup_from_data(self, groups_data, reset_labels=False):
+        """Display duplicate groups from saved/loaded data (no sim tensor needed).
+
+        Group labels (G1, G2, …) stay STABLE for the lifetime of a scan/load
+        via the parallel `_dup_group_labels` list. Without this, every
+        rebuild after a delete shifted later groups up when an earlier one
+        became a singleton, making the user lose track of which group they
+        were working on.
+
+        Caller responsibility:
+          - On fresh scan / project switch: pass reset_labels=True so the
+            parallel list is rebuilt as G1..Gn.
+          - On delete-driven rebuild: caller must trim
+            self._dup_group_labels in lockstep with groups_data so
+            surviving groups keep their original labels.
+        """
+        if reset_labels or not hasattr(self, "_dup_group_labels") \
+                or len(self._dup_group_labels) != len(groups_data):
+            self._dup_group_labels = [f"G{i+1}" for i in range(len(groups_data))]
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         for g_idx, members in enumerate(groups_data):
-            grp_label = f"G{g_idx + 1}"
+            grp_label = self._dup_group_labels[g_idx]
             for rank, member in enumerate(members):
                 path = member["path"]
                 if not os.path.exists(path):
@@ -4193,8 +4396,10 @@ class AISearchApp(QMainWindow):
                     item0.setToolTip(_t("Click to collapse/expand group / クリックでグループを折りたたみ/展開"))
                 item0.setData(Qt.ItemDataRole.UserRole + 1, member["sim"])
                 color = self._dup_color(member["sim"], g_idx)
+                fg = self._contrast_fg(color)
                 for col in range(self.table.columnCount()):
                     self.table.item(row, col).setBackground(color)
+                    self.table.item(row, col).setForeground(fg)
         self._cleanup_singleton_groups()
         self._highlight_unmarked_rows()
         # Re-apply rule-based delete highlighting if any rules are active.
@@ -5142,12 +5347,25 @@ class AISearchApp(QMainWindow):
         # placeholder when empty; strip cells render the actual thumbnails).
         all_paths = []
         if _is_dup:
+            # Find the group containing `path` without stat-ing every member —
+            # at low thresholds a group can have 100+ files, and the original
+            # `os.path.exists` filter ran on every group member of every
+            # group on every click, costing O(total_files) stat syscalls per
+            # navigation. Now we locate the group by membership only, then
+            # cap to the visible window, and existence-check just those.
+            _STRIP_MAX = 8
             for grp in self._dup_display_data:
-                if grp and grp[0].get("path"):
-                    g_paths = [m["path"] for m in grp if os.path.exists(m["path"])]
-                    if path in g_paths:
-                        all_paths = g_paths
-                        break
+                grp_paths = [m["path"] for m in grp]
+                if path in grp_paths:
+                    if len(grp_paths) > _STRIP_MAX:
+                        _i = grp_paths.index(path)
+                        _half = _STRIP_MAX // 2
+                        _start = max(0, min(_i - _half, len(grp_paths) - _STRIP_MAX))
+                        window = grp_paths[_start:_start + _STRIP_MAX]
+                    else:
+                        window = grp_paths
+                    all_paths = [p for p in window if os.path.exists(p)]
+                    break
             if not all_paths and self.table.rowCount() > 0:
                 top = self.table.get_row_path(0)
                 if top: all_paths = [top]
@@ -5218,11 +5436,20 @@ class AISearchApp(QMainWindow):
             if i < len(paths):
                 p = paths[i]
                 # Video filmstrip cells show the split first+last view to match
-                # the big drop-zone thumbnail and the preview window. The
-                # last-frame seek adds latency on video-heavy lists; that's
-                # absorbed because the strip is only re-rendered when the
-                # current row changes.
-                self._set_zone_image(cell, p, fast=False)
+                # the big drop-zone thumbnail and the preview window. Each
+                # video decode (first+last frame) is slow, so cache the
+                # rendered path+mtime on the cell — when the user navigates
+                # rows within the same dup group, the cells render the same
+                # files and we only need to update the rim, not redecode.
+                try:
+                    _mt = os.path.getmtime(p)
+                except OSError:
+                    _mt = 0
+                if (getattr(cell, "_thumb_path", None) != p or
+                        getattr(cell, "_thumb_mtime", None) != _mt):
+                    self._set_zone_image(cell, p, fast=False)
+                    cell._thumb_path = p
+                    cell._thumb_mtime = _mt
                 # Border priority: purple = selected; green = video; else none.
                 # Painted via DropZoneLabel.set_rim (paintEvent) instead of QSS
                 # so the project-bg fill in paintEvent doesn't visually erase

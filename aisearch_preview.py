@@ -2876,6 +2876,43 @@ class PreviewWindow(QWidget):
         # Guard: skip if a previous inspect is still running (rapid navigation)
         if getattr(self, '_inspect_running', False):
             return
+        # Memory ceiling — defense in depth. _schedule_inspect already checks
+        # this, but RSS can creep up between schedule time and fire time;
+        # checking here too prevents a CLIP/FACE run from kicking off when
+        # memory is already over the limit.
+        try:
+            import psutil as _psutil
+            _rss_mb = _psutil.Process().memory_info().rss / (1024 * 1024)
+            _env = os.environ.get("AISEARCH_INSPECT_RSS_LIMIT_MB")
+            if _env:
+                _ceiling_mb = float(_env)
+            else:
+                _ceiling_mb = float(self.handler.app.config.get(
+                    "clip_inspect_rss_limit_mb", 1500))
+            if _rss_mb > _ceiling_mb:
+                try:
+                    from aisearch_debug import dbg as _dbg2
+                    _dbg2(f"_on_inspect SKIP at fire-time (rss={_rss_mb:.0f}MB > {_ceiling_mb:.0f}MB)")
+                except Exception:
+                    pass
+                # Flip both AI subsystems to 'never' so the user sees that
+                # the cap was hit and the OFF logo state is shown. They can
+                # raise the ceiling and click the logo to re-enable.
+                _app = self.handler.app
+                _changed = False
+                if _app.config.get("face_inspect_mode") != "never":
+                    _app.config["face_inspect_mode"] = "never"; _changed = True
+                if _app.config.get("clip_inspect_mode") != "never":
+                    _app.config["clip_inspect_mode"] = "never"; _changed = True
+                if _changed:
+                    try:
+                        import aisearch_config as _cfg
+                        _cfg.save_config(_app.config, getattr(_app, "current_project", None))
+                    except Exception:
+                        pass
+                return
+        except Exception:
+            pass
         path = self._attr_path
         if not path or not os.path.exists(path):
             return
