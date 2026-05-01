@@ -2185,6 +2185,24 @@ class AISearchApp(QMainWindow):
         except Exception:
             pass
 
+    def _require_database(self, action_label="this action"):
+        """Show a dialog telling the user they need a project + database
+        for the requested action. Returns True if a database is available
+        (caller should proceed), False if the user needs to set one up
+        (caller should bail). Used by search / dup / any feature that
+        needs the CLIP feature DB."""
+        if self.data and self.data.get("paths"):
+            return True
+        QMessageBox.information(
+            self,
+            _t("No database / データベースなし"),
+            _t(f"{action_label} needs a project with a built database.\n\n"
+               f"Open Settings → Database, register a project with at least one "
+               f"directory, then click Scan to build the database.\n\n"
+               f"設定 → データベースでプロジェクトを登録し、スキャンしてください。"),
+        )
+        return False
+
     def _ai_mode(self):
         """Return current AI inspect mode: 'none' | 'face' | 'clip' | 'both'.
         Derived from face_inspect_mode + clip_inspect_mode (each 'never' or
@@ -3363,6 +3381,8 @@ class AISearchApp(QMainWindow):
     def _find_duplicates(self):
         """Enter dup mode. Load the most recent cached result for the
         current project (any threshold); show nothing if none exist."""
+        if not self._require_database(_t("Duplicate detection / 重複検索")):
+            return
         import glob as _glob
         self._update_mode_buttons("dup")
         self._dup_controls_widget.show()
@@ -4648,6 +4668,11 @@ class AISearchApp(QMainWindow):
             if getattr(self, '_browse_dir', None):
                 self._exit_browse_mode()
             self._update_mode_buttons("search")
+            # Explicit search invocation (button / re-run) without a DB —
+            # tell the user. on_drop has its own preview fallback before
+            # calling here, so this path is reached only by intentional
+            # search triggers, not by drag-drop.
+            self._require_database(_t("Similarity search / 類似検索"))
             return
         # Cancel any previous search by invalidating its token
         if hasattr(self, '_search_cancel'):
