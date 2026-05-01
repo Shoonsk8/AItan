@@ -939,6 +939,280 @@
       "Moan 喘ぎ声"
     ]
   ],
+  "A_Table": [
+    [
+      "00",
+      "(no animal)"
+    ],
+    [
+      "01",
+      "Capybara"
+    ]
+  ],
+  "CL_TopColor": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Skin"
+    ],
+    [
+      "2",
+      "Black"
+    ],
+    [
+      "3",
+      "White"
+    ],
+    [
+      "4",
+      "Red"
+    ],
+    [
+      "5",
+      "Blue"
+    ],
+    [
+      "6",
+      "Green"
+    ],
+    [
+      "7",
+      "Yellow"
+    ],
+    [
+      "8",
+      "Pink"
+    ],
+    [
+      "9",
+      "Purple"
+    ],
+    [
+      "a",
+      "Orange"
+    ],
+    [
+      "b",
+      "Brown"
+    ],
+    [
+      "c",
+      "Gray"
+    ],
+    [
+      "d",
+      "Beige"
+    ],
+    [
+      "e",
+      "Multi"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_Top": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Topless"
+    ],
+    [
+      "2",
+      "T-shirt"
+    ],
+    [
+      "3",
+      "Blouse / Shirt"
+    ],
+    [
+      "4",
+      "Sweater / Knit"
+    ],
+    [
+      "5",
+      "Tank / Crop"
+    ],
+    [
+      "6",
+      "Hoodie"
+    ],
+    [
+      "7",
+      "Jacket"
+    ],
+    [
+      "8",
+      "Coat"
+    ],
+    [
+      "9",
+      "Dress (upper)"
+    ],
+    [
+      "a",
+      "Lingerie / Bra"
+    ],
+    [
+      "b",
+      "Swimsuit Top"
+    ],
+    [
+      "c",
+      "Kimono"
+    ],
+    [
+      "d",
+      "School Uniform"
+    ],
+    [
+      "e",
+      "Costume"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_BotColor": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Skin"
+    ],
+    [
+      "2",
+      "Black"
+    ],
+    [
+      "3",
+      "White"
+    ],
+    [
+      "4",
+      "Red"
+    ],
+    [
+      "5",
+      "Blue"
+    ],
+    [
+      "6",
+      "Green"
+    ],
+    [
+      "7",
+      "Yellow"
+    ],
+    [
+      "8",
+      "Pink"
+    ],
+    [
+      "9",
+      "Purple"
+    ],
+    [
+      "a",
+      "Orange"
+    ],
+    [
+      "b",
+      "Brown"
+    ],
+    [
+      "c",
+      "Gray"
+    ],
+    [
+      "d",
+      "Beige"
+    ],
+    [
+      "e",
+      "Multi"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
+  "CL_Bot": [
+    [
+      "0",
+      "Unknown"
+    ],
+    [
+      "1",
+      "None / Bare"
+    ],
+    [
+      "2",
+      "Jeans"
+    ],
+    [
+      "3",
+      "Trousers"
+    ],
+    [
+      "4",
+      "Shorts"
+    ],
+    [
+      "5",
+      "Skirt (Mini)"
+    ],
+    [
+      "6",
+      "Skirt (Long)"
+    ],
+    [
+      "7",
+      "Leggings"
+    ],
+    [
+      "8",
+      "Sweatpants"
+    ],
+    [
+      "9",
+      "Dress (full)"
+    ],
+    [
+      "a",
+      "Panties"
+    ],
+    [
+      "b",
+      "Bikini Bottom"
+    ],
+    [
+      "c",
+      "Hakama / Kimono"
+    ],
+    [
+      "d",
+      "School Skirt"
+    ],
+    [
+      "e",
+      "Stockings"
+    ],
+    [
+      "f",
+      "Custom"
+    ]
+  ],
   "B_Shape": [
     [
       "0",
@@ -1085,16 +1359,8 @@
       "Sword / 刀"
     ],
     [
-      "f0",
-      "Dildo / ディルド"
-    ],
-    [
-      "f1",
-      "Black Dildo / 黒ディルド"
-    ],
-    [
-      "f2",
-      "Purple Dildo / 紫ディルド"
+      "20",
+      "Magnifier"
     ]
   ],
   "Background_Table": [
@@ -1219,7 +1485,7 @@
       "Moon Surface / 月面"
     ]
   ],
-  "ModelImage": [
+  "ModelImage_Table": [
     [
       "00",
       "Digen"
@@ -1301,7 +1567,7 @@
       "APOB"
     ]
   ],
-  "ModelVideo": [
+  "ModelVideo_Table": [
     [
       "00",
       "Digen"
@@ -1360,6 +1626,10 @@
       "label": "FACE",
       "placeholder": ""
     },
+    "FACE_PW": {
+      "label": "FACE PW",
+      "placeholder": ""
+    },
     "CLIP_HC": {
       "label": "HC Hair",
       "placeholder": ""
@@ -1391,10 +1661,6 @@
     "CLIP_CS": {
       "label": "Camera Shot",
       "placeholder": ""
-    },
-    "FACE_PW": {
-      "label": "FACE PW",
-      "placeholder": ""
     }
   },
   "Watermark": [
@@ -1405,6 +1671,44 @@
     [
       "no_watermark",
       "False"
+    ]
+  ],
+  "audio": [
+    [
+      "none",
+      "None"
+    ],
+    [
+      "aac",
+      "AAC"
+    ],
+    [
+      "mp3",
+      "MP3"
+    ],
+    [
+      "opus",
+      "Opus"
+    ],
+    [
+      "vorbis",
+      "Vorbis"
+    ],
+    [
+      "flac",
+      "FLAC"
+    ],
+    [
+      "ac3",
+      "AC3"
+    ],
+    [
+      "eac3",
+      "E-AC3"
+    ],
+    [
+      "sound",
+      "Sound"
     ]
   ],
   "Variant": [
@@ -1513,14 +1817,16 @@
     "negative_prompt",
     "audio",
     "speech",
-    "Variant"
+    "Variant",
+    "related"
   ],
   "__section_styles__": {
     "P": "id",
     "FACE": "text",
-    "A": "id",
+    "A": "matrix",
     "PI": "id",
     "PW": "id",
+    "FACE_PW": "text",
     "CLIP_HC": "text",
     "CLIP_FA": "text",
     "CLIP_E": "text",
@@ -1549,9 +1855,10 @@
     "seed": "text",
     "positive_prompt": "text",
     "negative_prompt": "text",
+    "audio": "combo",
     "speech": "text",
     "Variant": "taglist",
-    "audio": "combo"
+    "related": "pathlist"
   },
   "__section_groups__": {
     "Head": [
@@ -1560,6 +1867,7 @@
       "A",
       "PI",
       "PW",
+      "FACE_PW",
       "CLIP_HC",
       "CLIP_FA",
       "CLIP_E",
@@ -1599,7 +1907,8 @@
       "negative_prompt",
       "audio",
       "speech",
-      "Variant"
+      "Variant",
+      "related"
     ]
   },
   "__group_order__": [
@@ -1609,11 +1918,8 @@
     "Internal"
   ],
   "__col_names__": {
-    "CL": [
-      "Top Color",
-      "Top Type",
-      "Bottom Color",
-      "Bottom Type"
+    "A": [
+      "A"
     ],
     "E": [
       "Eyes_color",
@@ -1633,6 +1939,12 @@
     "FA": [
       "FaceAngle_direction",
       "FaceAngle_vertical"
+    ],
+    "CL": [
+      "Top Color",
+      "Top Type",
+      "Bottom Color",
+      "Bottom Type"
     ],
     "Tool": [
       "Tool"
@@ -1713,15 +2025,16 @@
     ]
   },
   "__parent_names__": {
-    "CL": "clothing",
     "E": "Eyes",
     "HC": "Hair",
     "SK": "Skin",
     "FA": "FaceAngle",
+    "CL": "clothing",
     "B": "Bust",
     "WH": "WaistHip",
     "PM": "PostureMotion",
-    "CS": "CameraShot"
+    "CS": "CameraShot",
+    "related": "related"
   },
   "__deleted_sections__": [
     "CLIP",
@@ -1851,308 +2164,6 @@
     [
       "b0",
       "120 fps"
-    ]
-  ],
-  "audio": [
-    [
-      "none",
-      "None"
-    ],
-    [
-      "aac",
-      "AAC"
-    ],
-    [
-      "mp3",
-      "MP3"
-    ],
-    [
-      "opus",
-      "Opus"
-    ],
-    [
-      "vorbis",
-      "Vorbis"
-    ],
-    [
-      "flac",
-      "FLAC"
-    ],
-    [
-      "ac3",
-      "AC3"
-    ],
-    [
-      "eac3",
-      "E-AC3"
-    ],
-    [
-      "sound",
-      "Sound"
-    ]
-  ],
-  "CL_Top": [
-    [
-      "0",
-      "Unknown"
-    ],
-    [
-      "1",
-      "None / Topless"
-    ],
-    [
-      "2",
-      "T-shirt"
-    ],
-    [
-      "3",
-      "Blouse / Shirt"
-    ],
-    [
-      "4",
-      "Sweater / Knit"
-    ],
-    [
-      "5",
-      "Tank / Crop"
-    ],
-    [
-      "6",
-      "Hoodie"
-    ],
-    [
-      "7",
-      "Jacket"
-    ],
-    [
-      "8",
-      "Coat"
-    ],
-    [
-      "9",
-      "Dress (upper)"
-    ],
-    [
-      "a",
-      "Lingerie / Bra"
-    ],
-    [
-      "b",
-      "Swimsuit Top"
-    ],
-    [
-      "c",
-      "Kimono"
-    ],
-    [
-      "d",
-      "School Uniform"
-    ],
-    [
-      "e",
-      "Costume"
-    ],
-    [
-      "f",
-      "Custom"
-    ]
-  ],
-  "CL_Bot": [
-    [
-      "0",
-      "Unknown"
-    ],
-    [
-      "1",
-      "None / Bare"
-    ],
-    [
-      "2",
-      "Jeans"
-    ],
-    [
-      "3",
-      "Trousers"
-    ],
-    [
-      "4",
-      "Shorts"
-    ],
-    [
-      "5",
-      "Skirt (Mini)"
-    ],
-    [
-      "6",
-      "Skirt (Long)"
-    ],
-    [
-      "7",
-      "Leggings"
-    ],
-    [
-      "8",
-      "Sweatpants"
-    ],
-    [
-      "9",
-      "Dress (full)"
-    ],
-    [
-      "a",
-      "Panties"
-    ],
-    [
-      "b",
-      "Bikini Bottom"
-    ],
-    [
-      "c",
-      "Hakama / Kimono"
-    ],
-    [
-      "d",
-      "School Skirt"
-    ],
-    [
-      "e",
-      "Stockings"
-    ],
-    [
-      "f",
-      "Custom"
-    ]
-  ],
-  "CL_TopColor": [
-    [
-      "0",
-      "Unknown"
-    ],
-    [
-      "1",
-      "None / Skin"
-    ],
-    [
-      "2",
-      "Black"
-    ],
-    [
-      "3",
-      "White"
-    ],
-    [
-      "4",
-      "Red"
-    ],
-    [
-      "5",
-      "Blue"
-    ],
-    [
-      "6",
-      "Green"
-    ],
-    [
-      "7",
-      "Yellow"
-    ],
-    [
-      "8",
-      "Pink"
-    ],
-    [
-      "9",
-      "Purple"
-    ],
-    [
-      "a",
-      "Orange"
-    ],
-    [
-      "b",
-      "Brown"
-    ],
-    [
-      "c",
-      "Gray"
-    ],
-    [
-      "d",
-      "Beige"
-    ],
-    [
-      "e",
-      "Multi"
-    ],
-    [
-      "f",
-      "Custom"
-    ]
-  ],
-  "CL_BotColor": [
-    [
-      "0",
-      "Unknown"
-    ],
-    [
-      "1",
-      "None / Skin"
-    ],
-    [
-      "2",
-      "Black"
-    ],
-    [
-      "3",
-      "White"
-    ],
-    [
-      "4",
-      "Red"
-    ],
-    [
-      "5",
-      "Blue"
-    ],
-    [
-      "6",
-      "Green"
-    ],
-    [
-      "7",
-      "Yellow"
-    ],
-    [
-      "8",
-      "Pink"
-    ],
-    [
-      "9",
-      "Purple"
-    ],
-    [
-      "a",
-      "Orange"
-    ],
-    [
-      "b",
-      "Brown"
-    ],
-    [
-      "c",
-      "Gray"
-    ],
-    [
-      "d",
-      "Beige"
-    ],
-    [
-      "e",
-      "Multi"
-    ],
-    [
-      "f",
-      "Custom"
     ]
   ]
 }

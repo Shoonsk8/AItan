@@ -43,6 +43,12 @@
     "motion_1st": "Jumping / 跳躍",
     "posture_2nd": ""
   },
+  "A00": {
+    "expression": "(no animal)"
+  },
+  "A01": {
+    "expression": "Capybara"
+  },
   "E00": {
     "colors_1st": "Closed / No eyes / 閉じている／目なし",
     "additional_2nd": "Naked eye / 裸眼"
@@ -568,20 +574,110 @@
     "direction_1st": "Back / 後ろ",
     "vertical_2nd": ""
   },
+  "CL0000": {
+    "top_color_4th": "Unknown",
+    "top_type_3rd": "Unknown",
+    "bot_color_2nd": "Unknown",
+    "bot_type_1st": "Unknown"
+  },
+  "CL0001": {
+    "top_color_4th": "None / Skin",
+    "top_type_3rd": "None / Topless",
+    "bot_color_2nd": "None / Skin",
+    "bot_type_1st": "None / Bare"
+  },
+  "CL0002": {
+    "top_color_4th": "Black",
+    "top_type_3rd": "T-shirt",
+    "bot_color_2nd": "Black",
+    "bot_type_1st": "Jeans"
+  },
+  "CL0003": {
+    "top_color_4th": "White",
+    "top_type_3rd": "Blouse / Shirt",
+    "bot_color_2nd": "White",
+    "bot_type_1st": "Trousers"
+  },
+  "CL0004": {
+    "top_color_4th": "Red",
+    "top_type_3rd": "Sweater / Knit",
+    "bot_color_2nd": "Red",
+    "bot_type_1st": "Shorts"
+  },
+  "CL0005": {
+    "top_color_4th": "Blue",
+    "top_type_3rd": "Tank / Crop",
+    "bot_color_2nd": "Blue",
+    "bot_type_1st": "Skirt (Mini)"
+  },
+  "CL0006": {
+    "top_color_4th": "Green",
+    "top_type_3rd": "Hoodie",
+    "bot_color_2nd": "Green",
+    "bot_type_1st": "Skirt (Long)"
+  },
+  "CL0007": {
+    "top_color_4th": "Yellow",
+    "top_type_3rd": "Jacket",
+    "bot_color_2nd": "Yellow",
+    "bot_type_1st": "Leggings"
+  },
+  "CL0008": {
+    "top_color_4th": "Pink",
+    "top_type_3rd": "Coat",
+    "bot_color_2nd": "Pink",
+    "bot_type_1st": "Sweatpants"
+  },
+  "CL0009": {
+    "top_color_4th": "Purple",
+    "top_type_3rd": "Dress (upper)",
+    "bot_color_2nd": "Purple",
+    "bot_type_1st": "Dress (full)"
+  },
+  "CL000a": {
+    "top_color_4th": "Orange",
+    "top_type_3rd": "Lingerie / Bra",
+    "bot_color_2nd": "Orange",
+    "bot_type_1st": "Panties"
+  },
+  "CL000b": {
+    "top_color_4th": "Brown",
+    "top_type_3rd": "Swimsuit Top",
+    "bot_color_2nd": "Brown",
+    "bot_type_1st": "Bikini Bottom"
+  },
+  "CL000c": {
+    "top_color_4th": "Gray",
+    "top_type_3rd": "Kimono",
+    "bot_color_2nd": "Gray",
+    "bot_type_1st": "Hakama / Kimono"
+  },
+  "CL000d": {
+    "top_color_4th": "Beige",
+    "top_type_3rd": "School Uniform",
+    "bot_color_2nd": "Beige",
+    "bot_type_1st": "School Skirt"
+  },
+  "CL000e": {
+    "top_color_4th": "Multi",
+    "top_type_3rd": "Costume",
+    "bot_color_2nd": "Multi",
+    "bot_type_1st": "Stockings"
+  },
+  "CL000f": {
+    "top_color_4th": "Custom",
+    "top_type_3rd": "Custom",
+    "bot_color_2nd": "Custom",
+    "bot_type_1st": "Custom"
+  },
   "Tool00": {
     "expression": "Nothing / なし"
   },
   "Tool10": {
     "expression": "Sword / 刀"
   },
-  "Toolf0": {
-    "expression": "Dildo / ディルド"
-  },
-  "Toolf1": {
-    "expression": "Black Dildo / 黒ディルド"
-  },
-  "Toolf2": {
-    "expression": "Purple Dildo / 紫ディルド"
+  "Tool20": {
+    "expression": "Magnifier"
   },
   "B00": {
     "shape_1st": "(undefined) / （未定義）",
@@ -801,103 +897,103 @@
     "angle_2nd": "",
     "shot_3rd": "Extreme Wide / 超ワイド"
   },
-  "MDL_img00": {
+  "ModelImage00": {
     "expression": "Digen"
   },
-  "MDL_img01": {
+  "ModelImage01": {
     "expression": "Image Motion"
   },
-  "MDL_img02": {
+  "ModelImage02": {
     "expression": "FLUX.2 [klein]"
   },
-  "MDL_img03": {
+  "ModelImage03": {
     "expression": "Nano Banana Pro"
   },
-  "MDL_img04": {
+  "ModelImage04": {
     "expression": "Nano Banana 2"
   },
-  "MDL_img05": {
+  "ModelImage05": {
     "expression": "Seedream 5.0 Lite"
   },
-  "MDL_img06": {
+  "ModelImage06": {
     "expression": "Nano Banana"
   },
-  "MDL_img07": {
+  "ModelImage07": {
     "expression": "Z-Image"
   },
-  "MDL_img08": {
+  "ModelImage08": {
     "expression": "GPT Image 1.5"
   },
-  "MDL_img09": {
+  "ModelImage09": {
     "expression": "FLUX.2 Dev"
   },
-  "MDL_img0a": {
+  "ModelImage0a": {
     "expression": "Sora Image"
   },
-  "MDL_img0b": {
+  "ModelImage0b": {
     "expression": "FLUX Dev"
   },
-  "MDL_img10": {
+  "ModelImage10": {
     "expression": "Gemini"
   },
-  "MDL_img13": {
+  "ModelImage13": {
     "expression": "Nano Banana Pro"
   },
-  "MDL_img14": {
+  "ModelImage14": {
     "expression": "Nano Banana 2"
   },
-  "MDL_img20": {
+  "ModelImage20": {
     "expression": "Screen Shot"
   },
-  "MDL_img80": {
+  "ModelImage80": {
     "expression": "Promptchan"
   },
-  "MDL_img90": {
+  "ModelImage90": {
     "expression": "Fanvue"
   },
-  "MDL_imga0": {
+  "ModelImagea0": {
     "expression": "Nastia"
   },
-  "MDL_imgb0": {
+  "ModelImageb0": {
     "expression": "APOB"
   },
-  "MDL00": {
+  "ModelVideo00": {
     "expression": "Digen"
   },
-  "MDL01": {
+  "ModelVideo01": {
     "expression": "Real Motion 2.6"
   },
-  "MDL02": {
+  "ModelVideo02": {
     "expression": "Real Motion 2.6 Pro"
   },
-  "MDL03": {
+  "ModelVideo03": {
     "expression": "Real Motion 2.6 Remix"
   },
-  "MDL04": {
+  "ModelVideo04": {
     "expression": "Real Motion Turbo"
   },
-  "MDL05": {
+  "ModelVideo05": {
     "expression": "Real Motion 3.1"
   },
-  "MDL06": {
+  "ModelVideo06": {
     "expression": "Real Motion 3.1 Turbo"
   },
-  "MDL07": {
+  "ModelVideo07": {
     "expression": "Google Veo 3.1 Fast"
   },
-  "MDL08": {
+  "ModelVideo08": {
     "expression": "Grok Video"
   },
-  "MDL09": {
+  "ModelVideo09": {
     "expression": "Runway 4.5"
   },
-  "MDL10": {
+  "ModelVideo10": {
     "expression": "Gemini"
   },
-  "MDL17": {
+  "ModelVideo17": {
     "expression": "Google Veo 3.1 Fast"
   },
-  "MDL90": {
+  "ModelVideo90": {
     "expression": "Promptchan"
   }
 }
