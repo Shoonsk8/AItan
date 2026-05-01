@@ -8,6 +8,15 @@ import os, sys, importlib.util
 import faulthandler
 faulthandler.enable()
 
+# Silence specific noisy warnings that don't reflect any real problem:
+# - PIL's palette-PNG nag fires once per loaded palette image (icons,
+#   thumbnails) and floods stderr; the images decode correctly anyway.
+# - face_recognition still uses the deprecated pkg_resources API; we can't
+#   fix that from our side, so just hide the deprecation chatter.
+import warnings
+warnings.filterwarnings("ignore", message=".*Palette images with Transparency.*")
+warnings.filterwarnings("ignore", message=".*pkg_resources is deprecated.*")
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Suppress libavformat/libwebp warnings about malformed EXIF segments in
