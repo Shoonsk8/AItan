@@ -90,8 +90,9 @@ class _DbMixin:
                 self.dir_listbox.setRowCount(0)
                 self._fill_dirs(text, False)
             else:
-                # New project name — clear listbox so user adds fresh dirs
-                self.dir_listbox.setRowCount(0)
+                # New project name — preserve any directories the user has
+                # already added. The previous behavior cleared the listbox on
+                # every keystroke, wiping the user's setup as they typed.
                 self._update_generate_btn()
         self.new_proj_entry.textChanged.connect(_on_proj_name_changed)
         btn_new_proj = QPushButton(_t("Register / 登録"))
