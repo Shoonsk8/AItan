@@ -38,3 +38,14 @@ Most recent entries at the top. Each entry: file:line — what changed.
 ---
 
 *Format: I append to the top of this file when I make code changes. Skim this section after a session to verify what was touched.*
+
+## 2026-04-30 (later)
+
+- `aisearch_preview.py:eventFilter` — wheel events on scroll_area viewport / label now forwarded to `PreviewLabel.wheelEvent` and consumed. Was: when zoomed-in image showed scrollbars, QScrollArea ate the wheel event for content scrolling, so wheel-up zoom stopped working after first step ("shrink works, expand doesn't").
+- `aisearch_settings_filename.py:300-313` — dedupe ModelImage/ModelVideo dupes in rule-attribute dropdown. Was: `ModelImage` (default) + `ModelImage_Table` (project) both shown, both rendering as "ModelImage". Now `_Table` variants are filtered out when the bare key exists.
+- `aisearch_app.py:_sync_dup_delete_btn` — count only VISIBLE selected rows for the Delete button. Was: hidden rows (collapsed groups, Hide pictures/videos filter) inflated the count, so user saw 'Delete 320' when only ~50 visible.
+- `aisearch_app.py:_delete_dups_by_rule` — same filter applied to the actual delete. Hidden rows are now protected from rule-based delete, not just hidden from view.
+- `aisearch_app.py:_find_duplicates` — recall logic now looks for ANY saved `dups_<PROJECT>_*.json` (most recent mtime wins), not the one matching the current spinner. Was: scan saved at 99%, spinner left at 70% → recall failed → empty dup view. Now spinner syncs to the loaded cache's actual threshold.
+- `aisearch_app.py:_load_dup_results` — honors `_dup_cache_path_override` so the caller can pick which cache file to load.
+- `aisearch_app.py:_save_dup_results` + `_rebuild_dup_display_data` — guard against running outside dup mode. Was: when in search/browse mode, `handle_preview → _remove_missing_file → _rebuild_dup_display_data → _save_dup_results` ran on a non-dup table. UserRole+1 (sim) and UserRole+2 (label) are unset on non-dup rows, so all rows defaulted to sim=1.0 + same label, merging into one giant fake group that overwrote the real cache. Now both functions early-return unless `config["last_mode"] == "dup"` AND the column-0 header reads "Group". Drops rows lacking the metadata instead of inventing defaults.
+- `aisearch_app.py:_replace_dup_display_path` — new helper that swaps `old_path → new_path` in `_dup_display_data` groups. Called from auto-rename navigation hook (preview) and Apply Rules tick. Was: after a rename in dup mode, `_dup_display_data` still held the old path while the table had the new one, so `if path in g_paths` (filmstrip thumb selector) failed → fallback showed only the top thumbnail. Now the in-memory dup data stays consistent with table + filesystem.

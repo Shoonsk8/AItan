@@ -3229,23 +3229,32 @@ class AISearchApp(QMainWindow):
         self._dup_poll_timer.start(200)
 
     def _find_duplicates(self):
-        """Enter dup mode. Load cached results if available; otherwise just show controls.
-        Actual scan is triggered by the ⟳ Scan button."""
+        """Enter dup mode. Load the most recent cached result for the
+        current project (any threshold); show nothing if none exist."""
+        import glob as _glob
         self._update_mode_buttons("dup")
         self._dup_controls_widget.show()
         self.config["last_mode"] = "dup"
-        if os.path.exists(self._dup_file_path()):
-            # Cache exists — _load_dup_results syncs spinner to the cache's
-            # threshold so the displayed number always matches the result.
-            self._load_dup_results(update_spinner=False)
+        # Find any saved dup file for this project, regardless of which
+        # threshold the spinner is currently showing. The spinner gets
+        # synced to whichever file we actually load. Without this, scans
+        # saved at one threshold are invisible when the user opens dup
+        # mode with the spinner on a different value.
+        proj = self.current_project or ""
+        cache_files = _glob.glob(os.path.join(
+            attrs_mod.DATA_DIR, f"dups_{proj}_*.json"))
+        # Pick the most recently modified one — that's what the user most
+        # recently produced, even if they scrolled the spinner since.
+        cache_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        if cache_files:
+            self._dup_cache_path_override = cache_files[0]
+            self._load_dup_results(update_spinner=True)
+            self._dup_cache_path_override = None
         else:
-            # No cache for this project — clear any leftover table content
-            # from a previous mode so the user doesn't see stale rows. The
-            # spinner keeps the user's saved preference; results will come
-            # from clicking ⟳ Scan.
             self.table.setRowCount(0)
             self._dup_display_data = None
-            self.lbl_dup_status.setText(_t("Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
+            self.lbl_dup_status.setText(_t(
+                "Press ⟳ Scan to find duplicates. / ⟳スキャンを押して重複を検索"))
         # Ensure the first thumb is populated even if no row is selected yet —
         # show the top-of-list image so the section isn't blank.
         if self.table.rowCount() > 0:
@@ -3912,13 +3921,19 @@ class AISearchApp(QMainWindow):
 
     def _sync_dup_delete_btn(self):
         """Reflect the current visible-selected row count on the Delete
-        button. Connected to the selection model so manual Ctrl+click
-        adjustments after a rule fires update the label live."""
+        button. Counts ONLY visible rows — hidden rows (collapsed groups,
+        Hide pictures/videos filter) get dropped from the count so the
+        user doesn't see 'Delete 320' when only 50 are visible.
+        Connected to the selection model so manual Ctrl+click adjustments
+        after a rule fires update the label live."""
         if not hasattr(self, "btn_dup_delete"):
             return
         sel_paths = set()
         for idx in self.table.selectionModel().selectedRows():
-            p = self.table.get_row_path(idx.row())
+            r = idx.row()
+            if self.table.isRowHidden(r):
+                continue
+            p = self.table.get_row_path(r)
             if p:
                 sel_paths.add(p)
         n = len(sel_paths)
@@ -3930,13 +3945,16 @@ class AISearchApp(QMainWindow):
             self.btn_dup_delete.setEnabled(False)
 
     def _delete_dups_by_rule(self):
-        """Delete every file in the current table selection (which a rule
-        check seeded, and which Ctrl+click may have refined). Prompts for
-        confirmation, then removes from disk + attrs_data + app.data['paths']
-        and re-runs the dup display."""
+        """Delete every file in the current VISIBLE table selection (rule
+        marks + Ctrl+click refinements). Skips hidden rows so collapsed
+        groups and the Hide pictures/videos filter actually protect their
+        files instead of silently being included in the delete."""
         sel_paths = set()
         for idx in self.table.selectionModel().selectedRows():
-            p = self.table.get_row_path(idx.row())
+            r = idx.row()
+            if self.table.isRowHidden(r):
+                continue
+            p = self.table.get_row_path(r)
             if p:
                 sel_paths.add(p)
         marks = list(sel_paths)
@@ -4026,6 +4044,13 @@ class AISearchApp(QMainWindow):
     def _save_dup_results(self):
         if not self._dup_display_data:
             return
+        # Only save when actually in dup mode. Otherwise we can clobber a
+        # good cache with corrupted data — when called from a non-dup
+        # context, _dup_display_data may have been rebuilt from a non-dup
+        # table where sim/label UserRole data is missing, producing one
+        # giant group with sim=1.0 that overwrites the legitimate scan.
+        if self.config.get("last_mode") != "dup":
+            return
         # Save under the threshold that PRODUCED the data, NOT whatever the
         # spinner happens to read right now. The spinner can drift away
         # from the actual scan (user changes it without re-scanning) — if
@@ -4050,7 +4075,9 @@ class AISearchApp(QMainWindow):
             json.dump(data, f, ensure_ascii=False)
 
     def _load_dup_results(self, update_spinner=True):
-        name = self._dup_file_path()
+        # Allow caller to override the path so we can load whatever cache
+        # exists for the project (not just whatever matches the spinner).
+        name = getattr(self, "_dup_cache_path_override", None) or self._dup_file_path()
         if not os.path.exists(name):
             return
         try:
@@ -4097,14 +4124,47 @@ class AISearchApp(QMainWindow):
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._update_mode_buttons("dup")
 
+    def _replace_dup_display_path(self, old_path, new_path):
+        """Swap old_path → new_path in every group of _dup_display_data
+        so dup-mode lookups (e.g. handle_preview's `path in g_paths`)
+        keep working after a rename. Called from every rename site so the
+        in-memory dup data stays consistent with the table + filesystem."""
+        if not self._dup_display_data or old_path == new_path:
+            return
+        for grp in self._dup_display_data:
+            for m in grp:
+                if isinstance(m, dict) and m.get("path") == old_path:
+                    m["path"] = new_path
+
     def _rebuild_dup_display_data(self):
-        """Rebuild _dup_display_data from current table rows (after deletions)."""
+        """Rebuild _dup_display_data from current table rows (after deletions).
+        Only meaningful in dup mode — in other modes the table doesn't carry
+        the per-row sim score (UserRole+1) or group label (UserRole+2), and
+        falling back to text/1.0 silently merges everything into one big
+        bogus group. Skip cleanly when not in dup mode."""
+        if self.config.get("last_mode") != "dup":
+            return
+        # Header check belt-and-suspenders: even within dup mode, a
+        # transient header swap could leave non-dup data in column 0.
+        hdr0 = self.table.horizontalHeaderItem(0)
+        if not hdr0 or not hdr0.text().startswith("Group"):
+            return
         groups = {}
         order  = []
         for r in range(self.table.rowCount()):
-            label = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole + 2) or self.table.item(r, 0).text().strip()
-            path  = self.table.get_row_path(r)
-            sim   = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole + 1) or 1.0
+            it0 = self.table.item(r, 0)
+            if not it0:
+                continue
+            label = it0.data(Qt.ItemDataRole.UserRole + 2)
+            sim   = it0.data(Qt.ItemDataRole.UserRole + 1)
+            # If the row truly lacks the dup-mode metadata, drop it instead
+            # of inventing a group. This keeps stray non-dup rows out of
+            # the dup data structure.
+            if not label or sim is None:
+                continue
+            path = self.table.get_row_path(r)
+            if not path:
+                continue
             if label not in groups:
                 groups[label] = []
                 order.append(label)
@@ -4858,6 +4918,8 @@ class AISearchApp(QMainWindow):
                             self.table.set_row_path(row, new_path)
                         except Exception:
                             pass
+                        # Keep dup-mode group data consistent.
+                        self._replace_dup_display_path(path, new_path)
                 except Exception:
                     pass
         self._apply_rules_idx = end

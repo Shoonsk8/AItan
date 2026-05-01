@@ -606,6 +606,15 @@ class PreviewWindow(QWidget):
         """Catch mouse press/release and drops on the scroll area viewport and label."""
         # --- Scroll area / label events ---
         if obj is self.scroll_area.viewport() or obj is self.label:
+            # Wheel events: when the image is bigger than the viewport
+            # (scrollbars active), QScrollArea consumes wheel events to
+            # scroll content. That stole the "expand" direction from the
+            # zoom handler — wheel-up only worked until scrollbars showed
+            # up, then it was eaten by the scroll area. Forward all wheel
+            # events to PreviewLabel.wheelEvent so zoom always wins.
+            if event.type() == QEvent.Type.Wheel:
+                self.label.wheelEvent(event)
+                return True
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.MouseButton.LeftButton:
                     self._nav_press_pos = event.globalPosition().toPoint()
@@ -1574,6 +1583,15 @@ class PreviewWindow(QWidget):
                     if _new and _new != _old:
                         if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
                             _app.data["paths"][_app.data["paths"].index(_old)] = _new
+                        # Keep dup-mode group data consistent so lookups
+                        # like `path in g_paths` keep matching after a
+                        # rename (otherwise the strip falls back to just
+                        # the top thumbnail).
+                        try:
+                            if hasattr(_app, "_replace_dup_display_path"):
+                                _app._replace_dup_display_path(_old, _new)
+                        except Exception:
+                            pass
                         # Find the table row holding _old (not _current_row,
                         # which may already have moved to the new file by
                         # this point during navigation) and update it.

@@ -297,14 +297,22 @@ class _FilenameMixin:
         # Tag groups that are user-facing (not coded-field sub-tables or internal keys)
         # Include both global and project-specific groups; allow matrix style too
         _tag_like_styles = {"taglist", "boolean", "matrix", "radio"}
-        _tag_groups_flat = sorted(set(
+        _tag_groups_raw = set(
             grp for grp in list(_am.TAG_GROUPS) + list(_proj_tg)
             if not grp.startswith("__")
             and not any(grp == p or grp.startswith(f"{p}_") for p in _coded_prefixes)
             and (grp in _proj_sec_styles and _proj_sec_styles[grp] in _tag_like_styles
                  or _am.TAG_GROUPS.get(grp) is not None
                  or _proj_tg.get(grp) is not None)
-        ))
+        )
+        # Dedupe: when both `Foo` (default) and `Foo_Table` (project)
+        # exist, they render with the same display name via _grp_display
+        # and produce two identical-looking rows in the dropdown. Prefer
+        # the bare form when present and drop the `_Table` sibling.
+        _tag_groups_flat = sorted(
+            grp for grp in _tag_groups_raw
+            if not (grp.endswith("_Table") and grp[:-6] in _tag_groups_raw)
+        )
 
         _ALL_FIELDS = [("P", "Person", 3)] + list(_am.CODED_FIELDS)
 
