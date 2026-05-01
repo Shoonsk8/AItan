@@ -4630,6 +4630,17 @@ class AISearchApp(QMainWindow):
         # manager still owns focus; the timer fires after the drop completes.
         QTimer.singleShot(0, self.raise_)
         QTimer.singleShot(0, self.activateWindow)
+        # No database yet → similarity search isn't possible, but preview /
+        # tagging / attribute editing still are. Open the file in the preview
+        # window so a fresh user can do something on first drop without
+        # being forced through Settings → Register → Scan first.
+        if not self.data:
+            try:
+                if hasattr(self, "preview_handler") and self.preview_handler:
+                    self.preview_handler.show(path)
+            except Exception:
+                pass
+            return
         self.run_search(path)
 
     def run_search(self, p):
