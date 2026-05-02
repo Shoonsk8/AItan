@@ -5827,6 +5827,15 @@ class AISearchApp(QMainWindow):
                     if os.path.normpath(p) == os.path.normpath(src_path):
                         self.data["paths"][i] = final_path; db_changed = True; break
 
+            # If the query file (row 0 in search mode) was just moved, update
+            # query_path to the new location. Without this, right-arrow moves
+            # of remaining rows would target the old folder, even though the
+            # query file (and the top thumbnail) now lives somewhere else.
+            if (self.query_path
+                    and os.path.normpath(os.path.abspath(self.query_path))
+                        == os.path.normpath(src_path)):
+                self.query_path = final_path
+
             self._update_row(src_row, src_path, final_path, overwrite, dest_path)
 
         self._post_move_dup_cleanup()
