@@ -267,6 +267,16 @@ class FileTable(QTableWidget):
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.viewport().installEventFilter(self)
+        # Force a clear, opaque selection highlight that overrides any
+        # per-item background colors (score gradients, dup group tints).
+        # Without this, items with explicit setBackground() bleed through
+        # the selection and the highlight is barely visible — only on
+        # cells that happen to have no explicit bg (like the Path column
+        # in dup mode), giving the impression that "selection only works
+        # on Path".
+        self.setStyleSheet(
+            "QTableWidget::item:selected { "
+            "background-color: #4488dd; color: white; }")
 
     def get_row_path(self, row):
         item = self.item(row, 0)
