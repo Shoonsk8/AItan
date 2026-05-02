@@ -331,12 +331,11 @@ class FileTable(QTableWidget):
             # (Ctrl+click toggles a row, Shift+click extends the range).
             # Without this fall-through, Ctrl+click on a selected row went
             # into the "collapse to single row" branch below and wiped the
-            # rest of the multi-selection. Use int() because QFlags &
-            # truthiness is unreliable across PyQt6 builds.
-            _mods = int(event.modifiers())
-            _ctrl = int(Qt.KeyboardModifier.ControlModifier)
-            _shift = int(Qt.KeyboardModifier.ShiftModifier)
-            if _mods & (_ctrl | _shift):
+            # rest of the multi-selection. Use bool() on the bitwise AND
+            # — int(KeyboardModifier) raises TypeError in PyQt6.
+            _mods = event.modifiers()
+            if (bool(_mods & Qt.KeyboardModifier.ControlModifier)
+                    or bool(_mods & Qt.KeyboardModifier.ShiftModifier)):
                 super().mousePressEvent(event)
                 return
             sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
