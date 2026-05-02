@@ -316,6 +316,17 @@ class FileTable(QTableWidget):
             self._drag_src_row   = row
             self._drag_press_pos = event.pos()
             self._drag_active    = False
+            # Let Qt handle Ctrl/Shift modifier clicks natively — its
+            # ExtendedSelection behavior already does the right thing
+            # (Ctrl+click toggles a row, Shift+click extends the range).
+            # Without this fall-through, Ctrl+click on a selected row went
+            # into the "collapse to single row" branch below and wiped the
+            # rest of the multi-selection.
+            _mods = event.modifiers()
+            if _mods & (Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.ShiftModifier):
+                super().mousePressEvent(event)
+                return
             sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
             if row >= 0 and row in sel_rows:
                 if self._tab_held:
