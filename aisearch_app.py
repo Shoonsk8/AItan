@@ -264,6 +264,7 @@ class FileTable(QTableWidget):
         self._drag_active     = False
         self._tab_held        = False
         self._collapse_to_row = -1
+        self._suppress_release_select = False
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.viewport().installEventFilter(self)
@@ -353,12 +354,15 @@ class FileTable(QTableWidget):
                     # selection: keep the multi-selection intact. Just move
                     # the current/anchor index to the clicked row without
                     # changing what's selected. Drag still operates on the
-                    # whole multi-row set. Previously this collapsed to a
-                    # single row on release, which made the multi-selection
-                    # disappear the moment the user clicked one to inspect.
+                    # whole multi-row set. Set _suppress_release_select so
+                    # mouseReleaseEvent skips QAbstractItemView's deferred
+                    # collapse-to-single-row that ExtendedSelection mode
+                    # otherwise applies for clicks on already-selected items.
                     index = self.model().index(row, 0)
                     self.selectionModel().setCurrentIndex(
                         index, QItemSelectionModel.SelectionFlag.NoUpdate)
+                    self._suppress_release_select = True
+                    event.accept()
                     return
         super().mousePressEvent(event)
 
@@ -385,9 +389,19 @@ class FileTable(QTableWidget):
             sel_rows = [idx.row() for idx in self.selectionModel().selectedRows()]
             if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
                 self.move_callback(sel_rows, tgt_row)
+        # When mousePressEvent already handled the click (multi-selected
+        # row, no drag) we must NOT call super().mouseReleaseEvent — Qt's
+        # default release handler in ExtendedSelection mode will otherwise
+        # collapse the selection to the clicked row, undoing the press
+        # handler's "keep multi-selection" decision.
+        _suppress = self._suppress_release_select
         self._drag_src_row    = None
         self._drag_active     = False
         self._collapse_to_row = -1
+        self._suppress_release_select = False
+        if _suppress:
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def eventFilter(self, obj, event):
