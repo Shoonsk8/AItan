@@ -348,17 +348,25 @@ class FileTable(QTableWidget):
 
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_src_row is not None:
+            sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
+            press_on_selected = self._drag_src_row in sel_rows
             if (event.pos() - self._drag_press_pos).manhattanLength() > 5:
                 self._drag_active = True
             if self._drag_active:
-                item     = self.itemAt(event.pos())
-                tgt_row  = self.row(item) if item else -1
-                sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
+                item    = self.itemAt(event.pos())
+                tgt_row = self.row(item) if item else -1
                 if tgt_row >= 0 and tgt_row not in sel_rows:
                     self.setCursor(QCursor(Qt.CursorShape.DragMoveCursor))
                 else:
                     self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 return   # don't let Qt change selection during drag
+            # Below the 5-pixel drag threshold but the press WAS on a
+            # selected row → suppress super() anyway. Qt's default move
+            # handler in ExtendedSelection mode would rubberband from the
+            # press point and immediately wipe the multi-selection on the
+            # very first pixel of movement.
+            if press_on_selected:
+                return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
