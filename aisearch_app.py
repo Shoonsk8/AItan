@@ -349,9 +349,13 @@ class FileTable(QTableWidget):
                         QItemSelectionModel.SelectionFlag.Rows)
                     return
                 if len(sel_rows) > 1:
-                    # Plain click on selected row: defer collapse to release
-                    # (so drag can still operate on the full multi-selection)
-                    self._collapse_to_row = row
+                    # Plain click on a row that's already part of a multi-
+                    # selection: keep the multi-selection intact. Just move
+                    # the current/anchor index to the clicked row without
+                    # changing what's selected. Drag still operates on the
+                    # whole multi-row set. Previously this collapsed to a
+                    # single row on release, which made the multi-selection
+                    # disappear the moment the user clicked one to inspect.
                     index = self.model().index(row, 0)
                     self.selectionModel().setCurrentIndex(
                         index, QItemSelectionModel.SelectionFlag.NoUpdate)
@@ -381,15 +385,6 @@ class FileTable(QTableWidget):
             sel_rows = [idx.row() for idx in self.selectionModel().selectedRows()]
             if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
                 self.move_callback(sel_rows, tgt_row)
-        elif not self._drag_active and self._collapse_to_row >= 0:
-            # Plain click on multi-selected row with no drag: collapse to single row
-            index = self.model().index(self._collapse_to_row, 0)
-            self.selectionModel().select(
-                index,
-                QItemSelectionModel.SelectionFlag.ClearAndSelect |
-                QItemSelectionModel.SelectionFlag.Rows)
-            self.selectionModel().setCurrentIndex(
-                index, QItemSelectionModel.SelectionFlag.NoUpdate)
         self._drag_src_row    = None
         self._drag_active     = False
         self._collapse_to_row = -1
