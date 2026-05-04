@@ -2547,8 +2547,32 @@ class AISearchApp(QMainWindow):
         if not self.data:
             # Fresh project — initialize empty data structure so watch can work
             self.data = {"paths": [], "embeddings": __import__("torch").empty((0, logic.EMBEDDING_DIM)).to(logic.device)}
-        # Skip if a settings scan/rename is in progress
-        if getattr(self, '_watcher_paused', False): return
+        # Skip if a settings scan/rename is in progress. But first: if a
+        # truly new file has landed in a watch_dir, ask the running scan
+        # to stop. Long Updates would otherwise hold the new file
+        # unindexed for hours; the scan saves a checkpoint on stop, so
+        # progress isn't lost, and the next Update click resumes.
+        if getattr(self, '_watcher_paused', False):
+            try:
+                import aisearch_config as _cfg_mod
+                _wdirs = [d for d in _cfg_mod.load_config().get("watch_dirs", []) if os.path.isdir(d)]
+                _exts  = logic.EXT_IMG + logic.EXT_VID
+                _known = {os.path.normpath(p) for p in self.data.get("paths", [])}
+                _has_new = False
+                for _d in _wdirs:
+                    for _f in os.listdir(_d):
+                        if _f.lower().endswith(_exts):
+                            _fp = os.path.normpath(os.path.join(_d, _f))
+                            if _fp not in _known:
+                                _has_new = True; break
+                    if _has_new: break
+                if _has_new:
+                    _sw = getattr(self, '_settings_win', None)
+                    if _sw is not None and getattr(_sw, '_is_scanning', False):
+                        _sw._unified_stop()
+            except Exception:
+                pass
+            return
         # watch_dirs is global — read from global config regardless of current project
         import aisearch_config as _cfg_mod
         _global_cfg = _cfg_mod.load_config()

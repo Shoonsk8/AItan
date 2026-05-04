@@ -696,6 +696,12 @@ class _DbMixin:
         self.proj_combo.setEnabled(not locked)
         # Pause/resume the watch-folder scanner so it doesn't fire mid-rename/scan
         self.app._watcher_paused = locked
+        # On unpause, kick a watch scan immediately. Otherwise files dropped
+        # in watch_dirs during the Update sit unindexed until the next 30 s
+        # fallback tick — and if the watcher already requested a stop, those
+        # files are exactly what the user wants picked up first.
+        if not locked:
+            QTimer.singleShot(0, self.app._scan_new_files)
 
     def _show_failed_files(self, failed):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QLabel
