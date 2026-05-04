@@ -435,6 +435,12 @@ class AISearchApp(QMainWindow):
         self.setAcceptDrops(True)
         self.setWindowTitle(f"あいたん AItan — AI Media Search  Ver {VERSION}")
         self.resize(1500, 980)
+        # Auto-hide the status bar when it has nothing to say. Empty bar
+        # was eating vertical space at the bottom of the window even when
+        # no scan / search was in progress.
+        _sb = self.statusBar()
+        _sb.setVisible(False)
+        _sb.messageChanged.connect(lambda m: _sb.setVisible(bool(m)))
 
         # Load global config first to get last_project, then reload per-project
         _global_cfg    = cfg.load_config()
