@@ -2,6 +2,24 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-04 — v2.1
+
+### Version
+- `aisearch_app.py:25`, `aisearch_settings.py:15`, `aisearch_front_page.py:11`, `aisearch_preview.py:17` — `VERSION = "2.1"`.
+- `aisearch_attrs.py:1433` — `_AITAN_VERSION = "2.1"` (data-format stamp).
+
+### Table selection (PyQt6)
+- `aisearch_app.py:FileTable` — stopped overriding Qt's native click handling; rebuilt around it. Was: custom mousePressEvent was clearing/recreating selections and fighting Qt's own logic, producing a long tail of corner-case bugs (multi-select collapsing on plain click, Ctrl+click toggling away neighbors, rubberband appearing on drag-from-selected-row).
+- `aisearch_app.py:FileTable.mousePressEvent` — plain click on a multi-selected row keeps the selection (used to start a drag); Ctrl+click toggles only that row; release-side collapse suppressed when multiple rows are selected.
+- `aisearch_app.py:FileTable.mousePressEvent` — rubberband suppressed when drag begins on an already-selected row.
+- `aisearch_app.py:FileTable` — modifier check now uses `bool(modifiers & Qt.KeyboardModifier.ControlModifier)`. PyQt6 raises on `int(KeyboardModifierCombination)`, which broke Ctrl+/Shift+click.
+- `aisearch_app.py:FileTable` — explicit selection highlight color in stylesheet so selected rows are visibly highlighted regardless of the active palette.
+
+### Robustness without a project / database
+- `aisearch_app.py` — drop-to-preview path works when no project is loaded (no DB, no attrs file). Used to crash on missing project state.
+- `aisearch_app.py` — features that require a DB now warn the user with a friendly dialog instead of failing silently or tracebacking.
+- `aisearch_app.py` — `query_path` is updated when the query file is moved via drag-drop, so subsequent searches use the new location.
+
 ## 2026-05-01 — v2.0
 
 ### Stability
