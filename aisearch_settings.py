@@ -25,7 +25,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
             Qt.WindowType.WindowMaximizeButtonHint)
         self.app = app_instance
         self.setWindowTitle(_lang_label(f"Settings & DB Maintenance - Ver {VERSION} / 設定 & DBメンテナンス - Ver {VERSION}"))
-        self.resize(800, 850)
+        self.resize(1100, 850)
 
         self._is_scanning = False
         self._stop_scan = False
