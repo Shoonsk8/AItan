@@ -613,7 +613,7 @@ class AISearchApp(QMainWindow):
         self.lbl_project.setStyleSheet(f"font-size: {pfs}pt; font-weight: bold;")
         info_layout.addWidget(self.lbl_project)
 
-        self.lbl_base_dir = QLabel(_t("Base:  / ベース： "))
+        self.lbl_base_dir = QLabel("")
         self.lbl_base_dir.setWordWrap(True)
         # Show each base dir on its own line.
         self.lbl_base_dir.setTextFormat(Qt.TextFormat.PlainText)
@@ -1167,20 +1167,8 @@ class AISearchApp(QMainWindow):
         # Top bar
         self.btn_settings.setText(_t("⚙ SETTINGS / ⚙ 設定"))
         self.lbl_proj_hdr.setText(_t("PROJECT: / プロジェクト："))
-        # lbl_base_dir is rebuilt by _set_base_dir_label; just force a refresh by reading current label
-        _base = ""
-        if hasattr(self, '_base_dir_label_value'):
-            _base = self._base_dir_label_value
-        if _base:
-            # _base is already EN-indented; rebuild JA indent for the JA half
-            _lines = _base.split("\n")
-            # Strip leading EN indent ("Base: " = 6 spaces) on lines 2+
-            _stripped = [_lines[0]] + [ln.lstrip(" ") for ln in _lines[1:]]
-            _indent_ja = " " * len("ベース： ")
-            _ja_label = ("\n" + _indent_ja).join(_stripped)
-            self.lbl_base_dir.setText(_t(f"Base: {_base} / ベース： {_ja_label}"))
-        else:
-            self.lbl_base_dir.setText(_t("Base:  / ベース： "))
+        _base = getattr(self, '_base_dir_label_value', "")
+        self.lbl_base_dir.setText(_base)
         # Mode buttons
         self.btn_mode_search.setText(_t("🔍 Search / 🔍 検索"))
         self.btn_mode_search.setToolTip(_t("Switch to Search mode / 検索モードに切り替え"))
@@ -2459,18 +2447,13 @@ class AISearchApp(QMainWindow):
 
         # One base dir per line so long lists don't truncate or stretch the
         # header. The label has setWordWrap(True) so it lays out vertically.
-        # Subsequent lines get an "Base: "-width indent so paths line up
-        # under the first one rather than starting at column zero.
         if self.base_dirs:
-            _indent = " " * len("Base: ")
-            label_en = ("\n" + _indent).join(self.base_dirs)
-            _indent_ja = " " * len("ベース： ")
-            label_ja = ("\n" + _indent_ja).join(self.base_dirs)
-            self._base_dir_label_value = label_en
-            self.lbl_base_dir.setText(_t(f"Base: {label_en} / ベース： {label_ja}"))
+            label = "\n".join(self.base_dirs)
+            self._base_dir_label_value = label
+            self.lbl_base_dir.setText(label)
         else:
             self._base_dir_label_value = ""
-            self.lbl_base_dir.setText(_t("Base:  / ベース： "))
+            self.lbl_base_dir.setText("")
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self.table.setSortingEnabled(True)
