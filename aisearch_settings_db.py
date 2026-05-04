@@ -592,15 +592,24 @@ class _DbMixin:
                     self._refresh_list()
                     self.proj_combo.setCurrentText(name)
                     self.app.set_project(name)
-                    self._active_scan_btn.setText("Stopped")
+                    # Watcher-triggered stop is silent — it'll auto-resume,
+                    # so no Settings popup, no Stopped dialog, no failed-files
+                    # / face-errors lists. Manual Stop click still surfaces
+                    # everything as before.
+                    _silent = getattr(self.app, '_scan_paused_by_watcher', False)
+                    if _silent:
+                        self._active_scan_btn.setText("Paused…")
+                    else:
+                        self._active_scan_btn.setText("Stopped")
                     sb.clearMessage()
-                    self.show(); self.raise_()
-                    face_info = f"\nFaces detected: {faces_found}" if faces_found or face_errors else ""
-                    err_info  = f"\nFace errors: {len(face_errors)}" if face_errors else ""
-                    QMessageBox.information(self, "Stopped",
-                        f"Scan stopped and saved.\nAdded so far: {added}{face_info}{err_info}")
-                    if failed: self._show_failed_files(failed)
-                    if face_errors: self._show_face_errors(face_errors)
+                    if not _silent:
+                        self.show(); self.raise_()
+                        face_info = f"\nFaces detected: {faces_found}" if faces_found or face_errors else ""
+                        err_info  = f"\nFace errors: {len(face_errors)}" if face_errors else ""
+                        QMessageBox.information(self, "Stopped",
+                            f"Scan stopped and saved.\nAdded so far: {added}{face_info}{err_info}")
+                        if failed: self._show_failed_files(failed)
+                        if face_errors: self._show_face_errors(face_errors)
                     self._scan_done(); return
                 elif msg == "done":
                     removed, added, failed, attrs_data, faces_found, face_errors = payload
