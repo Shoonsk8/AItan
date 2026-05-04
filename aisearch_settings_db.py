@@ -702,6 +702,13 @@ class _DbMixin:
         # files are exactly what the user wants picked up first.
         if not locked:
             QTimer.singleShot(0, self.app._scan_new_files)
+            # If the watcher caused this stop, auto-resume the Update so
+            # the user perceives a pause, not a stop. _scan_new_files runs
+            # synchronously, so by the time this fires the new file is
+            # indexed and the worker can pick up where it left off.
+            if getattr(self.app, '_scan_paused_by_watcher', False):
+                self.app._scan_paused_by_watcher = False
+                QTimer.singleShot(50, lambda: self.execute_generate(reset=False))
 
     def _show_failed_files(self, failed):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QLabel

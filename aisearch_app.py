@@ -2569,6 +2569,10 @@ class AISearchApp(QMainWindow):
                 if _has_new:
                     _sw = getattr(self, '_settings_win', None)
                     if _sw is not None and getattr(_sw, '_is_scanning', False):
+                        # Mark for auto-resume so _toggle_ui(False) restarts
+                        # the Update once the watcher has indexed the new
+                        # file. From the user's POV the scan just pauses.
+                        self._scan_paused_by_watcher = True
                         _sw._unified_stop()
             except Exception:
                 pass
