@@ -264,8 +264,16 @@ class _DbMixin:
                 return
         name = self.new_proj_entry.text().strip()
         dirs_flags  = self._get_dirs_with_flags()
+        # Project dirs go into data["base_dirs"] (used by the search filter
+        # to restrict result rankings). Watch dirs are walked too — so files
+        # dropped in Downloads during a long Update aren't missed — but
+        # stay OUT of base_dirs so the search filter semantics don't change.
         dirs     = [d       for d, _      in dirs_flags]
         no_subs  = [no_sub  for _, no_sub in dirs_flags]
+        _known   = {os.path.normpath(d) for d in dirs}
+        for _wd in cfg.load_config().get("watch_dirs", []):
+            if os.path.isdir(_wd) and os.path.normpath(_wd) not in _known:
+                dirs_flags.append((_wd, True))
         if not name:
             self.lbl_scan.setText("Enter a project name first."); return
         if not dirs:
