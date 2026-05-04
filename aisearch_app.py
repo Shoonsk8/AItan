@@ -2333,8 +2333,12 @@ class AISearchApp(QMainWindow):
                 attrs_mod.save_filename_config(dict(_default_cfg), name)
         # Reset preview window so it recreates fresh (same as app restart).
         # This avoids stale splitter/attr state from the old project.
+        # Only do this on an actual project switch — set_project is also
+        # used as a "reload self.data from disk" hook (e.g. after a scan
+        # checkpoint), and there's no reason to nuke the preview then.
         _ph = getattr(self, 'preview_handler', None)
-        if _ph and _ph.window:
+        _project_changed = (name != getattr(self, 'current_project', None))
+        if _project_changed and _ph and _ph.window:
             # Stop pending save timers BEFORE switching project data — otherwise
             # the 800ms debounce fires after attrs_data is replaced with the new
             # project's data, writing the old file's path into the wrong project.
