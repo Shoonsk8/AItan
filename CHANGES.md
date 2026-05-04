@@ -2,6 +2,24 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-04 — v2.2
+
+### Version
+- `aisearch_app.py:25`, `aisearch_settings.py:15`, `aisearch_front_page.py:11`, `aisearch_preview.py:17` — `VERSION = "2.2"`.
+- `aisearch_attrs.py:1433` — `_AITAN_VERSION = "2.2"` (data-format stamp).
+
+### Watch-dir handling during long Updates
+- `aisearch_settings_db.py:execute_generate` — Update DB now also walks `watch_dirs` (non-recursive) on top of project `base_dirs`. Files dropped in Downloads before the scan starts get indexed by the same scan. Watch dirs stay out of `data["base_dirs"]` so search-result filtering is unchanged.
+- `aisearch_app.py:_do_scan_new_files` — when the watcher detects an unknown file in `watch_dirs` while a settings scan is in progress, it now requests `_unified_stop` on the active scan. The scan saves a checkpoint before exiting, then auto-resumes once the new file is indexed.
+- `aisearch_settings_db.py:_toggle_ui` — on unpause, immediately kicks `_scan_new_files` so the just-detected file gets indexed without waiting for the 30 s fallback tick. If the stop was watcher-triggered, also fires `execute_generate(reset=False)` to resume the Update from its checkpoint. Manual Stop still works as before.
+- `aisearch_settings_db.py:_poll_queue` (stopped branch) — watcher-triggered stops are silent: no Stopped dialog, no Settings show/raise, no failed-files / face-errors popups. Button reads "Paused…" before auto-resume kicks in.
+
+### Preview window stability
+- `aisearch_app.py:set_project` — only resets the preview window when the project name actually changes. Was: any `set_project(name)` call (including the "reload data from disk" hooks at scan checkpoint) destroyed and recreated the preview, so the watcher-pause flow visibly closed and reopened the window.
+
+### Header
+- `aisearch_app.py:_set_base_dir_label` — drops the "Base:" prefix and the six-space continuation indent on multi-dir labels. Paths now align flush-left, one per line.
+
 ## 2026-05-04 — v2.1
 
 ### Version
