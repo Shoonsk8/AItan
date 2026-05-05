@@ -444,7 +444,7 @@ class _DbMixin:
                             attrs_mod.flush_path_renames_to_stores(scan_renames, name)
                         self._scan_queue.put(("stopped", (removed, added, failed, attrs_data, faces_found, face_errors))); return
 
-                    fname = os.path.basename(p)
+                    fname = p   # show full path in progress / error messages
                     if not os.path.exists(p):
                         failed.append((p, "not found / moved")); continue
                     if os.path.getsize(p) == 0:
