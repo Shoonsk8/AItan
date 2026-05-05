@@ -2,6 +2,29 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-05 — v2.3
+
+### Version
+- `aisearch_app.py:25`, `aisearch_settings.py:15`, `aisearch_front_page.py:11`, `aisearch_preview.py:17` — `VERSION = "2.3"`.
+- `aisearch_attrs.py:1433` — `_AITAN_VERSION = "2.3"`.
+
+### Search ranking
+- `aisearch_app.py` worker — topk now uses `n_allowed` (every eligible file is part of the ranking), so same-dir / feedback boosts can lift any match into the displayed results. Was: `topk(2000)` hard cap meant a same-dir file at raw rank 4000 could never surface even though +0.04 same-dir boost would have lifted it past many displayed rows.
+- `aisearch_app.py:_populate_search_results` — applies `max_search_results` (default 500) as the display cap; files skipped (query itself, missing on disk) don't count toward it.
+- `aisearch_app.py` worker — score column now shows raw cos_sim, not the boosted total. Boosts still drive ranking order, but the column reflects actual similarity. Was: feedback (+0.25) + proximity (+0.04) could push raw 0.7 over 1.0 where the 0.9999 cap clamped many rows to a fake near-duplicate score.
+
+### Move / right-key
+- `aisearch_app.py:on_right_key_press` — bails when the query file's directory has been removed externally (Nemo, etc.). Drops the stale row 0 and rebases the search on row 1 so the next right-press has a valid destination. Was: dirname of a stale `query_path` resolved to a now-absent location, sometimes the project root.
+
+### Schedule Update DB
+- `aisearch_settings_db.py` — new row in the Database tab: time picker (`HH:mm`) + ⏰ Schedule button. Picking a future time and clicking Schedule arms a one-shot timer that fires `execute_generate(reset=False)` at the chosen time. Click again while armed to cancel; if the time has already passed today the schedule rolls to tomorrow. App must stay open until firing.
+- `aisearch_settings_db.py:_rescan_moved_files / execute_generate` — both gained an `auto_apply` flag. Scheduled fires pass `auto_apply=True`, so the "Fix Moved Files — Confirm" dialog is skipped and the remap proceeds as if the user clicked Apply. Manual Update click still surfaces the dialog.
+
+### UI cleanup
+- `aisearch_app.py` `__init__` — main-window status bar now auto-hides when empty (`messageChanged → setVisible(bool(text))`); used to eat ~20 px at the bottom even with no message.
+- `aisearch_settings.py` — Settings dialog default size 800 → 1100 px wide.
+- `aisearch_settings_db.py` worker — scan progress / face-error messages now show full file path instead of basename.
+
 ## 2026-05-04 — v2.2
 
 ### Version

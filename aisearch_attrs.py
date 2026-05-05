@@ -1430,7 +1430,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
-_AITAN_VERSION = "2.2"  # stamped into every AItan{} block as "ver"
+_AITAN_VERSION = "2.3"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""

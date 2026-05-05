@@ -2,7 +2,7 @@
 
 ## What This Is
 PyQt6 desktop app for AI-powered image/video search, tagging, and organization.
-Version 2.2. Entry point: `aisearch_main.py`. Launched via desktop icon using:
+Version 2.3. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 `/mnt/1TBSSD/AIsearch/venv/bin/python /mnt/1TBSSD/AIsearch/aisearch_main.py`
 
 ## File Map
