@@ -5713,6 +5713,20 @@ class AISearchApp(QMainWindow):
             self._raise_preview()
             return
         if not self.query_path: return
+        # Top file's directory no longer exists (Nemo / external move took it
+        # away). Without this guard the move resolves to a now-stale path —
+        # in some shapes that lands at the project root. Halt, drop the
+        # stale row 0, and promote row 1 as the new query so the next
+        # right-press has a valid destination.
+        if not os.path.isdir(os.path.dirname(os.path.abspath(self.query_path))):
+            if self.table.rowCount() >= 2:
+                next_path = self.table.get_row_path(1)
+                self.table.removeRow(0)
+                if next_path and os.path.exists(next_path):
+                    self._rebase_to_row(0)
+                    return
+            self.query_path = None
+            return
 
         sel_rows = self._selected_rows()
         rows_to_move = sorted([r for r in sel_rows if r != 0], reverse=True)  # high→low so removals don't shift
