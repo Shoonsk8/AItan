@@ -237,8 +237,9 @@ class _AppearanceMixin:
         theme_row = QHBoxLayout()
         theme_group = QButtonGroup(tab_fonts)
         current_theme = self.app.config.get("theme", "Dark")
+        _theme_labels = {"Dark": _t("Dark / ダーク"), "Light": _t("Light / ライト")}
         for t_name in ("Dark", "Light"):
-            rb = QRadioButton(t_name)
+            rb = QRadioButton(_theme_labels[t_name])
             rb.setChecked(current_theme == t_name)
             theme_group.addButton(rb)
             theme_row.addWidget(rb)

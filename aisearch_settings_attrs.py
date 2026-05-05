@@ -267,10 +267,25 @@ class _AttrsMixin:
             return grp
 
         _BASIC_STYLES = {"1dig", "2dig", "3dig", "4dig", "matrix", "id"}
-        # Map coded-field prefix → human label (from CODED_FIELDS)
+        # Map coded-field prefix → human label (from CODED_FIELDS).
+        # Stored values stay English so JSON keys / lookups don't shift;
+        # _CODED_LABEL_DISPLAY is the bilingual version used only for UI.
         _CODED_LABELS = {letter: label
                          for letter, label, _ in _am_ref._DEFAULT_CODED_FIELDS}
         _CODED_LABELS["P"] = "Person ID"
+        _JA_CODED = {
+            "Animal": "動物", "PersonInhrt": "継承元", "Eyes": "目",
+            "Hair": "髪", "FaceAngle": "顔の角度", "Expression": "表情",
+            "Skin": "肌", "Bust": "バスト", "WaistHip": "ウエスト・ヒップ",
+            "PostureMotion": "姿勢・動作", "Clothing": "服装", "Tool": "道具",
+            "CameraShot": "カメラショット", "Background": "背景",
+            "Orientation": "縦横比", "Resolution": "解像度",
+            "FrameRate": "フレームレート", "Timestamp": "タイムスタンプ",
+            "Editable": "編集可", "Watermark": "ウォーターマーク",
+            "Person ID": "人物ID",
+        }
+        _CODED_LABEL_DISPLAY = {
+            k: _t(f"{v} / {_JA_CODED.get(v, v)}") for k, v in _CODED_LABELS.items()}
 
         def _build_ws_section(prefix, force_style=None, group=None, text_label=None, text_placeholder=None, initial_pairs=None, col_defs=None, saved_parent_name=None, saved_col_names=None, readonly=False, saved_field_name=None, _traw=None):
             if prefix in self._attr_ws_loaded:
@@ -309,7 +324,7 @@ class _AttrsMixin:
                 else:
                     self._attr_aw_vbox.addWidget(widget)
 
-            _lbl = _CODED_LABELS.get(prefix, "")
+            _lbl = _CODED_LABEL_DISPLAY.get(prefix, "")
             if _lbl and prefix in FIELD_DEFS:
                 _sec_title_prefix = f"{_lbl}  [{prefix}]"
             elif _lbl:
