@@ -4855,7 +4855,12 @@ class AISearchApp(QMainWindow):
                     if n_match > 0:
                         raw_sims = raw_sims.masked_fill(~_allowed.to(raw_sims.device), float("-inf"))
                         n_allowed = n_match
-                k = min(self.config.get("max_search_results", 300), n_allowed)
+                # Rank against ALL eligible files. The display cap
+                # (max_search_results) is applied at populate-time, not
+                # here — otherwise files that rank below the cap by raw
+                # cos_sim never get a chance to bubble up via the
+                # same-dir proximity / feedback boosts.
+                k = n_allowed
                 if k == 0:
                     _q.put(("done", (emb, (raw_sims[:0], raw_sims[:0].long())))); return
                 top_raw  = torch.topk(raw_sims, k=k)
@@ -4951,10 +4956,17 @@ class AISearchApp(QMainWindow):
                           os.path.basename(query_path),
                           self._mask_path(query_path),
                           query_path)
+        # Display cap — the worker ranks every eligible file, but the
+        # table only shows the top N. Files skipped here (query itself,
+        # missing on disk) don't count toward the cap.
+        _display_cap = max(1, int(self.config.get("max_search_results", 500)))
+        _displayed = 0
         for s, i in zip(top[0], top[1]):
+            if _displayed >= _display_cap: break
             fp = data["paths"][i]
             if os.path.abspath(fp) == query_path: continue
             if not os.path.exists(fp): continue
+            _displayed += 1
             # Cap at 0.9999 so the query image (1.0000) is always row 0 even after
             # feedback boost pushes some scores above 1.0
             score_str = f"{min(s.item(), 0.9999):.4f}"
