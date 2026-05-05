@@ -4904,7 +4904,14 @@ class AISearchApp(QMainWindow):
                 cand_sims = cand_sims[pre]
                 cand_idx  = cand_idx[pre]
                 order = torch.argsort(cand_sims, descending=True, stable=True)
-                top   = (cand_sims[order], cand_idx[order])
+                # top[0] is the displayed score (raw cos_sim), top[1] is the
+                # path index. Boosts still drive ORDER, but the score column
+                # reflects actual similarity — otherwise feedback / proximity
+                # boosts pile a lot of mediocre matches at 0.9999 (the
+                # 1.0-cap), making the column meaningless.
+                _final_idx = cand_idx[order]
+                _raw_at_final = raw_sims[_final_idx].cpu()
+                top = (_raw_at_final, _final_idx)
                 _q.put(("done", (emb, top)))
             except Exception as e:
                 import traceback
