@@ -3,8 +3,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QGroupBox, QCheckBox,
                               QProgressBar, QComboBox, QMessageBox,
                               QTableWidget, QTableWidgetItem, QHeaderView,
-                              QListWidget, QApplication)
-from PyQt6.QtCore import Qt, QTimer
+                              QListWidget, QApplication, QDateTimeEdit)
+from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtGui import QColor
 from attr_viewer import _lang_label as _t
 
@@ -155,6 +155,23 @@ class _DbMixin:
         action_row.addWidget(self.btn_stop)
         l2.addLayout(action_row)
         self._update_generate_btn()
+
+        # ── Schedule Update ───────────────────────────────────────────────────
+        sched_row = QHBoxLayout()
+        sched_row.addWidget(QLabel(_t("Run Update at: / 更新の実行時刻：")))
+        self.dt_schedule = QDateTimeEdit()
+        self.dt_schedule.setCalendarPopup(True)
+        self.dt_schedule.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt_schedule.setDateTime(QDateTime.currentDateTime().addSecs(3600))
+        sched_row.addWidget(self.dt_schedule)
+        self.btn_schedule = QPushButton(_t("⏰ Schedule / ⏰ 予約"))
+        self.btn_schedule.setStyleSheet(
+            "background-color: #2a4a6a; color: white; padding: 4px 10px;")
+        self.btn_schedule.clicked.connect(self._toggle_schedule_update)
+        sched_row.addWidget(self.btn_schedule)
+        self.lbl_schedule_status = QLabel("")
+        sched_row.addWidget(self.lbl_schedule_status, stretch=1)
+        l2.addLayout(sched_row)
 
         # ── Utility buttons row ───────────────────────────────────────────────
         util_row = QHBoxLayout()
@@ -656,6 +673,47 @@ class _DbMixin:
         if self.btn_stop.text() == "Stopping…":
             self.lbl_scan.setText("Stopped (thread did not respond — UI reset).")
             self._scan_done()
+
+    def _toggle_schedule_update(self):
+        """Arm a one-shot timer to fire Update at the chosen time. Click
+        again while armed to cancel. App must stay open until firing —
+        the timer is in-process, no daemon."""
+        existing = getattr(self, '_schedule_timer', None)
+        if existing is not None and existing.isActive():
+            existing.stop()
+            self._schedule_timer = None
+            self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
+            self.lbl_schedule_status.setText("")
+            return
+        target = self.dt_schedule.dateTime()
+        now = QDateTime.currentDateTime()
+        delay_ms = now.msecsTo(target)
+        if delay_ms <= 0:
+            self.lbl_schedule_status.setText(_t(
+                "Pick a future time. / 未来の時刻を指定してください。"))
+            return
+        # QTimer caps at INT32_MAX ms (~24.8 days). Beyond that, fall back
+        # to a periodic check.
+        _MAX = 2_000_000_000
+        t = QTimer(self)
+        t.setSingleShot(True)
+        if delay_ms <= _MAX:
+            t.timeout.connect(self._fire_scheduled_update)
+            t.start(delay_ms)
+        else:
+            t.timeout.connect(self._toggle_schedule_update)  # re-arm
+            t.start(_MAX)
+        self._schedule_timer = t
+        self.btn_schedule.setText(_t("✕ Cancel / ✕ キャンセル"))
+        self.lbl_schedule_status.setText(_t(
+            f"Scheduled for {target.toString('yyyy-MM-dd HH:mm')} / "
+            f"予約時刻：{target.toString('yyyy-MM-dd HH:mm')}"))
+
+    def _fire_scheduled_update(self):
+        self._schedule_timer = None
+        self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
+        self.lbl_schedule_status.setText("")
+        self.execute_generate(reset=False)
 
     def _scan_done(self):
         _fb = getattr(self, '_stop_fallback_timer', None)
