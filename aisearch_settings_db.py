@@ -160,8 +160,7 @@ class _DbMixin:
         sched_row = QHBoxLayout()
         sched_row.addWidget(QLabel(_t("Run Update at: / 更新の実行時刻：")))
         self.dt_schedule = QDateTimeEdit()
-        self.dt_schedule.setCalendarPopup(True)
-        self.dt_schedule.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt_schedule.setDisplayFormat("HH:mm")
         self.dt_schedule.setDateTime(QDateTime.currentDateTime().addSecs(3600))
         sched_row.addWidget(self.dt_schedule)
         self.btn_schedule = QPushButton(_t("⏰ Schedule / ⏰ 予約"))
@@ -685,8 +684,13 @@ class _DbMixin:
             self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
             self.lbl_schedule_status.setText("")
             return
-        target = self.dt_schedule.dateTime()
+        # Time-only picker — combine the chosen time with today's date,
+        # roll over to tomorrow if the time already passed.
         now = QDateTime.currentDateTime()
+        picked_time = self.dt_schedule.time()
+        target = QDateTime(now.date(), picked_time)
+        if target <= now:
+            target = target.addDays(1)
         delay_ms = now.msecsTo(target)
         if delay_ms <= 0:
             self.lbl_schedule_status.setText(_t(
@@ -705,9 +709,11 @@ class _DbMixin:
             t.start(_MAX)
         self._schedule_timer = t
         self.btn_schedule.setText(_t("✕ Cancel / ✕ キャンセル"))
+        # Show date too in the status — it's not in the picker, but the
+        # user benefits from confirmation when the time rolled to tomorrow.
         self.lbl_schedule_status.setText(_t(
-            f"Scheduled for {target.toString('yyyy-MM-dd HH:mm')} / "
-            f"予約時刻：{target.toString('yyyy-MM-dd HH:mm')}"))
+            f"Scheduled for {target.toString('HH:mm (yyyy-MM-dd)')} / "
+            f"予約時刻：{target.toString('HH:mm (yyyy-MM-dd)')}"))
 
     def _fire_scheduled_update(self):
         self._schedule_timer = None
