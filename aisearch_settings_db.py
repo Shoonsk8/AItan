@@ -264,7 +264,7 @@ class _DbMixin:
 
     # --- scanning ---
 
-    def execute_generate(self, reset=True):
+    def execute_generate(self, reset=True, auto_apply_moves=False):
         if self._is_scanning:
             # Auto-recover: if no poll timer is active, the scan finished but _is_scanning
             # was never cleared (old bug / exception). Force-reset so the user can retry.
@@ -315,7 +315,7 @@ class _DbMixin:
         # For Update (not full reset), run Fix Moved Files first so the CLIP
         # scan operates on an up-to-date path list.
         if not reset:
-            self._rescan_moved_files(silent=True)
+            self._rescan_moved_files(silent=True, auto_apply=auto_apply_moves)
 
         self._is_scanning = True
         self._stop_scan = False
@@ -719,7 +719,9 @@ class _DbMixin:
         self._schedule_timer = None
         self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
         self.lbl_schedule_status.setText("")
-        self.execute_generate(reset=False)
+        # Unattended — auto-apply any moved-file remaps so the scan
+        # doesn't block on the confirmation dialog.
+        self.execute_generate(reset=False, auto_apply_moves=True)
 
     def _scan_done(self):
         _fb = getattr(self, '_stop_fallback_timer', None)
@@ -1083,7 +1085,7 @@ class _DbMixin:
         self._poll_timer.timeout.connect(_poll_embed)
         self._poll_timer.start(200)
 
-    def _rescan_moved_files(self, silent=False):
+    def _rescan_moved_files(self, silent=False, auto_apply=False):
         """Scan all configured + watch dirs for files matching missing DB entries by filename.
         silent=True suppresses error pop-ups (used when called from Update)."""
         import aisearch_attrs as _am
@@ -1287,7 +1289,12 @@ class _DbMixin:
             dlg.accept()
 
         btn_apply.clicked.connect(_apply)
-        dlg.exec()
+        if auto_apply:
+            # Scheduled / unattended Update — skip the confirmation
+            # dialog and proceed as if the user clicked Apply.
+            applied[0] = True
+        else:
+            dlg.exec()
 
         if not applied[0]:
             self.lbl_scan.setText(""); return
