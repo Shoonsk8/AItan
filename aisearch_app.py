@@ -33,6 +33,9 @@ class NumericItem(QTableWidgetItem):
         except: return super().__lt__(other)
 
 class SizeItem(QTableWidgetItem):
+    def __init__(self, text):
+        super().__init__(text)
+        self.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     def _bytes(self, text):
         try:
             p = text.split(); num = float(p[0]); unit = p[1].upper()
@@ -1194,8 +1197,9 @@ class AISearchApp(QMainWindow):
             else _t("👁 Hide confirmed / 👁 確認済を隠す"))
         self.btn_hide_confirmed.setToolTip(_t("Hide files already confirmed as variants/different / バリアント・異なると確認済みのファイルを隠す"))
         # Undo
+        self.btn_undo.setText(_t("↩ Undo / ↩ 元に戻す"))
         self.btn_undo.setToolTip(
-            self._undo_stack[-1]["desc"] if self._undo_stack else _t("Nothing to undo / 元に戻す操作なし"))
+            _t(self._undo_stack[-1]["desc"]) if self._undo_stack else _t("Nothing to undo / 元に戻す操作なし"))
         # Inline attrs
         if hasattr(self, '_inline_note'):
             self._inline_note.setPlaceholderText(_t("Note… / ノート…"))
@@ -1660,29 +1664,63 @@ class AISearchApp(QMainWindow):
 
     # ── Undo ─────────────────────────────────────────────────────────────────
 
-    def _push_undo(self, action):
-        name = os.path.basename(action.get("orig_path") or action.get("old_path") or "")
-        if action["type"] == "move":
-            dest = os.path.basename(os.path.dirname(action["new_path"]))
-            action["desc"] = f"Move  {name}  →  …/{dest}/"
+    def _push_undo(self, actions):
+        if not isinstance(actions, list):
+            actions = [actions]
+        if not actions:
+            return
+
+        if len(actions) == 1:
+            action = actions[0]
+            name = os.path.basename(action.get("orig_path") or action.get("old_path") or "")
+            if action["type"] == "move":
+                dest = os.path.basename(os.path.dirname(action["new_path"]))
+                action["desc"] = f"Move  {name}  →  …/{dest}/ / 移動  {name}  →  …/{dest}/"
+            else:
+                action["desc"] = f"Delete  {name} / 削除  {name}"
+            entry = action
         else:
-            action["desc"] = f"Delete  {name}"
-        self._undo_stack.append(action)
-        if len(self._undo_stack) > 20:
+            # Batch action
+            count = len(actions)
+            types = {a["type"] for a in actions}
+            if "delete" in types and len(types) == 1:
+                desc = f"Delete {count} files / {count}件を削除"
+            elif "move" in types and len(types) == 1:
+                desc = f"Move {count} files / {count}件を移動"
+            else:
+                desc = f"Batch action ({count}) / 複数操作（{count}件）"
+            entry = {"type": "batch", "actions": actions, "desc": desc}
+
+        self._undo_stack.append(entry)
+        if len(self._undo_stack) > 100:
             self._undo_stack.pop(0)
         self._update_undo_btn()
 
     def _update_undo_btn(self):
         has = bool(self._undo_stack)
         self.btn_undo.setEnabled(has)
-        self.btn_undo.setToolTip(self._undo_stack[-1]["desc"] if has else _t("Nothing to undo / 元に戻す操作なし"))
+        self.btn_undo.setToolTip(_t(self._undo_stack[-1]["desc"]) if has else _t("Nothing to undo / 元に戻す操作なし"))
 
     def _undo_last(self):
         if not self._undo_stack:
             return
         action = self._undo_stack.pop()
         self._update_undo_btn()
-        if action["type"] == "move":
+        self._exec_undo(action)
+
+    def _exec_undo(self, action):
+        if action["type"] == "batch":
+            for sub in action["actions"]:
+                if sub["type"] == "move":
+                    self._undo_move(sub, save_db=False, save_attrs=False, select=False)
+                elif sub["type"] == "delete":
+                    self._undo_delete(sub, save_db=False, save_attrs=False, select=False)
+            if self.data:
+                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+            attrs_mod.save(self.current_project, self.attrs_data)
+            self._rebuild_dup_display_data()
+            self._save_dup_results()
+        elif action["type"] == "move":
             self._undo_move(action)
         elif action["type"] == "delete":
             self._undo_delete(action)
@@ -1699,7 +1737,7 @@ class AISearchApp(QMainWindow):
         lw = QListWidget()
         # Show most recent at top
         for action in reversed(self._undo_stack):
-            lw.addItem(action["desc"])
+            lw.addItem(_t(action["desc"]))
         layout.addWidget(lw)
         row_btns = QHBoxLayout()
         btn_undo_to = QPushButton(_t("Undo to selected / 選択まで戻す"))
@@ -1715,15 +1753,14 @@ class AISearchApp(QMainWindow):
                 if self._undo_stack:
                     action = self._undo_stack.pop()
                     self._update_undo_btn()
-                    if action["type"] == "move":   self._undo_move(action)
-                    elif action["type"] == "delete": self._undo_delete(action)
+                    self._exec_undo(action)
             dlg.accept()
         btn_undo_to.clicked.connect(_undo_to)
         lw.itemDoubleClicked.connect(lambda: _undo_to())
         lw.setCurrentRow(0)
         dlg.exec()
 
-    def _undo_move(self, action):
+    def _undo_move(self, action, save_db=True, save_attrs=True, select=True):
         old_path, new_path = action["old_path"], action["new_path"]
         if not os.path.exists(new_path):
             QMessageBox.warning(self, _t("Undo / 元に戻す"), _t(f"Cannot undo move: file not found at\n{new_path} / 元に戻せません：ファイルが見つかりません\n{new_path}"))
@@ -1732,31 +1769,53 @@ class AISearchApp(QMainWindow):
             shutil.move(new_path, old_path)
         except Exception as e:
             QMessageBox.critical(self, _t("Undo Error / 元に戻すエラー"), str(e)); return
+        # Restore query_path if the query file was moved
+        if os.path.normpath(new_path) == os.path.normpath(self.query_path or ""):
+            self.query_path = old_path
+        # Restore attrs_data entry
+        if new_path in self.attrs_data:
+            self.attrs_data[old_path] = self.attrs_data.pop(new_path)
+            if save_attrs: attrs_mod.save(self.current_project, self.attrs_data)
+        elif old_path not in self.attrs_data:
+            self.attrs_data[old_path] = {}
+
+        import aisearch_attrs as _am
+        _am.update_path_in_all_stores(new_path, old_path, self.current_project)
+
         if self.data and "paths" in self.data:
             for i, p in enumerate(self.data["paths"]):
                 if os.path.normpath(p) == os.path.normpath(new_path):
                     self.data["paths"][i] = old_path
-                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                    if save_db:
+                        torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
         for r in range(self.table.rowCount()):
             if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(new_path):
                 self.table.set_row_path(r, old_path)
                 self.table.item(r, 2).setText(os.path.basename(old_path))
                 self.table.item(r, 3).setText(self._mask_path(old_path))
-                self._select_row(r)
+                if select: self._select_row(r)
                 break
 
-    def _undo_delete(self, action):
+    def _undo_delete(self, action, save_db=True, save_attrs=True, select=True):
         orig_path, trash_path = action["orig_path"], action["trash_path"]
         success, err = front_page.restore_from_trash(trash_path, orig_path)
         if not success:
             QMessageBox.critical(self, _t("Undo Error / 元に戻すエラー"), _t(f"Could not restore:\n{err} / 復元できません：\n{err}")); return
+        # Restore attrs_data entry
+        if "attrs" in action and action["attrs"] is not None:
+            self.attrs_data[orig_path] = action["attrs"]
+            if save_attrs: attrs_mod.save(self.current_project, self.attrs_data)
+        elif orig_path not in self.attrs_data:
+            self.attrs_data[orig_path] = {}
+
         if self.data is not None and "paths" in self.data:
             emb = action.get("emb")
             if emb is not None:
                 self.data["paths"].append(orig_path)
                 self.data["embeddings"] = torch.cat([self.data["embeddings"], emb.unsqueeze(0)])
-                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                if save_db:
+                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
         row = min(action["row"], self.table.rowCount())
         self.table.insertRow(row)
         score_item = QTableWidgetItem(action["score"])
@@ -1780,9 +1839,10 @@ class AISearchApp(QMainWindow):
             for col in range(self.table.columnCount()):
                 if self.table.item(row, col):
                     self.table.item(row, col).setBackground(bg)
-        self._select_row(row)
-        self._rebuild_dup_display_data()
-        self._save_dup_results()
+        if select: self._select_row(row)
+        if save_db:
+            self._rebuild_dup_display_data()
+            self._save_dup_results()
 
     # ── Attributes ───────────────────────────────────────────────────────────
 
@@ -4189,14 +4249,48 @@ class AISearchApp(QMainWindow):
         from aisearch_front_page import trash_file
         deleted = 0
         errors = []
+        batch = []
+
+        # Map paths to rows for snapshotting
+        path_to_row = {}
+        for r in range(self.table.rowCount()):
+            path = self.table.get_row_path(r)
+            if path: path_to_row[path] = r
+
         for p in marks:
             try:
+                row = path_to_row.get(p, -1)
+                emb = None
+                if self.data and "paths" in self.data and p in self.data["paths"]:
+                    idx = self.data["paths"].index(p)
+                    emb = self.data["embeddings"][idx].clone()
+
+                row_snap = {}
+                if row >= 0:
+                    row_snap = {
+                        "score":       self.table.item(row, 0).text(),
+                        "size":        self.table.item(row, 1).text() if self.table.item(row, 1) else "",
+                        "name":        self.table.item(row, 2).text() if self.table.item(row, 2) else "",
+                        "masked_path": self.table.item(row, 3).text() if self.table.item(row, 3) else "",
+                        "sim_data":    self.table.item(row, 0).data(Qt.ItemDataRole.UserRole + 1),
+                        "bg_color":    self.table.item(row, 0).background(),
+                        "row":         row,
+                    }
+
                 if os.path.exists(p):
                     _tp, err = trash_file(p)
                     if err:
                         errors.append(f"{os.path.basename(p)}: {err}")
                         continue
                     deleted += 1
+                    if _tp is not None:
+                        batch.append({
+                            "type": "delete", "orig_path": p, "trash_path": _tp,
+                            "emb": emb, "attrs": self.attrs_data.get(p),
+                            **(row_snap or {"row": self.table.rowCount(), "score": "0.0", "size": "",
+                                            "name": os.path.basename(p), "masked_path": self._mask_path(p)})
+                        })
+
                 # Remove from attrs_data
                 self.attrs_data.pop(p, None)
                 # Remove from app.data["paths"]
@@ -4213,6 +4307,10 @@ class AISearchApp(QMainWindow):
                             pass
             except Exception as e:
                 errors.append(f"{os.path.basename(p)}: {e}")
+
+        if batch:
+            self._push_undo(batch)
+
         # Strip deleted paths out of the dup groups, drop singleton groups.
         # Filter the parallel `_dup_group_labels` list in lockstep so
         # surviving groups keep their original G-numbers — without this,
@@ -4608,7 +4706,7 @@ class AISearchApp(QMainWindow):
             self._rebuild_dup_display_data()
             self._save_dup_results()
 
-    def _update_row(self, row, old_path, final_path, overwrite, dest_path, protect_rows=None):
+    def _update_row(self, row, old_path, final_path, overwrite, dest_path, protect_rows=None, push_undo=True):
         """Update a row after a move. Remove the overwritten row if needed.
         protect_rows: set of row indices that must never be removed (e.g. {0} for query row)."""
         # Capture dest attrs before the row is removed (needed for merge below)
@@ -4650,7 +4748,8 @@ class AISearchApp(QMainWindow):
             # Update preview if it's showing the moved file
             if self.preview_handler.current_path == old_path:
                 self.preview_handler.current_path = final_path
-            self._push_undo({"type": "move", "old_path": old_path, "new_path": final_path})
+            if push_undo:
+                self._push_undo({"type": "move", "old_path": old_path, "new_path": final_path})
 
     # ── Drag-drop (top-level window must accept to enable child widget drops on Linux) ──
     # dragEnterEvent/dragMoveEvent advertise the window as a drop target to the OS/WM.
@@ -5848,7 +5947,8 @@ class AISearchApp(QMainWindow):
                     torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
 
-        self._update_row(row, src_path, final_path, overwrite, dest_path)
+        self._push_undo({"type": "move", "old_path": src_path, "new_path": final_path})
+        self._update_row(row, src_path, final_path, overwrite, dest_path, push_undo=False)
         self._post_move_dup_cleanup()
         self._select_row(min(row, self.table.rowCount() - 1))
 
@@ -5858,6 +5958,7 @@ class AISearchApp(QMainWindow):
         target_dir = os.path.dirname(os.path.abspath(target_path))
         mode       = self.config.get("move_conflict", "size_check")
         db_changed = False
+        batch      = []
 
         for src_row in src_rows:
             src_path  = os.path.abspath(self.table.get_row_path(src_row))
@@ -5887,7 +5988,11 @@ class AISearchApp(QMainWindow):
                         == os.path.normpath(src_path)):
                 self.query_path = final_path
 
-            self._update_row(src_row, src_path, final_path, overwrite, dest_path)
+            batch.append({"type": "move", "old_path": src_path, "new_path": final_path})
+            self._update_row(src_row, src_path, final_path, overwrite, dest_path, push_undo=False)
+
+        if batch:
+            self._push_undo(batch)
 
         self._post_move_dup_cleanup()
         if db_changed and self.data:
@@ -5913,9 +6018,12 @@ class AISearchApp(QMainWindow):
             self.last_move_dir = chosen_dir
             self.config["last_move_dir"] = chosen_dir
             cfg.save_config(self.config, getattr(self, "current_project", None))
+            dest_path = os.path.join(chosen_dir, os.path.basename(old_path))
+            self._push_undo({"type": "move", "old_path": old_path, "new_path": new_path})
             self._update_row(row, old_path, new_path,
-                             new_path == os.path.join(chosen_dir, os.path.basename(old_path)),
-                             os.path.join(chosen_dir, os.path.basename(old_path)))
+                             new_path == dest_path,
+                             dest_path,
+                             push_undo=False)
             self._post_move_dup_cleanup()
             next_row = row + 1 if row + 1 < self.table.rowCount() else row - 1
             if next_row >= 0:
@@ -5978,6 +6086,7 @@ class AISearchApp(QMainWindow):
                 attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
                 if self.preview_handler.current_path == old_path:
                     self.preview_handler.current_path = new_path
+                self._push_undo({"type": "move", "old_path": old_path, "new_path": new_path})
             except Exception as e:
                 QMessageBox.critical(self, _t("Rename Error / 改名エラー"), str(e))
                 name_item.setText(old_name)
@@ -6070,6 +6179,7 @@ class AISearchApp(QMainWindow):
         was_query = (first_row == 0 and self.config.get("last_mode") == "search")
         deleted_any = False
         errors = []
+        batch = []
 
         # Delete bottom-to-top so row indices stay valid
         for row in sorted(rows, reverse=True):
@@ -6090,8 +6200,8 @@ class AISearchApp(QMainWindow):
             }
             trash_path, err = front_page.trash_file(path)
             if trash_path is not None:
-                self._push_undo({"type": "delete", "orig_path": path, "trash_path": trash_path,
-                                  "row": row, "emb": emb, **row_snap})
+                batch.append({"type": "delete", "orig_path": path, "trash_path": trash_path,
+                              "row": row, "emb": emb, "attrs": self.attrs_data.get(path), **row_snap})
                 if self.data and "paths" in self.data and path in self.data["paths"]:
                     idx  = self.data["paths"].index(path)
                     keep = [i for i in range(len(self.data["paths"])) if i != idx]
@@ -6101,6 +6211,9 @@ class AISearchApp(QMainWindow):
                 deleted_any = True
             elif err:
                 errors.append(err)
+
+        if batch:
+            self._push_undo(batch)
 
         if deleted_any:
             if self.data:
