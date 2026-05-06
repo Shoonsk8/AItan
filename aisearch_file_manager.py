@@ -12,9 +12,9 @@ import time
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
                               QMessageBox, QInputDialog, QMenu)
-from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
-                         QColor, QPen, QShortcut, QKeySequence, QAction)
+                         QColor, QPen, QShortcut, QKeySequence, QAction, QDrag)
 
 import aisearch_logic as logic
 
@@ -130,19 +130,35 @@ class _FMIconList(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSpacing(6)
 
-    def mimeData(self, items):
-        """Build URL MIME for items being dragged out (so the receiver —
-        another FM window, Nemo — sees real file paths)."""
-        from PyQt6.QtCore import QMimeData
-        mime = QMimeData()
+    def startDrag(self, supportedActions):
+        """Explicitly own drag-start so we always emit URL MIME — model-
+        level mimeData() sometimes doesn't trip in PyQt6 when items have
+        custom UserRole data and no model item-flags. With this in place,
+        clicking + dragging a selected item starts a real Qt drag whose
+        MIME points at real file paths, so internal drops (onto a
+        subfolder) and external drops (Nemo) both work."""
+        items = self.selectedItems()
+        if not items:
+            return
         urls = []
         for it in items:
             data = it.data(Qt.ItemDataRole.UserRole)
             if data and data != ".." and os.path.exists(data):
                 urls.append(QUrl.fromLocalFile(data))
-        if urls:
-            mime.setUrls(urls)
-        return mime
+        if not urls:
+            return
+        mime = QMimeData()
+        mime.setUrls(urls)
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        # Drag preview = the first selected item's icon
+        first = items[0]
+        ico = first.icon()
+        if not ico.isNull():
+            sz = self.iconSize()
+            drag.setPixmap(ico.pixmap(sz))
+            drag.setHotSpot(QPoint(sz.width() // 2, sz.height() // 2))
+        drag.exec(Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, ev):
         if ev.mimeData().hasUrls():
