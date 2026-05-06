@@ -3481,26 +3481,15 @@ class PreviewWindow(QWidget):
                     # Resize tile and shift tiles below — deferred so widget is laid out first
                     QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
 
-    # Override rule for an already-stored pid: the detected top match
-    # must (a) be a confident match (top_sim ≥ 0.50 — well above the
-    # face_recognition match floor of 0.35) AND (b) beat the stored
-    # pid's similarity by at least this margin. Both raised because
-    # the lenient (0.35 / 0.05) version flipped a lot of unrelated
-    # faces over to whichever person had the largest embedding pool
-    # (typically P001), since that person scored ~0.4 on everything.
-    _OVERRIDE_MARGIN  = 0.10
-    _OVERRIDE_MIN_TOP = 0.50
-
     @pyqtSlot(str, str, float, float)
     def _auto_apply_face(self, path: str, pid: str, top_sim: float = 0.0,
                          stored_sim: float = 0.0):
         """Slot called from _on_inspect thread to auto-apply detected person_id.
-        - No stored pid (or "000")     → always apply.
-        - top_sim above match floor AND beats stored_sim by margin →
-                                       overwrite (the detected face
-                                       fits a different person better
-                                       than the currently-stored one).
-        - Otherwise                    → keep the stored pid."""
+        Only fills in when the entry has no real pid yet — "000" counts
+        as empty. Existing pids are NEVER auto-overridden by this path:
+        the user explicitly clicks the manual Apply button if they want
+        to flip a stored value. (The earlier confidence-gated override
+        flipped too many unrelated faces.)"""
         if not path or not pid or pid == "000":
             return
         app = self.handler.app
@@ -3509,10 +3498,7 @@ class PreviewWindow(QWidget):
         entry = attrs_mod.get(app.attrs_data, path)
         old_pid = (entry.get("person_id") or "").strip().lower()
         if old_pid and old_pid != "000":
-            if top_sim < self._OVERRIDE_MIN_TOP:
-                return  # not even a real match
-            if (top_sim - stored_sim) < self._OVERRIDE_MARGIN:
-                return  # too close to call — keep existing
+            return  # respect existing — manual Apply is the way to override
         if old_pid == pid.strip().lower():
             return  # already same — nothing to do
         entry["person_id"] = pid
