@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.3"
+VERSION = "2.3a"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────

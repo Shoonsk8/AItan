@@ -18,6 +18,8 @@ from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
 
 import aisearch_logic as logic
 
+VERSION = "2.3a"
+
 
 _VALID_EXTS = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
 
@@ -244,7 +246,7 @@ class FileManagerWindow(QWidget):
     def __init__(self, app, initial_dir):
         super().__init__()
         self.app = app
-        self.setWindowTitle("AItan — File Manager")
+        self.setWindowTitle(f"AItan — File Manager  Ver {VERSION}")
         self.resize(900, 650)
 
         self._cur_dir       = None
