@@ -282,7 +282,10 @@ class _FMTreeList(QTreeWidget):
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setAcceptDrops(True)
         self.setRootIsDecorated(True)   # show expand triangles on top-level
-        self.setUniformRowHeights(True)
+        # uniformRowHeights(True) caches the first row's height; icons
+        # resized later (Ctrl+Wheel) wouldn't grow rows. Off so each row
+        # tracks its own content.
+        self.setUniformRowHeights(False)
         self.setAllColumnsShowFocus(True)
         # Bigger indent + visible branch lines so nesting depth is obvious
         self.setIndentation(28)
