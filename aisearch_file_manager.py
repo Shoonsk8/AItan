@@ -268,10 +268,16 @@ class _FMTreeList(QTreeWidget):
         self.setColumnCount(4)
         self.setHeaderLabels(["Name", "Size", "Date", "Type"])
         hdr = self.header()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        # Interactive on every column → user can drag dividers to resize
+        for c in range(4):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        hdr.setSectionsClickable(True)   # explicit — needed for sort-on-click
+        # Sensible defaults so the columns aren't all the same width
+        self.setColumnWidth(0, 380)   # Name
+        self.setColumnWidth(1, 90)    # Size
+        self.setColumnWidth(2, 140)   # Date
+        self.setColumnWidth(3, 70)    # Type
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setAcceptDrops(True)
