@@ -757,14 +757,18 @@ class FilePane(QWidget):
         v.setSpacing(2)
 
         tb = QHBoxLayout()
-        self.btn_back = QPushButton("Back")
+        self.btn_back = QPushButton("◀ Back")
         self.btn_back.setToolTip("Previous directory in history")
-        self.btn_fwd  = QPushButton("Fwd")
+        self.btn_fwd  = QPushButton("Fwd ▶")
         self.btn_fwd.setToolTip("Next directory in history")
-        self.btn_up   = QPushButton("Up")
+        self.btn_up   = QPushButton("▲ Up")
         self.btn_up.setToolTip("Parent directory")
+        _btn_ss = (
+            "QPushButton { padding: 4px 10px; font-weight: bold; "
+            "min-height: 22px; }")
         for b in (self.btn_back, self.btn_fwd, self.btn_up):
-            b.setFixedWidth(48)
+            b.setMinimumWidth(70)
+            b.setStyleSheet(_btn_ss)
         self.btn_back.clicked.connect(self._go_back)
         self.btn_fwd.clicked.connect(self._go_forward)
         self.btn_up.clicked.connect(self._go_up)
