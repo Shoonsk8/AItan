@@ -5846,9 +5846,18 @@ class AISearchApp(QMainWindow):
             self._enter_browse_mode()
             self._raise_preview()
             return
-        # In search mode, row 0 is the query file — open the File Manager
-        # window at the query's directory. Browse-into-main is still
-        # available via the 📂 Browse button.
+        # If the FM window is open and visible, right-arrow on ANY row
+        # navigates the FM to that row's file's directory — lets the
+        # user track context across the table without having to re-open
+        # the FM. Move-file workflow only kicks in when FM is closed.
+        fm = getattr(self, '_fm_win', None)
+        if fm is not None and fm.isVisible():
+            row_path = self.table.get_row_path(row)
+            if row_path:
+                fm.navigate(os.path.dirname(os.path.abspath(row_path)))
+                fm.raise_()
+            return
+        # FM closed: row 0 (query) opens the FM at its directory.
         if row == 0 and self.query_path:
             self._open_file_manager(os.path.dirname(os.path.abspath(self.query_path)))
             return
