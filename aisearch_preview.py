@@ -3482,12 +3482,14 @@ class PreviewWindow(QWidget):
                     QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
 
     # Override rule for an already-stored pid: the detected top match
-    # must (a) be a real match (top_sim ≥ 0.35) AND (b) beat the
-    # stored pid's similarity by at least this margin. The margin
-    # avoids flipping on near-ties while letting clear winners
-    # (e.g. top=0.489, stored=0.322 → +0.167) override.
-    _OVERRIDE_MARGIN  = 0.05
-    _OVERRIDE_MIN_TOP = 0.35
+    # must (a) be a confident match (top_sim ≥ 0.50 — well above the
+    # face_recognition match floor of 0.35) AND (b) beat the stored
+    # pid's similarity by at least this margin. Both raised because
+    # the lenient (0.35 / 0.05) version flipped a lot of unrelated
+    # faces over to whichever person had the largest embedding pool
+    # (typically P001), since that person scored ~0.4 on everything.
+    _OVERRIDE_MARGIN  = 0.10
+    _OVERRIDE_MIN_TOP = 0.50
 
     @pyqtSlot(str, str, float, float)
     def _auto_apply_face(self, path: str, pid: str, top_sim: float = 0.0,
