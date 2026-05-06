@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
                               QMessageBox)
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QImageReader, QPainter, QImage
+from PyQt6.QtGui import QPixmap, QIcon, QImageReader, QPainter, QImage, QColor, QPen
 
 import aisearch_logic as logic
 
@@ -26,18 +26,35 @@ _THUMB_CACHE: dict = {}
 _THUMB_CACHE_MAX = 500
 
 
+def _draw_video_rim(pixmap, width=3, color="#00ff00"):
+    """Stamp a green border around a thumbnail to mark it as a video.
+    Matches the rim style used on the main-window drop zone."""
+    p = QPainter(pixmap)
+    pen = QPen(QColor(color))
+    pen.setWidth(width)
+    pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+    p.setPen(pen)
+    # Inset by half-width so the stroke lands inside the bounds
+    half = width / 2
+    p.drawRect(int(half), int(half),
+               pixmap.width() - width, pixmap.height() - width)
+    p.end()
+    return pixmap
+
+
 def _make_thumb_pixmap(path, size):
     """Build a thumbnail QPixmap from the file. May return None on failure
     (corrupt / unsupported codec). Safe to call from a worker thread."""
     ext = os.path.splitext(path)[1].lower()
+    is_video = ext in logic.EXT_VID
     try:
-        if ext in logic.EXT_VID:
+        if is_video:
             rgb = logic.get_video_thumbnail_rgb(path, first_only=True)
             if rgb is None:
                 return None
             h, w = rgb.shape[:2]
             qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
-            return QPixmap.fromImage(qimg).scaled(
+            px = QPixmap.fromImage(qimg).scaled(
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
@@ -53,10 +70,13 @@ def _make_thumb_pixmap(path, size):
             img = reader.read()
             if img.isNull():
                 return None
-            return QPixmap.fromImage(img).scaled(
+            px = QPixmap.fromImage(img).scaled(
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
+        if is_video:
+            _draw_video_rim(px)
+        return px
     except Exception:
         return None
 
