@@ -11,9 +11,10 @@ import time
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
-                              QMessageBox)
+                              QMessageBox, QInputDialog, QMenu)
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QImageReader, QPainter, QImage, QColor, QPen
+from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
+                         QColor, QPen, QShortcut, QKeySequence, QAction)
 
 import aisearch_logic as logic
 
@@ -219,8 +220,15 @@ class FileManagerWindow(QWidget):
 
         self.list = _FMIconList(self)
         self.list.itemDoubleClicked.connect(self._on_item_double_click)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._on_context_menu)
         v.addWidget(self.list, 1)
         self._apply_thumb_size()
+
+        # F2 = rename selected, Delete = trash selected
+        QShortcut(QKeySequence("F2"), self, activated=self._rename_selected)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self,
+                  activated=self._delete_selected)
 
         if initial_dir and os.path.isdir(initial_dir):
             self.navigate(initial_dir)
@@ -452,6 +460,186 @@ class FileManagerWindow(QWidget):
             import aisearch_attrs as _am
             _am.update_path_in_all_stores(old_path, new_path,
                                           getattr(app, "current_project", None))
+        except Exception:
+            pass
+
+    # ── Context menu ─────────────────────────────────────────────────────────
+    def _on_context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        menu = QMenu(self)
+
+        act_new = QAction("New Folder", self)
+        act_new.triggered.connect(self._new_folder)
+        menu.addAction(act_new)
+
+        if item is not None:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if data and data != "..":
+                menu.addSeparator()
+                act_rename = QAction("Rename (F2)", self)
+                act_rename.triggered.connect(self._rename_selected)
+                menu.addAction(act_rename)
+
+                act_delete = QAction("Move to Trash (Del)", self)
+                act_delete.triggered.connect(self._delete_selected)
+                menu.addAction(act_delete)
+
+                act_open_loc = QAction("Open in Nemo", self)
+                act_open_loc.triggered.connect(
+                    lambda: self._open_in_nemo(data))
+                menu.addAction(act_open_loc)
+
+        menu.exec(self.list.viewport().mapToGlobal(pos))
+
+    # ── File operations ──────────────────────────────────────────────────────
+    def _new_folder(self):
+        if not self._cur_dir:
+            return
+        name, ok = QInputDialog.getText(
+            self, "New Folder", "Folder name:", QLineEdit.EchoMode.Normal, "")
+        if not ok:
+            return
+        name = name.strip()
+        if not name or name in (".", ".."):
+            return
+        # Sanitize against path separators — confine to the current dir
+        if "/" in name or "\\" in name:
+            QMessageBox.warning(self, "New Folder",
+                "Folder name cannot contain '/' or '\\'.")
+            return
+        target = os.path.join(self._cur_dir, name)
+        try:
+            os.makedirs(target, exist_ok=False)
+        except FileExistsError:
+            QMessageBox.warning(self, "New Folder",
+                f"Folder already exists:\n{target}")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "New Folder", f"Could not create:\n{e}")
+            return
+        self._refresh()
+
+    def _rename_selected(self):
+        item = self.list.currentItem()
+        if item is None:
+            return
+        old_path = item.data(Qt.ItemDataRole.UserRole)
+        if not old_path or old_path == "..":
+            return
+        old_name = os.path.basename(old_path)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename", f"New name for '{old_name}':",
+            QLineEdit.EchoMode.Normal, old_name)
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == old_name:
+            return
+        if "/" in new_name or "\\" in new_name:
+            QMessageBox.warning(self, "Rename",
+                "Name cannot contain '/' or '\\'.")
+            return
+        new_path = os.path.join(os.path.dirname(old_path), new_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, "Rename",
+                f"Already exists:\n{new_path}")
+            return
+        try:
+            os.rename(old_path, new_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Rename", f"Could not rename:\n{e}")
+            return
+        # Sync app state if it's a tracked file
+        if os.path.isfile(new_path):
+            self._sync_app_state(old_path, new_path)
+        # If the renamed path is a folder, walk app.data for any files
+        # whose path starts with old_path/ and remap.
+        elif os.path.isdir(new_path):
+            self._sync_folder_rename(old_path, new_path)
+        self._refresh()
+
+    def _delete_selected(self):
+        items = self.list.selectedItems()
+        if not items:
+            return
+        paths = [it.data(Qt.ItemDataRole.UserRole) for it in items]
+        paths = [p for p in paths if p and p != ".."]
+        if not paths:
+            return
+        if len(paths) == 1:
+            msg = f"Move to trash:\n{paths[0]}"
+        else:
+            msg = f"Move {len(paths)} item(s) to trash?"
+        if QMessageBox.question(self, "Trash", msg,
+                                QMessageBox.StandardButton.Yes |
+                                QMessageBox.StandardButton.No
+                                ) != QMessageBox.StandardButton.Yes:
+            return
+        import aisearch_front_page as _fp
+        errors = []
+        for p in paths:
+            if not os.path.exists(p):
+                continue
+            try:
+                _tp, err = _fp.trash_file(p)
+                if err:
+                    errors.append(f"{os.path.basename(p)}: {err}")
+                    continue
+                # Sync app state
+                self._remove_from_app_state(p)
+            except Exception as e:
+                errors.append(f"{os.path.basename(p)}: {e}")
+        if errors:
+            QMessageBox.warning(self, "Trash",
+                f"Errors:\n" + "\n".join(errors[:10]))
+        self._refresh()
+
+    def _open_in_nemo(self, path):
+        try:
+            import aisearch_front_page as _fp
+            _fp.open_in_nemo(path)
+        except Exception:
+            pass
+
+    def _sync_folder_rename(self, old_dir, new_dir):
+        """When a directory is renamed, remap any tracked file paths that
+        live under it."""
+        app = self.app
+        old_prefix = os.path.normpath(os.path.abspath(old_dir)) + os.sep
+        new_prefix = os.path.normpath(os.path.abspath(new_dir)) + os.sep
+        # DB paths
+        try:
+            paths = app.data["paths"] if app.data and "paths" in app.data else None
+            if paths is not None:
+                for i, p in enumerate(paths):
+                    np = os.path.normpath(os.path.abspath(p))
+                    if np.startswith(old_prefix):
+                        paths[i] = new_prefix + np[len(old_prefix):]
+        except Exception:
+            pass
+        # attrs_data
+        try:
+            for key in list(app.attrs_data.keys()):
+                k_norm = os.path.normpath(os.path.abspath(key))
+                if k_norm.startswith(old_prefix):
+                    new_key = new_prefix + k_norm[len(old_prefix):]
+                    app.attrs_data[new_key] = app.attrs_data.pop(key)
+        except Exception:
+            pass
+
+    def _remove_from_app_state(self, path):
+        """Remove a trashed path from app.data + attrs_data."""
+        app = self.app
+        try:
+            if app.data and "paths" in app.data and path in app.data["paths"]:
+                idx = app.data["paths"].index(path)
+                keep = [i for i in range(len(app.data["paths"])) if i != idx]
+                app.data["paths"] = [app.data["paths"][i] for i in keep]
+                app.data["embeddings"] = app.data["embeddings"][keep]
+        except Exception:
+            pass
+        try:
+            app.attrs_data.pop(path, None)
         except Exception:
             pass
 
