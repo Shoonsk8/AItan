@@ -2258,23 +2258,12 @@ class AISearchApp(QMainWindow):
         source_path to `path`. Use when the person has accumulated
         bad / mismatched embeddings (P005 with random faces in it) —
         this discards every prior sample and pins the matcher to one
-        canonical face. User confirms first because it's destructive."""
+        canonical face. Non-destructive: previous BASE survives as a
+        sample in the pool."""
         proj = getattr(self, "current_project", None)
         if not proj or not pid or not path or not os.path.exists(path):
             return
         from PyQt6.QtWidgets import QMessageBox
-        ans = QMessageBox.question(
-            self, _t("Set BASE face / 基準顔の設定"),
-            _t(f"Replace ALL face samples for {pid} with just the face in:\n"
-               f"{os.path.basename(path)}\n\n"
-               f"This discards every prior embedding and resets the matcher "
-               f"to use only this one as the canonical reference. "
-               f"Continue? / "
-               f"{pid} の全顔サンプルを削除し、以下の顔のみを基準として使用します：\n"
-               f"{os.path.basename(path)}\n\n続行しますか？"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ans != QMessageBox.StandardButton.Yes:
-            return
         try:
             import face_recognition
             if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
@@ -2300,7 +2289,16 @@ class AISearchApp(QMainWindow):
             db = attrs_mod.load_faces_db(proj)
             faces = db.get("faces", {})
             faces.setdefault(pid, {"embeddings": [], "source_path": ""})
-            faces[pid]["embeddings"]  = [enc.tolist()]
+            # Non-destructive: prepend the new BASE encoding to the
+            # existing pool (so the previous BASE survives as a sample),
+            # dedupe exact matches, and cap at 20.
+            old_embs = list(faces[pid].get("embeddings", []))
+            new_enc_list = enc.tolist()
+            old_embs = [e for e in old_embs if e != new_enc_list]
+            new_pool = [new_enc_list] + old_embs
+            if len(new_pool) > 20:
+                new_pool = new_pool[:20]
+            faces[pid]["embeddings"]  = new_pool
             faces[pid]["source_path"] = os.path.abspath(path)
             attrs_mod.save_faces_db(proj, db)
             # Drop the in-memory cache so the next match call sees the
@@ -2311,7 +2309,8 @@ class AISearchApp(QMainWindow):
                 pass
             self._refresh_persons_tab_if_open()
             self.statusBar().showMessage(
-                _t(f"BASE face for {pid} reset. / {pid} の基準顔を再設定しました。"),
+                _t(f"BASE face for {pid} updated ({len(new_pool)} samples). / "
+                   f"{pid} の基準顔を更新しました（{len(new_pool)} サンプル）。"),
                 5000)
         except Exception as e:
             QMessageBox.critical(self, _t("Set BASE face / 基準顔の設定"),

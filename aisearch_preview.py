@@ -3380,11 +3380,17 @@ class PreviewWindow(QWidget):
                                person_id=pid,
                                editable=entry.get("editable", True))
             attrs_mod.save(app.current_project, app.attrs_data)
-            # Correct face DB if old ID was wrong
-            if old_pid and old_pid != pid:
-                import threading as _thr
-                _thr.Thread(target=lambda: attrs_mod.correct_person_id(
-                    path, app.current_project, pid, wrong_id=old_pid), daemon=True).start()
+            # Always teach the DB this file is a confirmed sample of
+            # `pid`. correct_person_id appends the encoding to the
+            # correct id's pool and (only when wrong_id is set and
+            # different) drops the most-similar sample from the wrong
+            # one. Was: only fired on a different-old-pid; an empty
+            # old_pid skipped the auto-add and the pool never grew
+            # from manual confirmations.
+            _wrong = old_pid if old_pid and old_pid != pid else None
+            import threading as _thr
+            _thr.Thread(target=lambda: attrs_mod.correct_person_id(
+                path, app.current_project, pid, wrong_id=_wrong), daemon=True).start()
             # Update person field in UI
             if self._p_edits:
                 self._p_edits[0].blockSignals(True)
