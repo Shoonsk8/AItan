@@ -20,6 +20,7 @@ import aisearch_config as cfg
 import aisearch_feedback as feedback
 import aisearch_preview
 import aisearch_attrs as attrs_mod
+from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
 VERSION = "2.3"
@@ -247,6 +248,11 @@ class FileTable(QTableWidget):
         self.horizontalHeader().setStretchLastSection(False)
         for _col in range(6):
             self.horizontalHeader().setSectionResizeMode(_col, QHeaderView.ResizeMode.Interactive)
+            # Size column (1) is right-aligned
+            if _col == 1:
+                self.model().setHeaderData(_col, Qt.Orientation.Horizontal, 
+                                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, 
+                                            Qt.ItemDataRole.TextAlignmentRole)
         self.verticalHeader().setVisible(False)
         self.setShowGrid(False)
         self.setAlternatingRowColors(True)
@@ -2329,6 +2335,20 @@ class AISearchApp(QMainWindow):
         _next = {"none": "face", "face": "clip",
                  "clip": "both", "both": "none"}
         self._set_ai_mode(_next.get(self._ai_mode(), "both"))
+
+    def _open_file_manager(self, initial_dir=None):
+        """Open (or focus + navigate) the File Manager window. Single
+        instance per app session — re-open just brings it forward and
+        re-points it at initial_dir."""
+        win = getattr(self, '_fm_win', None)
+        if win is None:
+            self._fm_win = FileManagerWindow(self, initial_dir)
+        else:
+            if initial_dir:
+                self._fm_win.navigate(initial_dir)
+        self._fm_win.show()
+        self._fm_win.raise_()
+        self._fm_win.activateWindow()
 
     def _open_settings(self, tab=0):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
@@ -5806,10 +5826,11 @@ class AISearchApp(QMainWindow):
             self._enter_browse_mode()
             self._raise_preview()
             return
-        # In search mode, row 0 is the query file — enter browse instead of moving it
+        # In search mode, row 0 is the query file — open the File Manager
+        # window at the query's directory. Browse-into-main is still
+        # available via the 📂 Browse button.
         if row == 0 and self.query_path:
-            self._enter_browse_mode()
-            self._raise_preview()
+            self._open_file_manager(os.path.dirname(os.path.abspath(self.query_path)))
             return
         if not self.query_path: return
         # Top file's directory no longer exists (Nemo / external move took it
