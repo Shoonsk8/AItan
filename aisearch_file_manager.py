@@ -625,6 +625,9 @@ class FilePane(QWidget):
         self.tree = _FMTreeList(self)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        # Single-click / arrow-key selection → live preview, same as
+        # the main page's behavior.
+        self.tree.currentItemChanged.connect(self._on_current_changed)
         v.addWidget(self.tree, 1)
 
         if initial_dir and os.path.isdir(initial_dir):
@@ -680,6 +683,23 @@ class FilePane(QWidget):
         self.path_edit.setText(self._cur_dir)
         self.tree.populate_root(self._cur_dir)
         self._update_nav_buttons()
+
+    def _on_current_changed(self, current, previous):
+        """Single-click / arrow-key selection → live preview, mirroring
+        the main-page table's itemSelectionChanged → handle_preview hookup."""
+        if current is None:
+            return
+        target = current.data(0, Qt.ItemDataRole.UserRole)
+        if (not target or target == ".."
+                or target == _FMTreeList._PLACEHOLDER
+                or not os.path.isfile(target)):
+            return
+        ph = getattr(self.app, "preview_handler", None)
+        if ph is not None:
+            try:
+                ph.show(target)
+            except Exception:
+                pass
 
     def _update_nav_buttons(self):
         self.btn_back.setEnabled(self._history_idx > 0)
