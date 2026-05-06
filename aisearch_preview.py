@@ -3556,10 +3556,21 @@ class PreviewWindow(QWidget):
             self._detect_face_for_canvas()
         elif action == "edit_person" and key in ("P", "PI", "PW"):
             self._open_persons_settings_for_pid()
+        elif action == "new_person" and key == "P":
+            self._assign_new_person_for_current()
         elif action == "update_clip":
             self._update_clip_for_field(key)
         elif action == "show_clip":
             self._show_clip_tile_for_field(key)
+
+    def _assign_new_person_for_current(self):
+        """Allocate next free person ID, seed the faces DB with this
+        file's face encoding, tag the file, and refresh the panel."""
+        path = getattr(self, "_attr_path", None)
+        app = self.handler.app
+        if path and hasattr(app, "_assign_new_person"):
+            app._assign_new_person(path)
+            self._refresh_attrs_inner(path)
 
     def _open_persons_settings_for_pid(self):
         """Open Settings → Persons, highlight the card for current P, and store

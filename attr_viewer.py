@@ -606,10 +606,27 @@ class FieldWidget(QGroupBox):
                 self._detect_btn.setToolTip(_lang_label("Open Persons settings and highlight this ID / 人物設定を開いてこのIDを強調表示"))
                 self._detect_btn.clicked.connect(
                     lambda: self.action_triggered.emit(self.key, "edit_person"))
+                # ➕ "Assign new person ID" — allocates the next free pid,
+                # seeds the faces DB with this file's face encoding as
+                # the base, and tags the file. Use after Update Face
+                # shows that the auto-detected match is wrong.
+                self._new_person_btn = QPushButton("➕")
+                self._new_person_btn.setFixedHeight(20)
+                self._new_person_btn.setFixedWidth(28)
+                self._new_person_btn.setStyleSheet(
+                    "QPushButton{background:#3a3a4e;color:#aabbe5;border:1px solid #4a5a7a;"
+                    "border-radius:3px;font-size:9pt;padding:0;}"
+                    "QPushButton:hover{background:#4a4a6a;}"
+                    "QPushButton:disabled{color:#555;border-color:#333;background:#222;}")
+                self._new_person_btn.setToolTip(_lang_label(
+                    "Assign new person ID / 新規人物IDを割当"))
+                self._new_person_btn.clicked.connect(
+                    lambda: self.action_triggered.emit(self.key, "new_person"))
                 _id_row = QHBoxLayout()
                 _id_row.setContentsMargins(0, 0, 0, 0)
                 _id_row.addWidget(self._pid_edit, stretch=1)
                 _id_row.addWidget(self._detect_btn)
+                _id_row.addWidget(self._new_person_btn)
                 vlay.addLayout(_id_row)
             elif key in ("PI", "PW"):
                 # PI / PW — plain text input + 👤 button (same shape as P).

@@ -5612,15 +5612,10 @@ class AISearchApp(QMainWindow):
                     _t(f"Add this face to {pid} samples / {pid} のサンプルに追加"), self)
                 act_add.triggered.connect(lambda _, p=path, q=pid: self._add_face_sample(q, p))
                 menu.addAction(act_add)
-            # "Assign new person ID" — always available for files (even
-            # if person_id is empty / 000). Allocates the next free pid,
-            # registers the file's face encoding as its base sample,
-            # and tags the file.
-            act_new_person = QAction(
-                _t("Assign new person ID / 新規人物IDを割当"), self)
-            act_new_person.triggered.connect(
-                lambda _, p=path: self._assign_new_person(p))
-            menu.addAction(act_new_person)
+            # "Assign new person ID" lives on the preview window's P
+            # attribute field (➕ button) — that's the workflow point
+            # right after the user runs Update Face and sees the wrong
+            # match.
             menu.addSeparator()
 
         menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
