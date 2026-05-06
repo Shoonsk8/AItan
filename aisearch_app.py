@@ -2241,6 +2241,70 @@ class AISearchApp(QMainWindow):
             QMessageBox.critical(self, _t("Set rep / 代表画像設定"),
                 f"Could not update rep pic:\n{e}")
 
+    def _set_base_face(self, pid, path):
+        """Wipe person `pid`'s face embeddings list and replace it with
+        the single embedding extracted from `path`. Also updates
+        source_path to `path`. Use when the person has accumulated
+        bad / mismatched embeddings (P005 with random faces in it) —
+        this discards every prior sample and pins the matcher to one
+        canonical face. User confirms first because it's destructive."""
+        proj = getattr(self, "current_project", None)
+        if not proj or not pid or not path or not os.path.exists(path):
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        ans = QMessageBox.question(
+            self, _t("Set BASE face / 基準顔の設定"),
+            _t(f"Replace ALL face samples for {pid} with just the face in:\n"
+               f"{os.path.basename(path)}\n\n"
+               f"This discards every prior embedding and resets the matcher "
+               f"to use only this one as the canonical reference. "
+               f"Continue? / "
+               f"{pid} の全顔サンプルを削除し、以下の顔のみを基準として使用します：\n"
+               f"{os.path.basename(path)}\n\n続行しますか？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            import face_recognition
+            if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+                import cv2
+                cap = cv2.VideoCapture(path)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret or frame is None:
+                    QMessageBox.warning(self, _t("Set BASE face / 基準顔の設定"),
+                        _t("Could not decode the first frame of this video. / "
+                           "この動画の最初のフレームを読み込めませんでした。"))
+                    return
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                img = face_recognition.load_image_file(path)
+            encs = face_recognition.face_encodings(img)
+            if not encs:
+                QMessageBox.warning(self, _t("Set BASE face / 基準顔の設定"),
+                    _t("No face detected in this file. / "
+                       "このファイルから顔を検出できませんでした。"))
+                return
+            enc = encs[0]
+            db = attrs_mod.load_faces_db(proj)
+            faces = db.get("faces", {})
+            faces.setdefault(pid, {"embeddings": [], "source_path": ""})
+            faces[pid]["embeddings"]  = [enc.tolist()]
+            faces[pid]["source_path"] = os.path.abspath(path)
+            attrs_mod.save_faces_db(proj, db)
+            # Drop the in-memory cache so the next match call sees the
+            # new single-embedding state.
+            try:
+                attrs_mod._faces_db_cache.pop(proj, None)
+            except Exception:
+                pass
+            self.statusBar().showMessage(
+                _t(f"BASE face for {pid} reset. / {pid} の基準顔を再設定しました。"),
+                5000)
+        except Exception as e:
+            QMessageBox.critical(self, _t("Set BASE face / 基準顔の設定"),
+                f"{e}")
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the directory of
         the currently-selected row. Falls back to query_path if nothing
@@ -5416,6 +5480,10 @@ class AISearchApp(QMainWindow):
                     _t(f"Set as rep pic for {pid} / {pid} の代表画像に設定"), self)
                 act_rep.triggered.connect(lambda _, p=path, q=pid: self._set_rep_pic(q, p))
                 menu.addAction(act_rep)
+                act_base = QAction(
+                    _t(f"Set as BASE face for {pid} / {pid} の基準顔に設定"), self)
+                act_base.triggered.connect(lambda _, p=path, q=pid: self._set_base_face(q, p))
+                menu.addAction(act_base)
             menu.addSeparator()
 
         menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
