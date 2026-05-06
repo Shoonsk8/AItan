@@ -607,8 +607,11 @@ class FilePane(QWidget):
 
         tb = QHBoxLayout()
         self.btn_back = QPushButton("◀")
+        self.btn_back.setToolTip("Back (previous directory)")
         self.btn_fwd  = QPushButton("▶")
+        self.btn_fwd.setToolTip("Forward")
         self.btn_up   = QPushButton("▲")
+        self.btn_up.setToolTip("Up to parent directory")
         for b in (self.btn_back, self.btn_fwd, self.btn_up):
             b.setFixedWidth(28)
         self.btn_back.clicked.connect(self._go_back)
