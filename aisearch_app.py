@@ -2305,6 +2305,58 @@ class AISearchApp(QMainWindow):
             QMessageBox.critical(self, _t("Set BASE face / 基準顔の設定"),
                 f"{e}")
 
+    def _add_face_sample(self, pid, path):
+        """Append the face encoding extracted from `path` to person
+        `pid`'s embeddings list. Use to teach the matcher a NEW
+        valid shot of an existing person without wiping the rest of
+        the pool. Source_path stays whatever it was."""
+        proj = getattr(self, "current_project", None)
+        if not proj or not pid or not path or not os.path.exists(path):
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            import face_recognition
+            if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+                import cv2
+                cap = cv2.VideoCapture(path)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret or frame is None:
+                    QMessageBox.warning(self, _t("Add face / 顔追加"),
+                        _t("Could not decode the first frame. / "
+                           "最初のフレームを読み込めませんでした。"))
+                    return
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                img = face_recognition.load_image_file(path)
+            encs = face_recognition.face_encodings(img)
+            if not encs:
+                QMessageBox.warning(self, _t("Add face / 顔追加"),
+                    _t("No face detected in this file. / "
+                       "このファイルから顔を検出できませんでした。"))
+                return
+            enc = encs[0]
+            db = attrs_mod.load_faces_db(proj)
+            faces = db.get("faces", {})
+            faces.setdefault(pid, {"embeddings": [], "source_path": ""})
+            samples = list(faces[pid].get("embeddings", []))
+            samples.append(enc.tolist())
+            # Keep at most 20 samples — same cap as the auto-detect path
+            if len(samples) > 20:
+                samples = samples[-20:]
+            faces[pid]["embeddings"] = samples
+            attrs_mod.save_faces_db(proj, db)
+            try:
+                attrs_mod._faces_db_cache.pop(proj, None)
+            except Exception:
+                pass
+            self.statusBar().showMessage(
+                _t(f"Added to {pid} (now {len(samples)} samples). / "
+                   f"{pid} に追加しました（現在 {len(samples)} サンプル）。"),
+                4000)
+        except Exception as e:
+            QMessageBox.critical(self, _t("Add face / 顔追加"), f"{e}")
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the directory of
         the currently-selected row. Falls back to query_path if nothing
@@ -5484,6 +5536,10 @@ class AISearchApp(QMainWindow):
                     _t(f"Set as BASE face for {pid} / {pid} の基準顔に設定"), self)
                 act_base.triggered.connect(lambda _, p=path, q=pid: self._set_base_face(q, p))
                 menu.addAction(act_base)
+                act_add = QAction(
+                    _t(f"Add this face to {pid} samples / {pid} のサンプルに追加"), self)
+                act_add.triggered.connect(lambda _, p=path, q=pid: self._add_face_sample(q, p))
+                menu.addAction(act_add)
             menu.addSeparator()
 
         menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
