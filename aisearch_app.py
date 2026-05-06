@@ -2212,6 +2212,16 @@ class AISearchApp(QMainWindow):
         self._fm_win.raise_()
         self._fm_win.activateWindow()
 
+    def _refresh_persons_tab_if_open(self):
+        """Tell the Settings → Persons tab to rebuild its card grid so
+        rep pic / BASE / sample-add operations reflect immediately."""
+        sw = getattr(self, "_settings_win", None)
+        if sw is not None and hasattr(sw, "_rebuild_person_groups"):
+            try:
+                sw._rebuild_person_groups()
+            except Exception:
+                pass
+
     def _set_rep_pic(self, pid, path):
         """Set `path` as the representative picture for person `pid` —
         updates faces_<project>.json's source_path field. Used from
@@ -2233,6 +2243,7 @@ class AISearchApp(QMainWindow):
                 return
             faces[pid]["source_path"] = os.path.abspath(path)
             attrs_mod.save_faces_db(proj, db)
+            self._refresh_persons_tab_if_open()
             self.statusBar().showMessage(
                 _t(f"Rep pic for {pid} updated. / {pid} の代表画像を更新しました。"),
                 4000)
@@ -2298,6 +2309,7 @@ class AISearchApp(QMainWindow):
                 attrs_mod._faces_db_cache.pop(proj, None)
             except Exception:
                 pass
+            self._refresh_persons_tab_if_open()
             self.statusBar().showMessage(
                 _t(f"BASE face for {pid} reset. / {pid} の基準顔を再設定しました。"),
                 5000)
@@ -2350,6 +2362,7 @@ class AISearchApp(QMainWindow):
                 attrs_mod._faces_db_cache.pop(proj, None)
             except Exception:
                 pass
+            self._refresh_persons_tab_if_open()
             self.statusBar().showMessage(
                 _t(f"Added to {pid} (now {len(samples)} samples). / "
                    f"{pid} に追加しました（現在 {len(samples)} サンプル）。"),
@@ -2422,6 +2435,7 @@ class AISearchApp(QMainWindow):
                     pw._refresh_attrs_inner(path)
             except Exception:
                 pass
+            self._refresh_persons_tab_if_open()
             self.statusBar().showMessage(
                 _t(f"Assigned new person P{new_id}. / "
                    f"新規人物 P{new_id} を割当しました。"),
