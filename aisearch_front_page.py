@@ -190,7 +190,11 @@ def move_file_physically(old_path, query_path, data, project_name, mode="size_ch
 
 
 def open_in_nemo(path):
-    """Reveal path in the system file manager (cross-platform)."""
+    """Reveal path in the system file manager (cross-platform).
+    For files on Linux: opens the parent folder in the file manager.
+    Bare `nemo file.jpg` would launch the default image viewer, not
+    the file manager — that's not what the user wants when they pick
+    'Open in Nemo' from a context menu."""
     if not os.path.exists(path): return
     import sys
     abs_path = os.path.abspath(path)
@@ -198,13 +202,21 @@ def open_in_nemo(path):
         subprocess.Popen(["explorer", "/select,", abs_path]); return
     if sys.platform == "darwin":
         subprocess.Popen(["open", "-R", abs_path]); return
-    # Linux: pass file path so manager highlights it; try common managers
-    for fm in ["nemo", "nautilus", "thunar", "dolphin"]:
+    # Linux: nemo / thunar / dolphin all support --select to highlight
+    # a specific file within its parent folder. Nautilus uses the file
+    # path directly. Fall back to opening the parent folder.
+    parent = abs_path if os.path.isdir(abs_path) else os.path.dirname(abs_path)
+    for fm, args in (
+        ("nemo",     ["--no-desktop", abs_path] if os.path.isdir(abs_path) else [parent]),
+        ("nautilus", [abs_path] if os.path.isdir(abs_path) else [abs_path]),
+        ("thunar",   [parent]),
+        ("dolphin",  [parent]),
+    ):
         try:
-            subprocess.Popen([fm, abs_path]); return
+            subprocess.Popen([fm] + args); return
         except FileNotFoundError:
             continue
-    subprocess.Popen(["xdg-open", os.path.dirname(abs_path)])
+    subprocess.Popen(["xdg-open", parent])
 
 
 def execute_manual_move(old_path, target_dir, data, project_name, mode="size_check", parent_win=None):
