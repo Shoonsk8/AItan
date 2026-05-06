@@ -2,6 +2,29 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-06 — v2.4.1
+
+Polish on top of v2.4.
+
+### Right-click menu cleanup
+- `aisearch_front_page.py:create_context_menu` — main-table right-click now: **File Manager · Rename · Move to… · Delete**. Dropped "📂 Open Folder" (replaced by File Manager) and "🏷 Attributes…" (preview-window panel covers it).
+- `aisearch_app.py` — removed obsolete standalone Attributes window (`edit_attrs`, `_build_attr_window`, `_attr_win_load`), the `a`/`A` shortcut, the inline 📝 Title / Scene… button, and `open_folder`. Net ~165 lines deleted.
+- Right-arrow on row 0 reverted to its pre-v2.4 behavior (enters browse mode in main page). FM is now reached through the right-click → 🗂 File Manager item.
+
+### File Manager
+- `aisearch_file_manager.py:_FMTreeList` — right-click toggle on coded-field sub-combos (HC_Color / CL_Top / etc.) now actually flips them between freq and alpha. Was: only the main combo had the hook; sub-combos were stuck on freq.
+- `aisearch_file_manager.py:_FMItem` — folders sort first, files after, regardless of column or direction. ".." pinned to top.
+- `aisearch_file_manager.py:_FMTreeList._collect_expanded` / `_restore_expanded` — folder expansion now persists through Ctrl+Wheel resize and other refreshes.
+- `aisearch_file_manager.py:_kick_thumb_loader / populate_root / closeEvent` — wait for the thumbnail QThread to finish before dropping the reference. Was: `terminate called without an active exception` / Aborted on rapid navigation or close.
+- `aisearch_file_manager.py:_remove_from_app_state` — FM-driven trash now also removes matching rows from the main-window table and persists `attrs.json` + `features.pt` so the deletion survives a relaunch.
+- `aisearch_file_manager.py:FilePane._on_current_changed` — single-click on a tree row sends the file to the preview window (mirrors main-page table behaviour). Double-click still works.
+- `aisearch_file_manager.py` — buttons relabeled `Back / Fwd / Up / Dual pane` (the Unicode arrows weren't rendering on the user's font).
+- `aisearch_file_manager.py:status_lbl` — live status line per pane: `N selected — total size`.
+- `aisearch_front_page.py:open_in_nemo` — for files, opens the parent folder; was launching the default image viewer instead of Nemo.
+
+### Cross-platform
+- `aisearch_file_manager.py:_open_default / _app_choices` — Open / Open with… now dispatches by `sys.platform`. Linux uses xdg-open + Pix/GIMP/VLC/etc; macOS uses `open -a` + Preview/QuickTime/IINA; Windows uses os.startfile + Paint/IrfanView/MPV. Only installed apps appear in the menu.
+
 ## 2026-05-06 — v2.4
 
 ### Version

@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.4"
+VERSION = "2.4.1"
 
 
 def _read_embedded_meta(path):
