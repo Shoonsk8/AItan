@@ -3762,7 +3762,31 @@ class AISearchApp(QMainWindow):
                         return True
                     return max(sa, sb) <= min(sa, sb) * 1.5
 
-                sim = st_util.cos_sim(embs, embs).cpu()   # (N, N)
+                # Sparse similarity edges: (i, j) → sim, i < j. Built
+                # below in a chunked similarity pass. Replaces the dense
+                # N×N matrix that used ~N² × 4 B and OOM'd on big DBs.
+                edges = {}
+
+                class _SparseSim:
+                    """Drop-in replacement for the old dense sim tensor.
+                    .get(i, j) returns the stored edge sim if known,
+                    otherwise computes it on demand from embeddings."""
+                    def __init__(self, _edges, _embs):
+                        self._e = _edges
+                        self._embs = _embs
+                    def get(self, i, j):
+                        if i == j:
+                            return 1.0
+                        a, b = (i, j) if i < j else (j, i)
+                        v = self._e.get((a, b))
+                        if v is not None:
+                            return v
+                        try:
+                            return float(st_util.cos_sim(
+                                self._embs[i:i+1], self._embs[j:j+1])[0, 0])
+                        except Exception:
+                            return 0.0
+                sim = _SparseSim(edges, embs)
 
                 # Connected components: BFS
                 adj = [[] for _ in range(n)]
@@ -3804,41 +3828,52 @@ class AISearchApp(QMainWindow):
                                 if j not in adj[i]: adj[i].append(j)
                                 if i not in adj[j]: adj[j].append(i)
 
-                # Cosine similarity pass — report progress every 5%
+                # Cosine similarity pass — chunked so peak memory stays
+                # bounded. Was: a single (N, N) cos_sim on GPU OOM'd at
+                # ~1.8 GiB on big DBs. Now we slice the embedding matrix
+                # into rows of CHUNK at a time, so peak is CHUNK × N × 4 B
+                # (~45 MB for CHUNK=512, N=22000).
                 q.put(("progress", f"Comparing pairs…  0%"))
-                _step = max(1, n // 20)
                 _last_pct = 0
                 import time as _ctime
-                for i in range(n):
-                    # Pause/cancel hooks so Stop responds inside this O(n²) loop
+                CHUNK = 512
+                for chunk_start in range(0, n, CHUNK):
+                    chunk_end = min(chunk_start + CHUNK, n)
+                    # Pause / cancel between chunks
                     while self._dup_paused and not self._dup_cancel:
                         _ctime.sleep(0.1)
                     if self._dup_cancel:
                         q.put(("error", _t("Scan stopped by user / ユーザーが中止しました")))
                         return
-                    pct = int(i / n * 100)
+                    pct = int(chunk_start / n * 100)
                     if pct >= _last_pct + 5:
                         _last_pct = pct
                         q.put(("progress", f"Comparing pairs… {pct:3d}%"))
-                    for j in range(i + 1, n):
-                        # Inner-loop pause/cancel check every 5000 iterations
-                        # so Stop responds even on huge n where one outer i
-                        # otherwise takes seconds.
-                        if (j & 0xFFF) == 0:
-                            while self._dup_paused and not self._dup_cancel:
-                                _ctime.sleep(0.1)
-                            if self._dup_cancel:
-                                q.put(("error", _t("Scan stopped by user / ユーザーが中止しました")))
-                                return
-                        if sim[i][j].item() >= threshold:
-                            if not _same_ext(i, j):
-                                continue
-                            if not _sizes_ok(i, j):
-                                continue
-                            if exact_mode and _file_hash(paths[i]) != _file_hash(paths[j]):
-                                continue
-                            adj[i].append(j)
-                            adj[j].append(i)
+                    sims_block = st_util.cos_sim(embs[chunk_start:chunk_end], embs).cpu()
+                    for i_local in range(chunk_end - chunk_start):
+                        i = chunk_start + i_local
+                        row = sims_block[i_local]
+                        for j in range(i + 1, n):
+                            # Pause/cancel inside the inner loop occasionally
+                            if (j & 0xFFF) == 0:
+                                while self._dup_paused and not self._dup_cancel:
+                                    _ctime.sleep(0.1)
+                                if self._dup_cancel:
+                                    q.put(("error", _t("Scan stopped by user / ユーザーが中止しました")))
+                                    return
+                            v = float(row[j])
+                            if v >= threshold:
+                                if not _same_ext(i, j):
+                                    continue
+                                if not _sizes_ok(i, j):
+                                    continue
+                                if exact_mode and _file_hash(paths[i]) != _file_hash(paths[j]):
+                                    continue
+                                edges[(i, j)] = v
+                                adj[i].append(j)
+                                adj[j].append(i)
+                    # Drop the block before the next chunk allocates
+                    del sims_block
 
                 q.put(("progress", _t("Finding groups… / グループ検出中…")))
                 visited = [False] * n
@@ -3869,7 +3904,7 @@ class AISearchApp(QMainWindow):
                 # Sort groups: highest similarity first
                 def _group_max_sim(group):
                     rep = group[0]
-                    return max(sim[idx][rep].item() for idx in group[1:]) if len(group) > 1 else 1.0
+                    return max(sim.get(idx, rep) for idx in group[1:]) if len(group) > 1 else 1.0
                 groups.sort(key=_group_max_sim, reverse=True)
                 q.put(("done", (groups, sim, paths)))
             except Exception as e:
@@ -4009,7 +4044,7 @@ class AISearchApp(QMainWindow):
                 item0.setData(Qt.ItemDataRole.UserRole + 2, grp_label)
                 if rank == 0:
                     item0.setToolTip(_t("Click to collapse/expand group / クリックでグループを折りたたみ/展開"))
-                sim_score = 1.0 if rank == 0 else sim[idx][rep].item()
+                sim_score = 1.0 if rank == 0 else sim.get(idx, rep)
                 item0.setData(Qt.ItemDataRole.UserRole + 1, sim_score)
                 color = self._dup_color(sim_score, g_idx)
                 fg = self._contrast_fg(color)
@@ -4031,7 +4066,7 @@ class AISearchApp(QMainWindow):
             for rank, idx in enumerate(group):
                 members.append({
                     "path": paths[idx],
-                    "sim":  1.0 if rank == 0 else round(sim[idx][rep].item(), 6)
+                    "sim":  1.0 if rank == 0 else round(sim.get(idx, rep), 6)
                 })
             result.append(members)
         return result
