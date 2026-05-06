@@ -995,14 +995,14 @@ class _PersonMixin:
 
     def _open_person_preview(self, pid, src):
         # When the user opened Settings via the canvas 👤 button, an origin
-        # path is recorded — clicks then select the card (highlight) instead
-        # of opening preview, since the user's intent is to pick a pid to
-        # assign back to the origin file.
+        # path is recorded — additionally highlight the card so the
+        # selection-and-assign workflow still works. Preview ALWAYS runs
+        # too: the user wants to see who they're picking.
         if getattr(self, "_persons_origin_path", ""):
             for c in self.findChildren(_PersonCard):
                 if (getattr(c, "_pid", "") or "").strip().lower() == (pid or "").strip().lower():
                     self._select_person_card(c)
-                    return
+                    break
         ph = getattr(getattr(self, "app", None), "preview_handler", None)
         # Try source_path first
         if src and os.path.exists(src):
