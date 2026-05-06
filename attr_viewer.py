@@ -656,7 +656,11 @@ class FieldWidget(QGroupBox):
             self._cb = QComboBox()
             self._cb.setStyleSheet(_CB_SS)
             self._cb.setMinimumWidth(160)
-            self._sort_lbl = QLabel(_lang_label("freq / 頻度"))
+            # Matrix-style fields show "mtx ⇄ abc" — "freq" was misleading
+            # because the user associates matrix with cell positions, not
+            # frequency-of-use. Toggle still flips the same _sort_freq flag.
+            initial_lbl = "mtx" if style == "matrix" else _lang_label("freq / 頻度")
+            self._sort_lbl = QLabel(initial_lbl)
             self._sort_lbl.setStyleSheet("color:#888;font-size:9pt;")
             self._fill_combo()
             self._cb.currentIndexChanged.connect(self._on_select)
@@ -756,9 +760,13 @@ class FieldWidget(QGroupBox):
     def _toggle_sort(self):
         self._sort_freq = not self._sort_freq
         # Update the label only if it exists (main-combo style); sub-
-        # combo coded fields don't have one.
+        # combo coded fields don't have one. Matrix uses mtx/abc;
+        # other combo styles use freq/alpha.
         if hasattr(self, "_sort_lbl") and self._sort_lbl is not None:
-            self._sort_lbl.setText(_lang_label("freq / 頻度") if self._sort_freq else _lang_label("alpha / 順序"))
+            if self.style == "matrix":
+                self._sort_lbl.setText("mtx" if self._sort_freq else "abc")
+            else:
+                self._sort_lbl.setText(_lang_label("freq / 頻度") if self._sort_freq else _lang_label("alpha / 順序"))
             self._sort_lbl.setStyleSheet(
                 "color:#888;font-size:9pt;" if self._sort_freq
                 else "color:#8ab;font-size:9pt;font-style:italic;")
