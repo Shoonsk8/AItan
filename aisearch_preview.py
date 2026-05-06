@@ -3497,9 +3497,33 @@ class PreviewWindow(QWidget):
         old_pid = (entry.get("person_id") or "").strip().lower()
         if old_pid and old_pid != "000" and sim < self._OVERRIDE_SIMILARITY:
             return  # weak detection — don't overwrite an existing pid
+        if old_pid == pid.strip().lower():
+            return  # already same — nothing to do
         entry["person_id"] = pid
+        # Patch the cached FACE display text so the "Stored:" line shows
+        # the new pid instead of the old one (the snapshot was taken
+        # before this override fired).
+        face_txt = entry.get("FACE", "")
+        if face_txt:
+            new_lines = []
+            for ln in face_txt.split("\n"):
+                if ln.startswith("Stored:"):
+                    new_lines.append(f"Stored: P{pid}")
+                else:
+                    new_lines.append(ln)
+            entry["FACE"] = "\n".join(new_lines)
+            try:
+                self._update_canvas_text_widget("FACE", entry["FACE"])
+            except Exception:
+                pass
         attrs_mod.save(app.current_project, app.attrs_data)
         self._refresh_attrs_inner(path)
+        # Also refresh the person-id combo / pid edit so the visible
+        # widget value tracks the override.
+        try:
+            self._refresh_person_id_combo(force=True)
+        except Exception:
+            pass
 
     @pyqtSlot(str, str)
     def _auto_apply_pw(self, path: str, pids_csv: str):
