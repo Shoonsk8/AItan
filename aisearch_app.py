@@ -1535,13 +1535,6 @@ class AISearchApp(QMainWindow):
             r3.addStretch()
             vbox.addLayout(r3)
 
-        # Project / Scene button
-        btn_more = QPushButton("📝 Title / Scene…")
-        btn_more.setStyleSheet(
-            "padding: 2px 6px; color: #e0e0e0; background-color: #555;")
-        btn_more.clicked.connect(self.edit_attrs)
-        vbox.addWidget(btn_more)
-
         self._inline_attr_path = None
         panel.setEnabled(False)
         return panel
@@ -1662,19 +1655,6 @@ class AISearchApp(QMainWindow):
         QShortcut(QKeySequence("End"),        self, self._go_to_last_row)
         QShortcut(QKeySequence("Ctrl+Z"),       self, self._undo_last)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, self._show_undo_history)
-        QShortcut(QKeySequence("a"),            self, self.edit_attrs)
-        QShortcut(QKeySequence("A"),            self, self.edit_attrs)
-        self._attr_win = None
-        self.table.selectionModel().selectionChanged.connect(self._on_selection_changed_attrs)
-
-    def _on_selection_changed_attrs(self):
-        if not (hasattr(self, '_attr_win') and self._attr_win and self._attr_win.isVisible()):
-            return
-        row = self._current_row()
-        if row < 0: return
-        path = self.table.get_row_path(row)
-        if path:
-            self._attr_win_load(path)
 
     def _go_to_first_row(self):
         for r in range(self.table.rowCount()):
@@ -1871,143 +1851,6 @@ class AISearchApp(QMainWindow):
             self._save_dup_results()
 
     # ── Attributes ───────────────────────────────────────────────────────────
-
-    def edit_attrs(self):
-        row = self._current_row()
-        if row < 0: return
-        path = self.table.get_row_path(row)
-        if not path: return
-
-        if not hasattr(self, '_attr_win') or self._attr_win is None:
-            self._attr_win = self._build_attr_window()
-
-        self._attr_win_load(path)
-        self._attr_win.show()
-        self._attr_win.raise_()
-        self._attr_win.activateWindow()
-
-    def _build_attr_window(self):
-        from PyQt6.QtWidgets import QGroupBox, QRadioButton, QScrollArea, QButtonGroup
-        win = QWidget(None)
-        win.setWindowFlag(Qt.WindowType.Window)
-        win.setWindowTitle(_t("Attributes / 属性"))
-        win.resize(340, 580)
-        win._aw_path = None
-
-        outer = QVBoxLayout(win)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        inner  = QWidget();     layout = QVBoxLayout(inner)
-        layout.setSpacing(6)
-        scroll.setWidget(inner); outer.addWidget(scroll)
-
-        win._aw_checks = {}
-        win._aw_none_rb = None
-        win._aw_qual_rbs = {}
-        win._aw_none_res = None
-        win._aw_res_rbs = {}
-        win._aw_audio_checks = {}
-        win._aw_g_aud = None
-
-        # Usage
-        g_meta = QGroupBox(_t("Usage / 用途")); lm = QVBoxLayout(g_meta)
-        lm.addWidget(QLabel(_t("Title: / タイトル：")))
-        win._aw_proj_edit = QLineEdit(); lm.addWidget(win._aw_proj_edit)
-        win._aw_scene_lbl = QLabel(_t("Scene: / シーン：")); lm.addWidget(win._aw_scene_lbl)
-        win._aw_scene_edit = QLineEdit(); lm.addWidget(win._aw_scene_edit)
-        layout.addWidget(g_meta)
-
-        # Note
-        g_note = QGroupBox(_t("Note / ノート")); ln = QVBoxLayout(g_note)
-        win._aw_note_edit = QTextEdit(); win._aw_note_edit.setFixedHeight(55); ln.addWidget(win._aw_note_edit)
-        layout.addWidget(g_note)
-
-        # Confirmed
-        win._aw_confirmed_cb = QCheckBox(_t("Confirmed different (hide from dup results) / 異なると確認済み（重複結果から非表示）"))
-        layout.addWidget(win._aw_confirmed_cb)
-
-        # Buttons
-        btn_row = QHBoxLayout()
-        btn_save  = QPushButton(_t("Save / 保存"))
-        btn_save.setStyleSheet(cfg.btn_ss("btn_write", self.config))
-        btn_clear = QPushButton(_t("Clear / クリア"))
-        btn_close = QPushButton(_t("Close / 閉じる")); btn_close.clicked.connect(win.close)
-
-        def _save():
-            path = win._aw_path
-            if not path: return
-            tags = [k for k, cb in win._aw_checks.items() if cb.isChecked()]
-            tags += [k for k, rb in win._aw_qual_rbs.items() if rb.isChecked()]
-            tags += [k for k, rb in win._aw_res_rbs.items() if rb.isChecked()]
-            tags += [k for k, cb in win._aw_audio_checks.items() if cb.isChecked()]
-            is_video = path.lower().endswith(logic.EXT_VID)
-            attrs_mod.set_file(self.attrs_data, path,
-                               tags=tags,
-                               note=win._aw_note_edit.toPlainText().strip(),
-                               confirmed=win._aw_confirmed_cb.isChecked(),
-                               project=win._aw_proj_edit.text().strip(),
-                               scene=win._aw_scene_edit.text().strip() if is_video else "",
-                               editable=entry.get("editable", True))
-            attrs_mod.save(self.current_project, self.attrs_data)
-            row = self._current_row()
-            self._refresh_inline_attrs(path)
-            if (self.preview_handler.window and self.preview_handler.window.isVisible()
-                    and self.preview_handler.current_path == path):
-                self.preview_handler.window._refresh_attrs(path)
-            if row >= 0:
-                self._refresh_attrs_indicator(row, path)
-            self._highlight_unmarked_rows()
-            if self.btn_hide_confirmed.isChecked():
-                self._apply_confirmed_filter(True)
-
-        def _clear():
-            for cb in win._aw_checks.values(): cb.setChecked(False)
-            for cb in win._aw_audio_checks.values(): cb.setChecked(False)
-            if win._aw_none_rb: win._aw_none_rb.setChecked(True)
-            if win._aw_none_res: win._aw_none_res.setChecked(True)
-            win._aw_proj_edit.clear(); win._aw_scene_edit.clear()
-            win._aw_note_edit.clear(); win._aw_confirmed_cb.setChecked(False)
-
-        btn_save.clicked.connect(_save)
-        btn_clear.clicked.connect(_clear)
-        btn_row.addWidget(btn_save); btn_row.addWidget(btn_clear); btn_row.addWidget(btn_close)
-        outer.addLayout(btn_row)
-
-        return win
-
-    def _attr_win_load(self, path):
-        """Load a file's attributes into the open attr window."""
-        win = self._attr_win
-        if win is None: return
-        win._aw_path = path
-        win.setWindowTitle(_t(f"Attributes — {os.path.basename(path)} / 属性 — {os.path.basename(path)}"))
-
-        entry    = attrs_mod.get(self.attrs_data, path)
-        cur_tags = set(entry.get("tags", []))
-        is_video = path.lower().endswith(logic.EXT_VID)
-
-        for key, cb in win._aw_checks.items():
-            cb.setChecked(key in cur_tags)
-
-        has_qual = bool(cur_tags & attrs_mod.QUALITY_TAGS)
-        if win._aw_none_rb: win._aw_none_rb.setChecked(not has_qual)
-        for key, rb in win._aw_qual_rbs.items():
-            rb.setChecked(key in cur_tags)
-
-        has_res = bool(cur_tags & attrs_mod.RESOLUTION_TAGS)
-        if win._aw_none_res: win._aw_none_res.setChecked(not has_res)
-        for key, rb in win._aw_res_rbs.items():
-            rb.setChecked(key in cur_tags)
-
-        if win._aw_g_aud: win._aw_g_aud.setVisible(is_video)
-        win._aw_scene_lbl.setVisible(is_video)
-        win._aw_scene_edit.setVisible(is_video)
-        for key, cb in win._aw_audio_checks.items():
-            cb.setChecked(key in cur_tags)
-
-        win._aw_proj_edit.setText(entry.get("project", ""))
-        win._aw_scene_edit.setText(entry.get("scene", "") if is_video else "")
-        win._aw_note_edit.setPlainText(entry.get("note", ""))
-        win._aw_confirmed_cb.setChecked(entry.get("confirmed", False))
 
     def _refresh_attrs_indicator(self, row, path):
         entry = attrs_mod.get(self.attrs_data, path)
@@ -5500,11 +5343,6 @@ class AISearchApp(QMainWindow):
         if item:
             self.table.selectRow(self.table.row(item))
         front_page.show_context_menu(self.table.mapToGlobal(pos), self.popup_menu)
-
-    def open_folder(self):
-        row = self._current_row()
-        if row >= 0:
-            front_page.open_in_nemo(self.table.get_row_path(row))
 
     def _update_drop_zone_thumb(self, path):
         """Update the header thumbnail to show path (used in browse mode)."""
