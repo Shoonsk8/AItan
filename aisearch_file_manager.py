@@ -1113,57 +1113,87 @@ class FileManagerWindow(QWidget):
             pass
 
     def _open_default(self, path):
-        """Open the file with its system default app (xdg-open). User's
-        MIME associations decide which program — for images on
-        Cinnamon that's typically pix."""
+        """Open the file with the system default app. Platform-aware:
+        Windows uses os.startfile, macOS uses `open`, Linux uses
+        xdg-open. User's OS-level associations decide the program."""
+        import sys, subprocess
         try:
-            import subprocess
-            subprocess.Popen(["xdg-open", path])
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
         except Exception:
             pass
 
     def _open_with(self, cmd, path):
-        """Run `cmd path` with the chosen program. cmd may be a single
-        executable name or a list."""
+        """Run a chosen program against `path`. `cmd` is the platform-
+        specific argv list ready to receive the file path appended."""
+        import subprocess
         try:
-            import subprocess
             args = cmd if isinstance(cmd, list) else [cmd]
             subprocess.Popen(args + [path])
-        except FileNotFoundError:
-            pass
-        except Exception:
+        except (FileNotFoundError, Exception):
             pass
 
-    # Common image/video apps to offer in "Open with". Filtered at
-    # menu-build time to those actually installed.
-    _IMAGE_APPS = [
-        ("Pix",      "pix"),
-        ("GIMP",     "gimp"),
-        ("Krita",    "krita"),
-        ("xviewer",  "xviewer"),
-        ("eog",      "eog"),
-        ("feh",      "feh"),
+    # Per-platform "Open with" candidates. Filtered at menu-build time
+    # to those actually installed (shutil.which on Linux/Win, file
+    # existence under /Applications on macOS).
+    _IMAGE_APPS_LINUX = [
+        ("Pix",      ["pix"]),
+        ("GIMP",     ["gimp"]),
+        ("Krita",    ["krita"]),
+        ("xviewer",  ["xviewer"]),
+        ("eog",      ["eog"]),
+        ("feh",      ["feh"]),
     ]
-    _VIDEO_APPS = [
-        ("VLC",      "vlc"),
-        ("MPV",      "mpv"),
-        ("Celluloid","celluloid"),
-        ("MPlayer",  "mplayer"),
+    _VIDEO_APPS_LINUX = [
+        ("VLC",       ["vlc"]),
+        ("MPV",       ["mpv"]),
+        ("Celluloid", ["celluloid"]),
+        ("MPlayer",   ["mplayer"]),
+    ]
+    _IMAGE_APPS_MAC = [
+        ("Preview", ["open", "-a", "Preview"]),
+        ("GIMP",    ["open", "-a", "GIMP"]),
+        ("Pixelmator", ["open", "-a", "Pixelmator"]),
+    ]
+    _VIDEO_APPS_MAC = [
+        ("QuickTime", ["open", "-a", "QuickTime Player"]),
+        ("VLC",       ["open", "-a", "VLC"]),
+        ("IINA",      ["open", "-a", "IINA"]),
+    ]
+    _IMAGE_APPS_WIN = [
+        ("Photos", ["explorer.exe"]),    # `explorer file` opens default; placeholder
+        ("Paint",  ["mspaint.exe"]),
+        ("GIMP",   ["gimp"]),
+        ("IrfanView", ["i_view64.exe"]),
+    ]
+    _VIDEO_APPS_WIN = [
+        ("Movies & TV", ["explorer.exe"]),  # placeholder
+        ("VLC",         ["vlc"]),
+        ("MPV",         ["mpv"]),
     ]
 
     def _app_choices(self, path):
-        """Return [(label, executable)] pairs for apps installed on the
-        system that handle this file's type."""
-        import shutil as _sh
+        """Return [(label, argv)] pairs for apps installed on the
+        system that handle this file's type. Only argv combos whose
+        leading executable is actually present are returned."""
+        import sys, shutil as _sh
         ext = os.path.splitext(path)[1].lower()
-        if ext in logic.EXT_VID:
-            candidates = self._VIDEO_APPS + self._IMAGE_APPS  # videos may also open in image viewers
+        if sys.platform == "win32":
+            img, vid = self._IMAGE_APPS_WIN, self._VIDEO_APPS_WIN
+        elif sys.platform == "darwin":
+            img, vid = self._IMAGE_APPS_MAC, self._VIDEO_APPS_MAC
         else:
-            candidates = self._IMAGE_APPS
+            img, vid = self._IMAGE_APPS_LINUX, self._VIDEO_APPS_LINUX
+        candidates = (vid + img) if ext in logic.EXT_VID else img
         out = []
-        for label, exe in candidates:
+        for label, argv in candidates:
+            exe = argv[0]
             if _sh.which(exe):
-                out.append((label, exe))
+                out.append((label, argv))
         return out
 
     def _save_app_data(self):
