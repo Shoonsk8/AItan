@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
                               QMessageBox, QInputDialog, QMenu, QStackedWidget,
                               QTableWidget, QTableWidgetItem, QHeaderView,
-                              QAbstractItemView)
+                              QAbstractItemView, QTreeWidget, QTreeWidgetItem)
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
                          QColor, QPen, QShortcut, QKeySequence, QAction, QDrag)
@@ -252,47 +252,136 @@ class _FMIconList(QListWidget):
             QMessageBox.critical(self, "Drop Error", f"Failed to move files:\n{e}\n{traceback.format_exc()}")
 
 
-class _FMTableList(QTableWidget):
-    """List/details view for the FM. Mirrors main's browse-mode table —
-    that one already has working drag-drop via QDrag URL MIME, so we
-    reuse the same approach. 4 columns: Name · Size · Date · Type."""
+class _FMTreeList(QTreeWidget):
+    """Tree/details view: triangles expand folders inline. Lazy-loads
+    children on first expand (so opening at a deep root is fast).
+    4 columns: Name · Size · Date · Type."""
 
     _DRAG_THRESHOLD = 5
+    _PLACEHOLDER = "__placeholder__"
 
     def __init__(self, fm):
-        super().__init__(0, 4, fm)
+        super().__init__(fm)
         self._fm = fm
-        self.setHorizontalHeaderLabels(["Name", "Size", "Date", "Type"])
-        hdr = self.horizontalHeader()
+        self.setColumnCount(4)
+        self.setHeaderLabels(["Name", "Size", "Date", "Type"])
+        hdr = self.header()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.verticalHeader().setVisible(False)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setAcceptDrops(True)
-        self.setSortingEnabled(False)
-        self.setShowGrid(False)
+        self.setRootIsDecorated(True)   # show expand triangles on top-level
+        self.setUniformRowHeights(True)
+        self.setAllColumnsShowFocus(True)
         self.itemDoubleClicked.connect(self._on_double_click)
+        self.itemExpanded.connect(self._on_expand)
         # Manual drag start via viewport eventFilter (same pattern as
-        # main's FileTable, which works).
-        self._press_pos = None
-        self._press_row = -1
+        # main's FileTable, which works in PyQt6).
+        self._press_pos  = None
+        self._press_item = None
         self.viewport().installEventFilter(self)
 
+    # ── Population ───────────────────────────────────────────────────────────
+    def populate_root(self, dir_path):
+        self.clear()
+        if os.path.dirname(dir_path) != dir_path:
+            up = QTreeWidgetItem(["..", "", "", ""])
+            up.setData(0, Qt.ItemDataRole.UserRole, "..")
+            up.setIcon(0, self._fm._folder_icon())
+            self.addTopLevelItem(up)
+        try:
+            entries = sorted(os.listdir(dir_path), key=lambda n: n.lower())
+        except OSError:
+            entries = []
+        for name in entries:
+            if name.startswith('.'):
+                continue
+            full = os.path.join(dir_path, name)
+            if os.path.isdir(full):
+                self.addTopLevelItem(self._make_folder_item(name, full))
+        for name in entries:
+            if name.startswith('.'):
+                continue
+            full = os.path.join(dir_path, name)
+            if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
+                self.addTopLevelItem(self._make_file_item(name, full))
+
+    def _make_folder_item(self, name, full):
+        it = QTreeWidgetItem([name, "", "", "Folder"])
+        it.setData(0, Qt.ItemDataRole.UserRole, full)
+        it.setIcon(0, self._fm._folder_icon())
+        # Placeholder child → triangle appears even before we've scanned.
+        # The real children are loaded on first expand.
+        try:
+            has_any = False
+            for _ in os.scandir(full):
+                has_any = True
+                break
+            if has_any:
+                ph = QTreeWidgetItem([""])
+                ph.setData(0, Qt.ItemDataRole.UserRole, self._PLACEHOLDER)
+                it.addChild(ph)
+        except (OSError, PermissionError):
+            pass
+        return it
+
+    def _make_file_item(self, name, full):
+        size = ""
+        date = ""
+        try:
+            size = logic.get_sz_readable(full)
+            import datetime as _dt
+            date = _dt.datetime.fromtimestamp(
+                os.path.getmtime(full)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+        ext = os.path.splitext(name)[1].lower().lstrip(".")
+        type_text = ext.upper() if ext else "File"
+        it = QTreeWidgetItem([name, size, date, type_text])
+        it.setData(0, Qt.ItemDataRole.UserRole, full)
+        return it
+
+    def _on_expand(self, item):
+        # Lazy expansion: replace the placeholder child with the real list
+        if item.childCount() == 1:
+            child = item.child(0)
+            if child.data(0, Qt.ItemDataRole.UserRole) == self._PLACEHOLDER:
+                item.removeChild(child)
+                full = item.data(0, Qt.ItemDataRole.UserRole)
+                if full and os.path.isdir(full):
+                    try:
+                        entries = sorted(os.listdir(full),
+                                         key=lambda n: n.lower())
+                    except (OSError, PermissionError):
+                        entries = []
+                    for name in entries:
+                        if name.startswith('.'):
+                            continue
+                        sub = os.path.join(full, name)
+                        if os.path.isdir(sub):
+                            item.addChild(self._make_folder_item(name, sub))
+                    for name in entries:
+                        if name.startswith('.'):
+                            continue
+                        sub = os.path.join(full, name)
+                        if (os.path.isfile(sub)
+                                and name.lower().endswith(_VALID_EXTS)):
+                            item.addChild(self._make_file_item(name, sub))
+
+    # ── Drag start ───────────────────────────────────────────────────────────
     def eventFilter(self, obj, event):
         if obj is self.viewport():
             t = event.type()
             if t == event.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._press_pos = event.position().toPoint()
-                idx = self.indexAt(self._press_pos)
-                self._press_row = idx.row() if idx.isValid() else -1
+                self._press_item = self.itemAt(self._press_pos)
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._press_pos is not None
-                        and self._press_row >= 0):
+                        and self._press_item is not None):
                     cur = event.position().toPoint()
                     if (cur - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                         self._press_pos = None
@@ -300,22 +389,19 @@ class _FMTableList(QTableWidget):
                         return True
             elif t == event.Type.MouseButtonRelease:
                 self._press_pos = None
-                self._press_row = -1
+                self._press_item = None
         return super().eventFilter(obj, event)
 
     def _start_url_drag(self):
-        rows = sorted({i.row() for i in self.selectionModel().selectedRows()})
-        if not rows and self._press_row >= 0:
-            rows = [self._press_row]
-        if not rows:
+        items = self.selectedItems()
+        if not items and self._press_item is not None:
+            items = [self._press_item]
+        if not items:
             return
         urls = []
-        for r in rows:
-            it = self.item(r, 0)
-            if it is None:
-                continue
-            data = it.data(Qt.ItemDataRole.UserRole)
-            if data and data != ".." and os.path.exists(data):
+        for it in items:
+            data = it.data(0, Qt.ItemDataRole.UserRole)
+            if data and data != ".." and data != self._PLACEHOLDER and os.path.exists(data):
                 urls.append(QUrl.fromLocalFile(data))
         if not urls:
             return
@@ -325,6 +411,7 @@ class _FMTableList(QTableWidget):
         drag.setMimeData(mime)
         drag.exec(Qt.DropAction.MoveAction)
 
+    # ── Drop handling ────────────────────────────────────────────────────────
     def dragEnterEvent(self, ev):
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
@@ -340,16 +427,14 @@ class _FMTableList(QTableWidget):
     def dropEvent(self, ev):
         if not ev.mimeData().hasUrls():
             ev.ignore(); return
-        idx = self.indexAt(ev.position().toPoint())
         target = None
-        if idx.isValid():
-            it = self.item(idx.row(), 0)
-            if it is not None:
-                data = it.data(Qt.ItemDataRole.UserRole)
-                if data == "..":
-                    target = os.path.dirname(self._fm._cur_dir)
-                elif data and os.path.isdir(data):
-                    target = data
+        item = self.itemAt(ev.position().toPoint())
+        if item is not None:
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data == "..":
+                target = os.path.dirname(self._fm._cur_dir)
+            elif data and os.path.isdir(data):
+                target = data
         if not target:
             target = self._fm._cur_dir
         srcs = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
@@ -358,11 +443,8 @@ class _FMTableList(QTableWidget):
         ev.acceptProposedAction()
         self._fm.move_files_into(srcs, target)
 
-    def _on_double_click(self, item):
-        col0 = self.item(item.row(), 0)
-        if col0 is None:
-            return
-        target = col0.data(Qt.ItemDataRole.UserRole)
+    def _on_double_click(self, item, col):
+        target = item.data(0, Qt.ItemDataRole.UserRole)
         if target == "..":
             self._fm._go_up()
         elif target and os.path.isdir(target):
@@ -425,16 +507,16 @@ class FileManagerWindow(QWidget):
         tb.addWidget(self.btn_view_toggle)
         v.addLayout(tb)
 
-        # Stacked: list view (default) + icon view
+        # Stacked: tree/list view (default) + icon view
         self.stack       = QStackedWidget()
-        self.list_table  = _FMTableList(self)
+        self.list_table  = _FMTreeList(self)
         self.list_grid   = _FMIconList(self)
         self.list_grid.itemDoubleClicked.connect(self._on_item_double_click)
         self.list_grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_grid.customContextMenuRequested.connect(self._on_context_menu)
         self.list_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_table.customContextMenuRequested.connect(self._on_context_menu)
-        self.stack.addWidget(self.list_table)   # index 0 = list view
+        self.stack.addWidget(self.list_table)   # index 0 = tree view
         self.stack.addWidget(self.list_grid)    # index 1 = icon view
         v.addWidget(self.stack, 1)
         self._apply_thumb_size()
@@ -502,8 +584,9 @@ class FileManagerWindow(QWidget):
         self._cur_dir = self._history[self._history_idx]
         self.path_edit.setText(self._cur_dir)
         self.list_grid.clear()
-        self.list_table.setRowCount(0)
         self._row_of_key.clear()
+        # Tree view manages its own population (handles lazy expansion).
+        self.list_table.populate_root(self._cur_dir)
 
         try:
             entries = sorted(os.listdir(self._cur_dir),
@@ -511,91 +594,50 @@ class FileManagerWindow(QWidget):
         except OSError:
             entries = []
 
-        rows = []   # list of (display_name, full_path, kind) — kind: "up", "dir", "file"
+        thumb_requests   = []
+        placeholder_icon = self._placeholder_file_icon()
+        folder_icon      = self._folder_icon()
+
         if os.path.dirname(self._cur_dir) != self._cur_dir:
-            rows.append(("..", "..", "up"))
+            up = QListWidgetItem("..")
+            up.setData(Qt.ItemDataRole.UserRole, "..")
+            up.setIcon(folder_icon)
+            up.setFlags(up.flags() | Qt.ItemFlag.ItemIsDropEnabled)
+            self.list_grid.addItem(up)
+
         for name in entries:
             if name.startswith('.'):
                 continue
             full = os.path.join(self._cur_dir, name)
             if os.path.isdir(full):
-                rows.append((name, full, "dir"))
+                grid_it = QListWidgetItem(name)
+                grid_it.setData(Qt.ItemDataRole.UserRole, full)
+                grid_it.setIcon(folder_icon)
+                grid_it.setFlags(grid_it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
+                self.list_grid.addItem(grid_it)
+
         for name in entries:
             if name.startswith('.'):
                 continue
             full = os.path.join(self._cur_dir, name)
-            if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
-                rows.append((name, full, "file"))
-
-        thumb_requests = []
-        placeholder_icon = self._placeholder_file_icon()
-        folder_icon = self._folder_icon()
-
-        for name, full, kind in rows:
-            # ── Icon-grid item ──────────────────────────────────────────
+            if not (os.path.isfile(full) and name.lower().endswith(_VALID_EXTS)):
+                continue
             grid_it = QListWidgetItem(name)
-            grid_it.setData(Qt.ItemDataRole.UserRole, full if kind != "up" else "..")
+            grid_it.setData(Qt.ItemDataRole.UserRole, full)
             grid_it.setFlags(grid_it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
-            if kind in ("up", "dir"):
-                grid_it.setIcon(folder_icon)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                mtime = 0
+            cache_key = f"{full}|{mtime}|{self._thumb_size}"
+            cached = _THUMB_CACHE.get(cache_key)
+            if cached is not None:
+                grid_it.setIcon(QIcon(cached))
             else:
-                try:
-                    mtime = os.path.getmtime(full)
-                except OSError:
-                    mtime = 0
-                cache_key = f"{full}|{mtime}|{self._thumb_size}"
-                cached = _THUMB_CACHE.get(cache_key)
-                if cached is not None:
-                    grid_it.setIcon(QIcon(cached))
-                else:
-                    grid_it.setIcon(placeholder_icon)
-                    thumb_requests.append((cache_key, full))
-                self._row_of_key[cache_key] = self.list_grid.count()
+                grid_it.setIcon(placeholder_icon)
+                thumb_requests.append((cache_key, full))
+            self._row_of_key[cache_key] = self.list_grid.count()
             self.list_grid.addItem(grid_it)
-
-            # ── List-table row ──────────────────────────────────────────
-            r = self.list_table.rowCount()
-            self.list_table.insertRow(r)
-            name_it = QTableWidgetItem(("📁  " if kind in ("up", "dir") else "")
-                                       + name)
-            name_it.setData(Qt.ItemDataRole.UserRole,
-                            full if kind != "up" else "..")
-            name_it.setFlags(name_it.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.list_table.setItem(r, 0, name_it)
-            # Size
-            size_text = ""
-            if kind == "file":
-                try:
-                    size_text = logic.get_sz_readable(full)
-                except Exception:
-                    size_text = ""
-            sz_it = QTableWidgetItem(size_text)
-            sz_it.setFlags(sz_it.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            sz_it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.list_table.setItem(r, 1, sz_it)
-            # Date
-            date_text = ""
-            if kind == "file":
-                try:
-                    import datetime as _dt
-                    date_text = _dt.datetime.fromtimestamp(
-                        os.path.getmtime(full)).strftime("%Y-%m-%d %H:%M")
-                except Exception:
-                    date_text = ""
-            dt_it = QTableWidgetItem(date_text)
-            dt_it.setFlags(dt_it.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.list_table.setItem(r, 2, dt_it)
-            # Type
-            if kind == "up":
-                type_text = ""
-            elif kind == "dir":
-                type_text = "Folder"
-            else:
-                ext = os.path.splitext(name)[1].lower().lstrip(".")
-                type_text = ext.upper() if ext else "File"
-            ty_it = QTableWidgetItem(type_text)
-            ty_it.setFlags(ty_it.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.list_table.setItem(r, 3, ty_it)
 
         self._update_nav_buttons()
         if thumb_requests:
@@ -749,47 +791,34 @@ class FileManagerWindow(QWidget):
 
     def _path_at(self, view, pos):
         """Path of the item at viewport pos in the given view, or None."""
+        if isinstance(view, QTreeWidget):
+            it = view.itemAt(pos)
+            return it.data(0, Qt.ItemDataRole.UserRole) if it else None
         if isinstance(view, QListWidget):
             it = view.itemAt(pos)
-            if it is None:
-                return None
-            return it.data(Qt.ItemDataRole.UserRole)
-        if isinstance(view, QTableWidget):
-            idx = view.indexAt(pos)
-            if not idx.isValid():
-                return None
-            it = view.item(idx.row(), 0)
-            if it is None:
-                return None
-            return it.data(Qt.ItemDataRole.UserRole)
+            return it.data(Qt.ItemDataRole.UserRole) if it else None
         return None
 
     def _current_path(self):
         view = self._active_view()
+        if isinstance(view, QTreeWidget):
+            it = view.currentItem()
+            return it.data(0, Qt.ItemDataRole.UserRole) if it else None
         if isinstance(view, QListWidget):
             it = view.currentItem()
-            return it.data(Qt.ItemDataRole.UserRole) if it else None
-        if isinstance(view, QTableWidget):
-            idx = view.currentIndex()
-            if not idx.isValid():
-                return None
-            it = view.item(idx.row(), 0)
             return it.data(Qt.ItemDataRole.UserRole) if it else None
         return None
 
     def _selected_paths(self):
         view = self._active_view()
         out = []
-        if isinstance(view, QListWidget):
+        if isinstance(view, QTreeWidget):
             for it in view.selectedItems():
-                d = it.data(Qt.ItemDataRole.UserRole)
-                if d and d != "..":
+                d = it.data(0, Qt.ItemDataRole.UserRole)
+                if d and d != ".." and d != "__placeholder__":
                     out.append(d)
-        elif isinstance(view, QTableWidget):
-            for idx in view.selectionModel().selectedRows():
-                it = view.item(idx.row(), 0)
-                if it is None:
-                    continue
+        elif isinstance(view, QListWidget):
+            for it in view.selectedItems():
                 d = it.data(Qt.ItemDataRole.UserRole)
                 if d and d != "..":
                     out.append(d)
