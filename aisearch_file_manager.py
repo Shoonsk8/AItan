@@ -312,6 +312,38 @@ class _FMTreeList(QTreeWidget):
         self._thumb_size = self._TREE_THUMB_SIZE   # mutable via Ctrl+Wheel
 
     # ── Population ───────────────────────────────────────────────────────────
+    def _collect_expanded(self):
+        """Return the set of folder paths currently expanded so a
+        repopulate can restore them."""
+        out = set()
+        def visit(item):
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if (item.isExpanded() and data
+                    and data != ".." and data != self._PLACEHOLDER):
+                out.add(data)
+            for i in range(item.childCount()):
+                visit(item.child(i))
+        for i in range(self.topLevelItemCount()):
+            visit(self.topLevelItem(i))
+        return out
+
+    def _restore_expanded(self, paths):
+        """Walk the tree and re-expand items whose path is in `paths`.
+        Expanding triggers _on_expand which lazily populates children,
+        so deeper expansions cascade correctly."""
+        if not paths:
+            return
+        # BFS so a parent expands before we look at its children
+        queue = [self.topLevelItem(i)
+                 for i in range(self.topLevelItemCount())]
+        while queue:
+            it = queue.pop(0)
+            data = it.data(0, Qt.ItemDataRole.UserRole)
+            if data in paths and not it.isExpanded():
+                it.setExpanded(True)
+            for i in range(it.childCount()):
+                queue.append(it.child(i))
+
     def populate_root(self, dir_path):
         # Cancel any prior loader and wait for it to exit before
         # dropping the reference (Qt aborts if a QThread is destroyed
@@ -321,6 +353,10 @@ class _FMTreeList(QTreeWidget):
             if self._thumb_loader.isRunning():
                 self._thumb_loader.wait(2000)
             self._thumb_loader = None
+        # Snapshot expansion before we wipe the tree, so a
+        # repopulate (e.g. Ctrl+Wheel resize) doesn't collapse folders
+        # the user had open.
+        prev_expanded = self._collect_expanded()
         self._items_by_key.clear()
         # Disable sorting during bulk insert — addTopLevelItem with sort
         # enabled is O(log n) per insert + layout cost on every add. We
@@ -349,6 +385,10 @@ class _FMTreeList(QTreeWidget):
             if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
                 self.addTopLevelItem(self._make_file_item(name, full))
         self.setSortingEnabled(True)
+        # Re-expand whatever was expanded before. _on_expand will lazily
+        # populate each one's children (and recursive expand cascades
+        # via the BFS in _restore_expanded).
+        self._restore_expanded(prev_expanded)
         self._kick_thumb_loader()
 
     def _kick_thumb_loader(self):
