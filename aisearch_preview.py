@@ -1380,9 +1380,13 @@ class PreviewWindow(QWidget):
                     _skip |= {f for f in _clip_fields if _entry.get(f)}
                 elif _clip_mode == "never":
                     _skip |= set(_clip_fields)   # don't bother detecting CLIP
-                if _face_mode == "when_empty" and _entry.get("person_id"):
-                    _skip.add("person_id")
-                elif _face_mode == "never":
+                # Was: skip face detection entirely when person_id is
+                # already set (face_mode "when_empty"). That blocked
+                # _auto_apply_face from ever running, so a confident
+                # different match couldn't override a stale stored pid.
+                # Now we only skip on "never" — _auto_apply_face's
+                # similarity check is what decides whether to override.
+                if _face_mode == "never":
                     _skip.add("person_id")
                 self._schedule_inspect(skip_fields=_skip)
         self._raw_meta_sec.set_expand_callback(_on_raw_expand)
@@ -1713,8 +1717,9 @@ class PreviewWindow(QWidget):
             _entry_skip = attrs_mod.get(self.handler.app.attrs_data, path)
             _clip_fields_skip = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
             _skip_face_only = set(_clip_fields_skip)
-            if _face_mode_auto == "when_empty" and _entry_skip.get("person_id"):
-                _skip_face_only.add("person_id")
+            # Don't skip face detection just because person_id is set —
+            # _auto_apply_face's confidence check will decide whether
+            # to override. Otherwise a stale stored pid stays forever.
             self._schedule_inspect(skip_fields=_skip_face_only)
         elif _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
@@ -1792,8 +1797,9 @@ class PreviewWindow(QWidget):
                     # HC="500" (color set, style+length empty) still get CLIP
                     # to fill in the missing digits.
                     _skip = {f for f in _clip_fields if _field_filled(f)}
-                    if _entry.get("person_id"):
-                        _skip.add("person_id")
+                    # Always run face detection so a confident different
+                    # match can override a stale stored pid via
+                    # _auto_apply_face's similarity check.
                     self._schedule_inspect(skip_fields=_skip)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
