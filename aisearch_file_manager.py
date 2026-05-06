@@ -359,7 +359,7 @@ class _FMTreeList(QTreeWidget):
 
     # ── Ctrl+Wheel resize ────────────────────────────────────────────────────
     _MIN_TREE_THUMB = 16
-    _MAX_TREE_THUMB = 128
+    _MAX_TREE_THUMB = 512
 
     def wheelEvent(self, ev):
         if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
