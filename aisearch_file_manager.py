@@ -700,6 +700,13 @@ class FilePane(QWidget):
         self.tree.currentItemChanged.connect(self._on_current_changed)
         v.addWidget(self.tree, 1)
 
+        # Status line: live count of selected items + total size
+        self.status_lbl = QLabel("")
+        self.status_lbl.setStyleSheet("color:#888; font-size:9pt; padding:1px 4px;")
+        v.addWidget(self.status_lbl)
+        self.tree.itemSelectionChanged.connect(self._update_status)
+        self._update_status()
+
         if initial_dir and os.path.isdir(initial_dir):
             self.navigate(initial_dir)
 
@@ -753,6 +760,41 @@ class FilePane(QWidget):
         self.path_edit.setText(self._cur_dir)
         self.tree.populate_root(self._cur_dir)
         self._update_nav_buttons()
+
+    def _update_status(self):
+        """Live status line — selection count + total size of selected files."""
+        paths = self._selected_paths()
+        if not paths:
+            self.status_lbl.setText("")
+            return
+        n = len(paths)
+        total = 0
+        files = 0
+        for p in paths:
+            try:
+                if os.path.isfile(p):
+                    total += os.path.getsize(p)
+                    files += 1
+            except OSError:
+                pass
+        try:
+            size_text = logic.get_sz_readable_from_bytes(total)
+        except Exception:
+            size_text = self._fmt_bytes(total)
+        if files == n:
+            self.status_lbl.setText(f"{n} selected — {size_text}")
+        else:
+            # Mix of files + folders
+            self.status_lbl.setText(
+                f"{n} selected ({files} file{'s' if files != 1 else ''} — {size_text})")
+
+    @staticmethod
+    def _fmt_bytes(n):
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024:
+                return f"{n:.1f} {unit}"
+            n /= 1024
+        return f"{n:.1f} PB"
 
     def _on_current_changed(self, current, previous):
         """Single-click / arrow-key selection → live preview, mirroring
