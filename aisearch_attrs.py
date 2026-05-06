@@ -4356,11 +4356,17 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
             for grp, wanted in wanted_by_group.items():
                 grp_def = TAG_GROUPS.get(grp, [])
                 grp_vals = {v[0] for v in grp_def if isinstance(v, (list, tuple)) and v}
-                # Matrix groups: store the (single) wanted value in entry[grp].
-                if _styles.get(grp) == "matrix":
+                # Matrix groups can be referenced by either the bare
+                # section name ("ModelImage") or the table-suffixed
+                # form used in filename rules ("ModelImage_Table").
+                # __section_styles__ is keyed on the bare name, so
+                # strip "_Table" before looking up the style.
+                _section_key = grp[:-6] if grp.endswith("_Table") else grp
+                # Matrix groups: store the (single) wanted value in entry[section_key].
+                if _styles.get(_section_key) == "matrix":
                     pick = next(iter(wanted), "")
-                    if pick and entry.get(grp) != pick:
-                        entry[grp] = pick
+                    if pick and entry.get(_section_key) != pick:
+                        entry[_section_key] = pick
                         changed = True
                     # Also clean any stale matrix value out of the legacy
                     # tags list so the two storage locations don't disagree.
