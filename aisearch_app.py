@@ -2370,6 +2370,21 @@ class AISearchApp(QMainWindow):
         self._fm_win.raise_()
         self._fm_win.activateWindow()
 
+    def _open_fm_for_current_row(self):
+        """Right-click → File Manager: open the FM at the directory of
+        the currently-selected row. Falls back to query_path if nothing
+        is selected, or to the project's first base_dir."""
+        row = self._current_row()
+        path = self.table.get_row_path(row) if row >= 0 else None
+        if not path or not os.path.exists(path):
+            path = self.query_path
+        if path and os.path.exists(path):
+            self._open_file_manager(os.path.dirname(os.path.abspath(path)))
+        elif self.base_dirs:
+            self._open_file_manager(self.base_dirs[0])
+        else:
+            self._open_file_manager(os.path.expanduser("~"))
+
     def _open_settings(self, tab=0):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
             self._settings_win = SettingsView(self, self, tab)
@@ -5881,20 +5896,12 @@ class AISearchApp(QMainWindow):
             self._enter_browse_mode()
             self._raise_preview()
             return
-        # If the FM window is open and visible, right-arrow on ANY row
-        # navigates the FM to that row's file's directory — lets the
-        # user track context across the table without having to re-open
-        # the FM. Move-file workflow only kicks in when FM is closed.
-        fm = getattr(self, '_fm_win', None)
-        if fm is not None and fm.isVisible():
-            row_path = self.table.get_row_path(row)
-            if row_path:
-                fm.navigate(os.path.dirname(os.path.abspath(row_path)))
-                fm.raise_()
-            return
-        # FM closed: row 0 (query) opens the FM at its directory.
+        # In search mode, row 0 is the query file — enter browse mode.
+        # The File Manager window is opened from the right-click context
+        # menu (Open File Manager…), not from the arrow key.
         if row == 0 and self.query_path:
-            self._open_file_manager(os.path.dirname(os.path.abspath(self.query_path)))
+            self._enter_browse_mode()
+            self._raise_preview()
             return
         if not self.query_path: return
         # Top file's directory no longer exists (Nemo / external move took it
