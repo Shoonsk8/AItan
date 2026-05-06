@@ -419,8 +419,9 @@ class FileManagerWindow(QWidget):
 
     # ── Move (drop target) ───────────────────────────────────────────────────
     def move_files_into(self, src_paths, target_dir):
-        moved = 0
-        errors = []
+        moved   = 0
+        renames = {}            # old → new (for batched store flush)
+        errors  = []
         for src in src_paths:
             if not os.path.exists(src):
                 errors.append(f"Missing: {os.path.basename(src)}")
@@ -430,16 +431,29 @@ class FileManagerWindow(QWidget):
                 continue
             try:
                 shutil.move(src, dst)
-                self._sync_app_state(src, dst)
+                self._sync_in_memory(src, dst)
+                renames[src] = dst
                 moved += 1
             except Exception as e:
                 errors.append(f"{os.path.basename(src)}: {e}")
+        # Flush the on-disk stores ONCE (faces DB + features.pt) instead of
+        # per-file. The .pt is ~120 MB so per-file disk I/O makes drops of
+        # multi-row selections feel like the FM is hung.
+        if renames:
+            try:
+                import aisearch_attrs as _am
+                _am.flush_path_renames_to_stores(
+                    renames, getattr(self.app, "current_project", None))
+            except Exception:
+                pass
         if errors:
             QMessageBox.warning(self, "Move",
                 f"Moved {moved}; {len(errors)} error(s):\n" + "\n".join(errors[:10]))
         self._refresh()
 
-    def _sync_app_state(self, old_path, new_path):
+    def _sync_in_memory(self, old_path, new_path):
+        """Per-file in-memory updates only — disk-flush is batched by the
+        caller (move_files_into) once all moves finish."""
         app = self.app
         try:
             paths = app.data["paths"] if app.data and "paths" in app.data else None
@@ -454,12 +468,6 @@ class FileManagerWindow(QWidget):
         try:
             if old_path in app.attrs_data:
                 app.attrs_data[new_path] = app.attrs_data.pop(old_path)
-        except Exception:
-            pass
-        try:
-            import aisearch_attrs as _am
-            _am.update_path_in_all_stores(old_path, new_path,
-                                          getattr(app, "current_project", None))
         except Exception:
             pass
 
@@ -551,7 +559,14 @@ class FileManagerWindow(QWidget):
             return
         # Sync app state if it's a tracked file
         if os.path.isfile(new_path):
-            self._sync_app_state(old_path, new_path)
+            self._sync_in_memory(old_path, new_path)
+            try:
+                import aisearch_attrs as _am
+                _am.flush_path_renames_to_stores(
+                    {old_path: new_path},
+                    getattr(self.app, "current_project", None))
+            except Exception:
+                pass
         # If the renamed path is a folder, walk app.data for any files
         # whose path starts with old_path/ and remap.
         elif os.path.isdir(new_path):
@@ -603,21 +618,23 @@ class FileManagerWindow(QWidget):
 
     def _sync_folder_rename(self, old_dir, new_dir):
         """When a directory is renamed, remap any tracked file paths that
-        live under it."""
+        live under it. Builds a renames dict so the on-disk stores can be
+        flushed in a single batch."""
         app = self.app
         old_prefix = os.path.normpath(os.path.abspath(old_dir)) + os.sep
         new_prefix = os.path.normpath(os.path.abspath(new_dir)) + os.sep
-        # DB paths
+        renames = {}
         try:
             paths = app.data["paths"] if app.data and "paths" in app.data else None
             if paths is not None:
                 for i, p in enumerate(paths):
                     np = os.path.normpath(os.path.abspath(p))
                     if np.startswith(old_prefix):
-                        paths[i] = new_prefix + np[len(old_prefix):]
+                        new_p = new_prefix + np[len(old_prefix):]
+                        renames[p] = new_p
+                        paths[i] = new_p
         except Exception:
             pass
-        # attrs_data
         try:
             for key in list(app.attrs_data.keys()):
                 k_norm = os.path.normpath(os.path.abspath(key))
@@ -626,6 +643,13 @@ class FileManagerWindow(QWidget):
                     app.attrs_data[new_key] = app.attrs_data.pop(key)
         except Exception:
             pass
+        if renames:
+            try:
+                import aisearch_attrs as _am
+                _am.flush_path_renames_to_stores(
+                    renames, getattr(app, "current_project", None))
+            except Exception:
+                pass
 
     def _remove_from_app_state(self, path):
         """Remove a trashed path from app.data + attrs_data."""
