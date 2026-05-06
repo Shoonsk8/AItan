@@ -130,14 +130,45 @@ class _FMIconList(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSpacing(6)
 
-    def startDrag(self, supportedActions):
-        """Explicitly own drag-start so we always emit URL MIME — model-
-        level mimeData() sometimes doesn't trip in PyQt6 when items have
-        custom UserRole data and no model item-flags. With this in place,
-        clicking + dragging a selected item starts a real Qt drag whose
-        MIME points at real file paths, so internal drops (onto a
-        subfolder) and external drops (Nemo) both work."""
+    # Manual drag-start. Qt's auto drag-detection in QAbstractItemView
+    # doesn't always fire reliably in PyQt6 with custom items + IconMode,
+    # so we intercept mousePress/Move and start the drag ourselves.
+    _DRAG_THRESHOLD = 5
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._fm_press_pos = event.position().toPoint()
+            self._fm_press_item = self.itemAt(self._fm_press_pos)
+        else:
+            self._fm_press_pos = None
+            self._fm_press_item = None
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # Only consider starting a drag when the left button is held and
+        # the press landed on an actual item (not empty space).
+        if (event.buttons() & Qt.MouseButton.LeftButton
+                and getattr(self, "_fm_press_pos", None) is not None
+                and getattr(self, "_fm_press_item", None) is not None):
+            cur = event.position().toPoint()
+            if (cur - self._fm_press_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                self._fm_press_pos = None
+                self._start_url_drag()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._fm_press_pos = None
+        self._fm_press_item = None
+        super().mouseReleaseEvent(event)
+
+    def _start_url_drag(self):
         items = self.selectedItems()
+        # Press-on-unselected → selection might not include the press
+        # item yet; fall back to it explicitly so a single click+drag in
+        # one motion works without a separate selection click first.
+        if not items and getattr(self, "_fm_press_item", None) is not None:
+            items = [self._fm_press_item]
         if not items:
             return
         urls = []
@@ -151,7 +182,6 @@ class _FMIconList(QListWidget):
         mime.setUrls(urls)
         drag = QDrag(self)
         drag.setMimeData(mime)
-        # Drag preview = the first selected item's icon
         first = items[0]
         ico = first.icon()
         if not ico.isNull():
