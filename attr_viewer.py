@@ -365,7 +365,7 @@ class FieldWidget(QGroupBox):
             self._te.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
             self._te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             self._te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            self._te.setPlaceholderText(placeholder or f"{label}…")
+            self._te.setPlaceholderText(placeholder or _lang_label(f"{label}… / {label}…"))
             self._te.setStyleSheet(
                 "background:#3a3a3a;color:#fff;border:1px solid #555;font-size:10pt;")
             # Save-on-focus-out: when the user clicks away from the text
@@ -401,7 +401,7 @@ class FieldWidget(QGroupBox):
                 "QListWidget::item { padding:2px 4px; }"
                 "QListWidget::item:selected { background:#3a5a8a; color:#fff; }")
             self._pathlist.setToolTip(
-                "Double-click to open in file manager")
+                _lang_label("Double-click to open in file manager / ダブルクリックでファイルマネージャーで開く"))
             def _open_item(item, _qd=QDesktopServices):
                 p = item.text().strip()
                 if p:
@@ -459,17 +459,17 @@ class FieldWidget(QGroupBox):
             row_btns.setContentsMargins(0, 0, 0, 0)
             row_btns.setSpacing(3)
             btn_addf = QPushButton("📄")
-            btn_addf.setToolTip("Add file")
+            btn_addf.setToolTip(_lang_label("Add file / ファイルを追加"))
             btn_addf.setFixedWidth(30)
             btn_addf.clicked.connect(lambda: _add_path(False))
             row_btns.addWidget(btn_addf)
             btn_addd = QPushButton("📂")
-            btn_addd.setToolTip("Add folder")
+            btn_addd.setToolTip(_lang_label("Add folder / フォルダを追加"))
             btn_addd.setFixedWidth(30)
             btn_addd.clicked.connect(lambda: _add_path(True))
             row_btns.addWidget(btn_addd)
             btn_rm = QPushButton("×")
-            btn_rm.setToolTip("Remove selected")
+            btn_rm.setToolTip(_lang_label("Remove selected / 選択した項目を削除"))
             btn_rm.setFixedWidth(30)
             btn_rm.clicked.connect(_remove_paths)
             row_btns.addWidget(btn_rm)
@@ -539,6 +539,9 @@ class FieldWidget(QGroupBox):
                     sub_tables,
                     key=lambda kv: -(_pos_for(kv[0]) or 0))
             if sub_tables:
+                # Track sub-combos so the right-click toggle can refill
+                # them all when the user flips freq ⇄ alpha sort.
+                self._sub_combos = []   # list of (combo, options)
                 for _idx, (sub_key, sub_opts) in enumerate(sub_tables):
                     sub_lbl = sub_key[len(key)+1:].replace("_", " ")
                     row = QHBoxLayout(); row.setSpacing(4)
@@ -549,21 +552,22 @@ class FieldWidget(QGroupBox):
                     # code lands at index 0 and becomes the silent default for
                     # any unset field — every freshly-saved file ended up with
                     # E33 HC333 PM33 etc. just because "3" was popular.
-                    cb.addItem("—", "")
-                    for k2, lbl2 in sorted(sub_opts, key=lambda kv: (-get_usage(kv[0]), kv[1])):
-                        cb.addItem(_lang_label(lbl2), k2)
+                    self._fill_sub_combo(cb, sub_opts)
                     cb.currentIndexChanged.connect(
                         lambda _, _k=sub_key, _cb=cb: (inc_usage(_cb.currentData() or ""),
                                                         save_usage(self.conn, _cb.currentData() or "")))
+                    cb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    cb.customContextMenuRequested.connect(lambda _: self._toggle_sort())
                     _explicit_pos = _pos_for(sub_key) if _pos_map else None
                     _final_pos = _explicit_pos if _explicit_pos is not None else (_idx + 1)
                     self._coded_combos.append((sub_key, cb, _final_pos))
+                    self._sub_combos.append((cb, sub_opts))
                     row.addWidget(cb, stretch=1)
                     vlay.addLayout(row)
             else:
                 # No sub-tables found — plain hex text input
                 self._hex_edit = QLineEdit()
-                self._hex_edit.setPlaceholderText("hex…")
+                self._hex_edit.setPlaceholderText(_lang_label("hex… / hex…"))
                 self._hex_edit.setStyleSheet(
                     "background:#3a3a3a;color:#fff;border:1px solid #555;"
                     "font-family:monospace;font-size:10pt;")
@@ -580,7 +584,7 @@ class FieldWidget(QGroupBox):
             if key == "P":
                 # P — editable person ID input + Detect button
                 self._pid_edit = QLineEdit()
-                self._pid_edit.setPlaceholderText("ID…")
+                self._pid_edit.setPlaceholderText(_lang_label("ID… / ID…"))
                 self._pid_edit.setMaxLength(6)
                 self._pid_edit.setStyleSheet(
                     "QLineEdit{background:#1e1e1e;color:#aaa;border:1px solid #444;"
@@ -599,7 +603,7 @@ class FieldWidget(QGroupBox):
                     "border-radius:3px;font-size:9pt;padding:0;}"
                     "QPushButton:hover{background:#3a5e3a;}"
                     "QPushButton:disabled{color:#555;border-color:#333;background:#222;}")
-                self._detect_btn.setToolTip("Open Persons settings and highlight this ID")
+                self._detect_btn.setToolTip(_lang_label("Open Persons settings and highlight this ID / 人物設定を開いてこのIDを強調表示"))
                 self._detect_btn.clicked.connect(
                     lambda: self.action_triggered.emit(self.key, "edit_person"))
                 _id_row = QHBoxLayout()
@@ -614,7 +618,7 @@ class FieldWidget(QGroupBox):
                 # the field doesn't visually duplicate P when empty.
                 self._pid_edit = QLineEdit()
                 self._pid_edit.setPlaceholderText(
-                    "— (same as P)" if key == "PI" else "— (none)")
+                    _lang_label("— (same as P) / — (Pと同じ)") if key == "PI" else _lang_label("— (none) / — (なし)"))
                 self._pid_edit.setMaxLength(6 if key == "PI" else 48)
                 self._pid_edit.setStyleSheet(
                     "QLineEdit{background:#1e1e1e;color:#aaa;border:1px solid #444;"
@@ -627,7 +631,7 @@ class FieldWidget(QGroupBox):
                     "QPushButton{background:#2e4a2e;color:#8fc88f;border:1px solid #4a6a4a;"
                     "border-radius:3px;font-size:9pt;padding:0;}"
                     "QPushButton:hover{background:#3a5e3a;}")
-                self._detect_btn.setToolTip("Open Persons settings to assign an ID")
+                self._detect_btn.setToolTip(_lang_label("Open Persons settings to assign an ID / 人物設定を開いてIDを割り当て"))
                 self._detect_btn.clicked.connect(
                     lambda: self.action_triggered.emit(self.key, "edit_person"))
                 _row = QHBoxLayout()
@@ -644,7 +648,7 @@ class FieldWidget(QGroupBox):
 
         elif style == "matrix" and not options:
             # Matrix with no entries yet — show a clear placeholder instead of editable combo
-            _hint = QLabel("(no entries — add in Settings)")
+            _hint = QLabel(_lang_label("(no entries — add in Settings) / （項目なし — 設定で追加してください）"))
             _hint.setStyleSheet("color:#666; font-size:8pt; font-style:italic;")
             vlay.addWidget(_hint)
 
@@ -652,7 +656,7 @@ class FieldWidget(QGroupBox):
             self._cb = QComboBox()
             self._cb.setStyleSheet(_CB_SS)
             self._cb.setMinimumWidth(160)
-            self._sort_lbl = QLabel("freq")
+            self._sort_lbl = QLabel(_lang_label("freq / 頻度"))
             self._sort_lbl.setStyleSheet("color:#888;font-size:9pt;")
             self._fill_combo()
             self._cb.currentIndexChanged.connect(self._on_select)
@@ -730,14 +734,41 @@ class FieldWidget(QGroupBox):
             if self.options:
                 self._fill_combo(preserve=True)
 
+    def _fill_sub_combo(self, cb, opts):
+        """Fill a coded-field sub-combo (HC_Color, CL_Top, etc.). Sort
+        order honors the FieldWidget's _sort_freq flag — same toggle
+        as the main combo, so a single right-click flips every sub-
+        combo for a given coded field."""
+        cur = cb.currentData()
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("—", "")
+        items = sorted(opts, key=lambda kv: (-get_usage(kv[0]), kv[1])
+                       if self._sort_freq else (kv[1],))
+        for k, lbl in items:
+            cb.addItem(_lang_label(lbl), k)
+        if cur:
+            idx = cb.findData(cur)
+            if idx >= 0:
+                cb.setCurrentIndex(idx)
+        cb.blockSignals(False)
+
     def _toggle_sort(self):
         self._sort_freq = not self._sort_freq
-        self._sort_lbl.setText("freq" if self._sort_freq else "alpha")
-        self._sort_lbl.setStyleSheet(
-            "color:#888;font-size:9pt;" if self._sort_freq
-            else "color:#8ab;font-size:9pt;font-style:italic;")
+        # Update the label only if it exists (main-combo style); sub-
+        # combo coded fields don't have one.
+        if hasattr(self, "_sort_lbl") and self._sort_lbl is not None:
+            self._sort_lbl.setText(_lang_label("freq / 頻度") if self._sort_freq else _lang_label("alpha / 順序"))
+            self._sort_lbl.setStyleSheet(
+                "color:#888;font-size:9pt;" if self._sort_freq
+                else "color:#8ab;font-size:9pt;font-style:italic;")
         if self.options:
             self._fill_combo(preserve=True)
+        # Refill all coded-field sub-combos for this widget. One toggle
+        # per FieldWidget flips every sub-combo (HC_Color + HC_Style +
+        # HC_Length share the same sort mode).
+        for cb, opts in getattr(self, "_sub_combos", []):
+            self._fill_sub_combo(cb, opts)
 
     # ── Data binding (preview integration) ───────────────────────────────────
 
@@ -972,7 +1003,7 @@ class FieldWidget(QGroupBox):
             if isinstance(text, str) and len(text) > 8192 and (
                     self.key in ("CLIP", "FACE", "FACE_PW")
                     or self.key.startswith("CLIP_")):
-                text = text[:8192] + "\n…(truncated)"
+                text = text[:8192] + "\n" + _lang_label("…(truncated) / …（切り捨て）")
             te = getattr(self, "_te", None)
             if te:
                 te.blockSignals(True)
@@ -1322,8 +1353,8 @@ class FieldWidget(QGroupBox):
         _CLIP_FIELDS = {"E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "P", "PW", "CL"}
         act_show = act_update = None
         if self.key in _CLIP_FIELDS:
-            act_show   = menu.addAction("👁 Show")
-            act_update = menu.addAction("🔄 Update")
+            act_show   = menu.addAction(_lang_label("👁 Show / 👁 表示"))
+            act_update = menu.addAction(_lang_label("🔄 Update / 🔄 更新"))
 
         # Everything below requires Editable (canvas edit_mode) to be on
         act_color = act_disc_this = act_disc_box = act_disc_all = act_cond = None
@@ -1334,32 +1365,32 @@ class FieldWidget(QGroupBox):
             if act_update:
                 menu.addSeparator()
 
-            act_color = menu.addAction("🎨 Change Color…")
+            act_color = menu.addAction(_lang_label("🎨 Change Color… / 🎨 色を変更…"))
             menu.addSeparator()
 
             # ── Disconnect options ────────────────────────────────────────
             if cv:
                 my_conns = [r for r in cv._connections if r[1] == self.key or r[3] == self.key]
                 all_conns = cv._connections
-                if my_conns:
-                    act_disc_this = menu.addAction("Disconnect this dot")
-                    act_disc_box  = menu.addAction("Disconnect all on this box")
+                if dot_key:
+                    act_disc_this = menu.addAction(_lang_label("Disconnect this dot / このドットを切断"))
+                    act_disc_box  = menu.addAction(_lang_label("Disconnect all on this box / このボックスのすべてを切断"))
                 if all_conns:
-                    act_disc_all = menu.addAction("Disconnect all")
+                    act_disc_all = menu.addAction(_lang_label("Disconnect all / すべて切断"))
                 if my_conns or all_conns:
                     menu.addSeparator()
 
             # Hide for … checkable actions
-            modes = ["Image", "Video"]
+            modes = [(_lang_label("Image / 画像"), "Image"), (_lang_label("Video / 動画"), "Video")]
             hidden_for = self._hidden_for or []
-            for m in modes:
-                a = QAction(f"Hide for {m}", menu, checkable=True)
+            for lbl, m in modes:
+                a = QAction(_lang_label(f"Hide for {m} / {lbl}で隠す"), menu, checkable=True)
                 a.setChecked(m.lower() in [x.lower() for x in hidden_for])
                 menu.addAction(a)
                 mode_actions[m] = a
 
             menu.addSeparator()
-            cond_label = f"Hide when… ({len(self._conditions)})" if self._conditions else "Hide when…"
+            cond_label = _lang_label(f"Hide when… ({len(self._conditions)}) / 非表示条件… ({len(self._conditions)})") if self._conditions else _lang_label("Hide when… / 非表示条件…")
             act_cond = menu.addAction(cond_label)
 
         # Nothing to show — skip the empty menu popup
@@ -1399,16 +1430,18 @@ class FieldWidget(QGroupBox):
         from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
                                      QScrollArea, QDialogButtonBox)
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Hide conditions — {self.key}")
+        dlg.setWindowTitle(_lang_label(f"Hide conditions — {self.key} / 非表示条件 — {self.key}"))
         dlg.setMinimumWidth(520)
         dlg.setStyleSheet("background:#1e1e1e; color:#ddd;")
 
         vbox = QVBoxLayout(dlg)
         vbox.setSpacing(6)
 
-        info = QLabel(
+        info = QLabel(_lang_label(
             "This panel is hidden when ANY condition below is satisfied.\n"
-            "Source key = raw metadata key (same as MetaMap source keys).")
+            "Source key = raw metadata key (same as MetaMap source keys). / "
+            "以下のいずれかの条件が満たされた場合、このパネルは非表示になります。\n"
+            "ソースキー = 生のメタデータキー（メタマップのソースキーと同じ）"))
         info.setStyleSheet("color:#999; font-size:9pt;")
         info.setWordWrap(True)
         vbox.addWidget(info)
@@ -1421,16 +1454,16 @@ class FieldWidget(QGroupBox):
         scroll.setWidget(rows_w)
         vbox.addWidget(scroll, stretch=1)
 
-        _OPS = [("equals", "equals"), ("not_eq", "not equals"),
-                ("contains", "contains"), ("empty", "is empty / no / none"),
-                ("not_empty", "is not empty")]
+        _OPS = [("equals", _lang_label("equals / 等しい")), ("not_eq", _lang_label("not equals / 等しくない")),
+                ("contains", _lang_label("contains / 含む")), ("empty", _lang_label("is empty / no / none / 空・なし")),
+                ("not_empty", _lang_label("is not empty / 空でない"))]
         row_data = []   # list of (src_edit, op_cb, val_edit)
 
         def _add_row(src="", op="empty", val=""):
             rw = QWidget()
             rl = QHBoxLayout(rw); rl.setContentsMargins(0,0,0,0); rl.setSpacing(4)
             src_e = QLineEdit(src)
-            src_e.setPlaceholderText("Source key…")
+            src_e.setPlaceholderText(_lang_label("Source key… / ソースキー…"))
             src_e.setStyleSheet("background:#2a2a2a;color:#f0f0f0;border:1px solid #666;padding:3px 5px;")
             rl.addWidget(src_e, stretch=3)
             op_cb = QComboBox()
@@ -1442,7 +1475,7 @@ class FieldWidget(QGroupBox):
             if idx >= 0: op_cb.setCurrentIndex(idx)
             rl.addWidget(op_cb, stretch=3)
             val_e = QLineEdit(val)
-            val_e.setPlaceholderText("value…")
+            val_e.setPlaceholderText(_lang_label("value… / 値…"))
             val_e.setStyleSheet("background:#2a2a2a;color:#f0f0f0;border:1px solid #666;padding:3px 5px;")
             def _sync_val(cur_op):
                 needs_val = op_cb.currentData() not in ("empty", "not_empty")
@@ -1683,14 +1716,14 @@ class _AnchorCanvas(QWidget):
 
             act_this = act_box = act_all = None
             if this_cid is not None:
-                act_this = menu.addAction("Disconnect this")
+                act_this = menu.addAction(_lang_label("Disconnect this / これを切断"))
             if this_box is not None:
                 box_conns = [r for r in self._connections if r[1] == this_box or r[3] == this_box]
                 if len(box_conns) > 1 or (len(box_conns) == 1 and this_cid is None):
-                    act_box = menu.addAction(f"Disconnect all on this box")
+                    act_box = menu.addAction(_lang_label("Disconnect all on this box / このボックスのすべてを切断"))
             if len(self._connections) > 0:
                 menu.addSeparator()
-                act_all = menu.addAction("Disconnect all")
+                act_all = menu.addAction(_lang_label("Disconnect all / すべて切断"))
 
             chosen = menu.exec(e.globalPosition().toPoint())
             if chosen is None:
