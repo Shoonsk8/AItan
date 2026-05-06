@@ -3180,8 +3180,20 @@ class PreviewWindow(QWidget):
                                 face_txt.append("Top matches:")
                                 for pid, sim in fi["matches"]:
                                     name = registry.get(pid, "")
+                                    # Suppress the trailing name when it's
+                                    # just a numeric placeholder that
+                                    # duplicates the pid (e.g. P003 named
+                                    # "3" → display only "P003").
+                                    try:
+                                        if name and int(str(name).strip(), 16) == int(pid, 16):
+                                            name = ""
+                                    except (ValueError, TypeError):
+                                        pass
                                     mark = "*" if pid == fi["assigned_id"] else " "
-                                    face_txt.append(f"  {mark} P{pid}  {sim:.3f}  {name}")
+                                    line = f"  {mark} P{pid}  {sim:.3f}"
+                                    if name:
+                                        line += f"  {name}"
+                                    face_txt.append(line)
                             else:
                                 face_txt.append("No persons in DB")
                             _detected_pid = fi["assigned_id"]
