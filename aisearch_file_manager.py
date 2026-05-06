@@ -117,8 +117,12 @@ class _FMIconList(QListWidget):
         self.setMovement(QListWidget.Movement.Static)
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.setUniformItemSizes(True)
+        # Uniform-item sizing caches the first item's geometry and forces
+        # all later items to match. Mixed icon types (folder emoji vs.
+        # rendered thumbnails) and re-navigation made labels collapse.
+        self.setUniformItemSizes(False)
         self.setWordWrap(True)
+        self.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
@@ -402,7 +406,8 @@ class FileManagerWindow(QWidget):
     def _apply_thumb_size(self):
         s = self._thumb_size
         self.list.setIconSize(QSize(s, s))
-        self.list.setGridSize(QSize(s + 24, s + 36))
+        # Two-line label area below the icon. ~16 px per line + 8 px margin.
+        self.list.setGridSize(QSize(s + 24, s + 48))
 
     # ── Move (drop target) ───────────────────────────────────────────────────
     def move_files_into(self, src_paths, target_dir):
