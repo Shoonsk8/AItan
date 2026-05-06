@@ -120,8 +120,24 @@ class _FMIconList(QListWidget):
         self.setUniformItemSizes(True)
         self.setWordWrap(True)
         self.setAcceptDrops(True)
-        self.setDragEnabled(False)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSpacing(6)
+
+    def mimeData(self, items):
+        """Build URL MIME for items being dragged out (so the receiver —
+        another FM window, Nemo — sees real file paths)."""
+        from PyQt6.QtCore import QMimeData
+        mime = QMimeData()
+        urls = []
+        for it in items:
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if data and data != ".." and os.path.exists(data):
+                urls.append(QUrl.fromLocalFile(data))
+        if urls:
+            mime.setUrls(urls)
+        return mime
 
     def dragEnterEvent(self, ev):
         if ev.mimeData().hasUrls():

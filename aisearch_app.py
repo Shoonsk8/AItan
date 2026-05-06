@@ -357,35 +357,41 @@ class FileTable(QTableWidget):
 
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_src_row is not None:
-            sel_rows = {idx.row() for idx in self.selectionModel().selectedRows()}
+            sel_rows = sorted({idx.row() for idx in self.selectionModel().selectedRows()})
             press_on_selected = self._drag_src_row in sel_rows
-            if (event.pos() - self._drag_press_pos).manhattanLength() > 5:
+            # Threshold check — start a real Qt drag with file-URL MIME so
+            # external drop targets (FM window, file managers) can receive
+            # the move. Internal drops (drop on another row to move into
+            # that row's directory) come back through dropEvent / the
+            # viewport eventFilter, gated on event.source() == self.
+            if not self._drag_active and (event.pos() - self._drag_press_pos).manhattanLength() > 5:
                 self._drag_active = True
-            if self._drag_active:
-                item    = self.itemAt(event.pos())
-                tgt_row = self.row(item) if item else -1
-                if tgt_row >= 0 and tgt_row not in sel_rows:
-                    self.setCursor(QCursor(Qt.CursorShape.DragMoveCursor))
-                else:
-                    self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-                return   # don't let Qt change selection during drag
-            # Below the 5-pixel drag threshold but the press WAS on a
-            # selected row → suppress super() anyway. Qt's default move
-            # handler in ExtendedSelection mode would rubberband from the
-            # press point and immediately wipe the multi-selection on the
-            # very first pixel of movement.
+                urls = []
+                for r in sel_rows:
+                    p = self.get_row_path(r)
+                    if p:
+                        urls.append(QUrl.fromLocalFile(p))
+                if urls:
+                    mime = QMimeData()
+                    mime.setUrls(urls)
+                    drag = QDrag(self)
+                    drag.setMimeData(mime)
+                    drag.exec(Qt.DropAction.MoveAction)
+                self._drag_src_row = None
+                self._drag_active  = False
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+                return
             if press_on_selected:
+                # Below threshold and press was on a selected row: suppress
+                # Qt's default rubberband / selection-changing handler.
                 return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
-        if self._drag_active and self._drag_src_row is not None:
-            item     = self.itemAt(event.pos())
-            tgt_row  = self.row(item) if item else -1
-            sel_rows = [idx.row() for idx in self.selectionModel().selectedRows()]
-            if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
-                self.move_callback(sel_rows, tgt_row)
+        # QDrag now handles drop targeting (internal or external). The
+        # old release-side move logic is gone — drops fire dropEvent /
+        # the viewport filter instead.
         self._drag_src_row    = None
         self._drag_active     = False
         super().mouseReleaseEvent(event)
@@ -394,13 +400,27 @@ class FileTable(QTableWidget):
         if obj is self.viewport():
             t = event.type()
             if t == event.Type.DragEnter:
-                if event.mimeData().hasUrls() and not self._drag_active:
+                if event.mimeData().hasUrls():
                     event.acceptProposedAction(); return True
             elif t == event.Type.DragMove:
-                if event.mimeData().hasUrls() and not self._drag_active:
+                if event.mimeData().hasUrls():
                     event.acceptProposedAction(); return True
             elif t == event.Type.Drop:
-                if event.mimeData().hasUrls() and not self._drag_active:
+                if event.mimeData().hasUrls():
+                    # Internal drag (this same table → this same table) =
+                    # move to target row's directory. External drops (Nemo,
+                    # etc.) = treat as a search query.
+                    if event.source() is self:
+                        pos = event.position().toPoint()
+                        item = self.itemAt(pos)
+                        tgt_row = self.row(item) if item else -1
+                        sel_rows = sorted({idx.row() for idx in self.selectionModel().selectedRows()})
+                        if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
+                            self.move_callback(sel_rows, tgt_row)
+                            event.acceptProposedAction()
+                            return True
+                        event.ignore()
+                        return True
                     for url in event.mimeData().urls():
                         path = url.toLocalFile()
                         if os.path.exists(path) and self.drop_callback:
