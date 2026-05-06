@@ -828,6 +828,7 @@ class FilePane(QWidget):
             return
         import aisearch_front_page as _fp
         errors = []
+        any_removed = False
         for p in paths:
             if not os.path.exists(p):
                 continue
@@ -837,8 +838,13 @@ class FilePane(QWidget):
                     errors.append(f"{os.path.basename(p)}: {err}")
                     continue
                 self.fm._remove_from_app_state(p)
+                any_removed = True
             except Exception as e:
                 errors.append(f"{os.path.basename(p)}: {e}")
+        # Persist the in-memory mutations (attrs_data + features.pt)
+        # once at the end so the deletions survive a relaunch.
+        if any_removed:
+            self.fm._save_app_data()
         if errors:
             QMessageBox.warning(self, "Trash",
                 f"Errors:\n" + "\n".join(errors[:10]))
@@ -1025,6 +1031,23 @@ class FileManagerWindow(QWidget):
         except Exception:
             pass
 
+    def _save_app_data(self):
+        """Persist app.attrs_data + app.data to disk after FM-driven
+        deletions / renames mutate them. Without this, the changes
+        revert on next launch."""
+        app = self.app
+        proj = getattr(app, "current_project", None)
+        try:
+            import aisearch_attrs as _am
+            if proj:
+                _am.save(proj, app.attrs_data)
+                if app.data is not None:
+                    import torch as _torch
+                    _torch.save(app.data, os.path.join(
+                        _am.DATA_DIR, f"features_{proj}.pt"))
+        except Exception:
+            pass
+
     def _sync_folder_rename(self, old_dir, new_dir):
         """When a directory is renamed, remap any tracked file paths that
         live under it. Builds a renames dict so the on-disk stores can be
@@ -1061,7 +1084,9 @@ class FileManagerWindow(QWidget):
                 pass
 
     def _remove_from_app_state(self, path):
-        """Remove a trashed path from app.data + attrs_data."""
+        """Remove a trashed path from app.data, attrs_data, and the main
+        window's visible table (so search / browse / dup results don't
+        show ghost rows for files we just trashed)."""
         app = self.app
         try:
             if app.data and "paths" in app.data and path in app.data["paths"]:
@@ -1073,6 +1098,17 @@ class FileManagerWindow(QWidget):
             pass
         try:
             app.attrs_data.pop(path, None)
+        except Exception:
+            pass
+        # Drop matching rows from the main table.
+        try:
+            table = getattr(app, "table", None)
+            if table is not None and hasattr(table, "get_row_path"):
+                norm = os.path.normpath(os.path.abspath(path))
+                for row in range(table.rowCount() - 1, -1, -1):
+                    rp = table.get_row_path(row)
+                    if rp and os.path.normpath(os.path.abspath(rp)) == norm:
+                        table.removeRow(row)
         except Exception:
             pass
 
