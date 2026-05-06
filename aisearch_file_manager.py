@@ -126,11 +126,14 @@ class _FMIconList(QListWidget):
         self.setUniformItemSizes(False)
         self.setWordWrap(True)
         self.setTextElideMode(Qt.TextElideMode.ElideRight)
+        # Disable Qt's own drag/drop machinery — it keeps showing STOP
+        # cursors based on per-item flag checks that fight against our
+        # custom dropEvent. We start the drag ourselves via the viewport
+        # eventFilter and handle drops via our own dragEnter/Move/drop.
         self.setAcceptDrops(True)
-        self.setDragEnabled(True)
-        self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self.setDragEnabled(False)
+        self.setDragDropMode(QListWidget.DragDropMode.NoDragDrop)
         self._install_viewport_filter()
-        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSpacing(6)
 
     # Manual drag-start via an event filter on the viewport. Qt's
@@ -172,6 +175,9 @@ class _FMIconList(QListWidget):
         return super().eventFilter(obj, event)
 
     def _start_url_drag(self, seed_item=None):
+        import sys
+        print(f"[FM] _start_url_drag seed={seed_item.text() if seed_item else None}",
+              file=sys.stderr, flush=True)
         items = self.selectedItems()
         # If selection is empty (or just-pressed item not in it yet),
         # fall back to the seed item so single click+drag in one motion
@@ -202,18 +208,24 @@ class _FMIconList(QListWidget):
         drag.exec(Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, ev):
+        import sys
+        print(f"[FM] dragEnterEvent hasUrls={ev.mimeData().hasUrls()}", file=sys.stderr, flush=True)
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
         else:
             ev.ignore()
 
     def dragMoveEvent(self, ev):
+        # Always accept anywhere over the list — dropEvent decides what
+        # the target actually is. Without an accept here, Qt shows STOP.
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
         else:
             ev.ignore()
 
     def dropEvent(self, ev):
+        import sys
+        print(f"[FM] dropEvent hasUrls={ev.mimeData().hasUrls()}", file=sys.stderr, flush=True)
         if not ev.mimeData().hasUrls():
             ev.ignore(); return
         item = self.itemAt(ev.position().toPoint())
