@@ -606,14 +606,14 @@ class FilePane(QWidget):
         v.setSpacing(2)
 
         tb = QHBoxLayout()
-        self.btn_back = QPushButton("◀")
-        self.btn_back.setToolTip("Back (previous directory)")
-        self.btn_fwd  = QPushButton("▶")
-        self.btn_fwd.setToolTip("Forward")
-        self.btn_up   = QPushButton("▲")
-        self.btn_up.setToolTip("Up to parent directory")
+        self.btn_back = QPushButton("Back")
+        self.btn_back.setToolTip("Previous directory in history")
+        self.btn_fwd  = QPushButton("Fwd")
+        self.btn_fwd.setToolTip("Next directory in history")
+        self.btn_up   = QPushButton("Up")
+        self.btn_up.setToolTip("Parent directory")
         for b in (self.btn_back, self.btn_fwd, self.btn_up):
-            b.setFixedWidth(28)
+            b.setFixedWidth(48)
         self.btn_back.clicked.connect(self._go_back)
         self.btn_fwd.clicked.connect(self._go_forward)
         self.btn_up.clicked.connect(self._go_up)
@@ -869,7 +869,7 @@ class FileManagerWindow(QWidget):
 
         # Top toolbar: only the dual-pane toggle for now.
         tb = QHBoxLayout()
-        self.btn_pane_toggle = QPushButton("▥ Dual pane")
+        self.btn_pane_toggle = QPushButton("Dual pane")
         self.btn_pane_toggle.setToolTip("Toggle single / dual pane")
         self.btn_pane_toggle.clicked.connect(self._toggle_dual_pane)
         tb.addWidget(self.btn_pane_toggle)
@@ -899,13 +899,13 @@ class FileManagerWindow(QWidget):
             # Open second pane at the same dir as the first
             cur = self._panes[0]._cur_dir or self._initial_dir
             self._add_pane(cur)
-            self.btn_pane_toggle.setText("▣ Single pane")
+            self.btn_pane_toggle.setText("Single pane")
         else:
             # Tear down the second pane
             second = self._panes.pop()
             second.setParent(None)
             second.deleteLater()
-            self.btn_pane_toggle.setText("▥ Dual pane")
+            self.btn_pane_toggle.setText("Dual pane")
 
     def _active_pane(self) -> FilePane:
         # Pane that owns the focused widget; fall back to the first.
