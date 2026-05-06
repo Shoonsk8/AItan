@@ -253,6 +253,33 @@ class _FMIconList(QListWidget):
             QMessageBox.critical(self, "Drop Error", f"Failed to move files:\n{e}\n{traceback.format_exc()}")
 
 
+class _FMItem(QTreeWidgetItem):
+    """QTreeWidgetItem that always groups folders before files, no
+    matter which column the user sorted by. ".." always pins to the
+    top. Within the same kind, the default per-column comparison
+    applies, so click-header sort still does what you'd expect."""
+    KIND_RANK = {"up": 0, "dir": 1, "file": 2}
+
+    def __init__(self, columns, kind="file"):
+        super().__init__(columns)
+        self._kind = kind
+
+    def __lt__(self, other):
+        a = self.KIND_RANK.get(self._kind, 2)
+        b = self.KIND_RANK.get(getattr(other, "_kind", "file"), 2)
+        if a != b:
+            # When sorting descending Qt inverts the result of __lt__,
+            # which would put files above folders. Compare via the
+            # tree's current sort order so the kind ordering is stable
+            # regardless of direction.
+            tree = self.treeWidget()
+            descending = (tree is not None
+                          and tree.header().sortIndicatorOrder()
+                              == Qt.SortOrder.DescendingOrder)
+            return a > b if descending else a < b
+        return super().__lt__(other)
+
+
 class _FMTreeList(QTreeWidget):
     """Tree/details view: triangles expand folders inline. Lazy-loads
     children on first expand (so opening at a deep root is fast).
@@ -364,7 +391,7 @@ class _FMTreeList(QTreeWidget):
         self.setSortingEnabled(False)
         self.clear()
         if os.path.dirname(dir_path) != dir_path:
-            up = QTreeWidgetItem(["..", "", "", ""])
+            up = _FMItem(["..", "", "", ""], kind="up")
             up.setData(0, Qt.ItemDataRole.UserRole, "..")
             up.setIcon(0, self._fm._folder_icon())
             self.addTopLevelItem(up)
@@ -450,7 +477,7 @@ class _FMTreeList(QTreeWidget):
             pass
 
     def _make_folder_item(self, name, full):
-        it = QTreeWidgetItem([name, "", "", "Folder"])
+        it = _FMItem([name, "", "", "Folder"], kind="dir")
         it.setData(0, Qt.ItemDataRole.UserRole, full)
         it.setIcon(0, self._fm._folder_icon())
         # Placeholder child → triangle appears even before we've scanned.
@@ -481,7 +508,7 @@ class _FMTreeList(QTreeWidget):
             pass
         ext = os.path.splitext(name)[1].lower().lstrip(".")
         type_text = ext.upper() if ext else "File"
-        it = QTreeWidgetItem([name, size, date, type_text])
+        it = _FMItem([name, size, date, type_text], kind="file")
         it.setData(0, Qt.ItemDataRole.UserRole, full)
         # Thumbnail icon — cached if available, otherwise queued
         cache_key = f"{full}|{mtime}|{self._thumb_size}"
