@@ -279,6 +279,9 @@ class _FMTreeList(QTreeWidget):
         self.setUniformRowHeights(True)
         self.setAllColumnsShowFocus(True)
         self.setIconSize(QSize(self._TREE_THUMB_SIZE, self._TREE_THUMB_SIZE))
+        # Click column headers to re-sort. Default: Name column ascending.
+        self.setSortingEnabled(True)
+        self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.itemDoubleClicked.connect(self._on_double_click)
         self.itemExpanded.connect(self._on_expand)
         # Manual drag start via viewport eventFilter (same pattern as
@@ -299,6 +302,10 @@ class _FMTreeList(QTreeWidget):
             self._thumb_loader.cancel()
             self._thumb_loader = None
         self._items_by_key.clear()
+        # Disable sorting during bulk insert — addTopLevelItem with sort
+        # enabled is O(log n) per insert + layout cost on every add. We
+        # re-enable at the end so the final view is sorted.
+        self.setSortingEnabled(False)
         self.clear()
         if os.path.dirname(dir_path) != dir_path:
             up = QTreeWidgetItem(["..", "", "", ""])
@@ -321,6 +328,7 @@ class _FMTreeList(QTreeWidget):
             full = os.path.join(dir_path, name)
             if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
                 self.addTopLevelItem(self._make_file_item(name, full))
+        self.setSortingEnabled(True)
         self._kick_thumb_loader()
 
     def _kick_thumb_loader(self):
