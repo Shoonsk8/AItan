@@ -2,7 +2,7 @@
 
 ## What This Is
 PyQt6 desktop app for AI-powered image/video search, tagging, and organization.
-Version 2.3. Entry point: `aisearch_main.py`. Launched via desktop icon using:
+Version 2.4. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 `/mnt/1TBSSD/AIsearch/venv/bin/python /mnt/1TBSSD/AIsearch/aisearch_main.py`
 
 ## File Map
@@ -26,6 +26,7 @@ Version 2.3. Entry point: `aisearch_main.py`. Launched via desktop icon using:
 | `aisearch_front_page.py` | Front page / project selector |
 | `aisearch_feedback.py` | Feedback/rating helpers |
 | `aisearch_logic.py` | CLIP search logic |
+| `aisearch_file_manager.py` | `FileManagerWindow` (Nemo-replacement) — single/dual-pane file browser with tree view, drag-drop, context menu, lazy-loaded thumbnails, Open / Open with… |
 | `attribute_manager.py` | `AttributeManager` class: manages `attribute_workspace.json`, exports to `attrs_tags.json` |
 | `aisearch_taggroups_editor.py` | Standalone editor for tag groups (separate app) |
 | `attr_viewer.py` | Standalone attribute viewer |

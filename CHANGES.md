@@ -2,6 +2,38 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-06 — v2.4
+
+### Version
+- `VERSION = "2.4"` across `aisearch_app.py`, `aisearch_settings.py`, `aisearch_front_page.py`, `aisearch_preview.py`, `aisearch_file_manager.py`.
+- `aisearch_attrs.py:1433` — `_AITAN_VERSION = "2.4"`.
+
+### File Manager window (new — `aisearch_file_manager.py`)
+- New top-level window opened via right-arrow on row 0 (replaces the previous browse-into-main behavior for that key; the 📂 Browse button still does main-page browse). Closes when the main window closes.
+- **Single / dual-pane toggle** — top-of-window button switches between one pane and two side-by-side panes via `QSplitter`. Each pane is independent: own Back / Fwd / Up + path bar + tree + history. Drag a file from one pane onto a folder row in the other = move.
+- **Tree view** — `QTreeWidget` with 4 columns (Name · Size · Date · Type), expand triangles for folders, lazy-loaded children on first expand, sortable column headers, resizable column widths, custom `_FMItem` subclass that always groups folders before files regardless of column or sort direction. ".." pinned to the top.
+- **Thumbnails** — 32 px file thumbnails by default, Ctrl+Wheel resizes 16 → 512 px. Async load via `_ThumbLoader` QThread; cache shared with the rest of the app and bounded at 500 entries. Green inner rim on video thumbnails.
+- **Drag-drop** — manual QDrag with file URL MIME via viewport eventFilter (Qt's auto-detection didn't fire reliably in PyQt6 IconMode; Tree works with the same pattern). Drop on folder row = move; drop on file / empty = silent no-op. Multi-select drag preserved on plain click via deferred selection collapse.
+- **Context menu** (right-click): New Folder · Rename (F2) · Move to Trash (Del, with confirm) · Open · Open with… · Open in Nemo. "Open with…" submenu lists installed apps per platform (Pix/GIMP/VLC/etc on Linux, Preview/QuickTime/etc on macOS, Paint/IrfanView/etc on Windows). Filtered at menu-build time via `shutil.which`.
+- **Single-click → live preview** mirroring the main-page table — `currentItemChanged` triggers `preview_handler.show()`.
+- **Right-arrow follows current row** when FM is open — clicking a different row in the main table and pressing → re-points FM at that row's directory instead of opening a fresh one.
+- **Disk persistence** — file ops (move / rename / delete / folder rename) batch the on-disk store flush (`features.pt` + `attrs.json`) once at the end so a multi-file drop doesn't take 60+ s of disk I/O.
+- **Folder expansion preserved across refresh** — Ctrl+Wheel resize and other repopulates snapshot expanded paths and BFS-restore them after.
+- **Cross-platform** — Open / Open with… / Move to Trash / Open in Nemo all work on Linux + macOS + Windows (system trash on Linux, `~/.aisearch_trash` elsewhere; per-OS app candidate lists).
+
+### Search ranking
+- `aisearch_app.py` worker — score column already shows raw cos_sim; `_populate_search_results` caps display at `max_search_results` (default 500) but ranks every eligible file. (Carried over from v2.3 — included here as the visible UI now matches.)
+
+### Dup-finder memory
+- `aisearch_app.py:_find_duplicates` worker — chunked similarity pass replaces the dense (N, N) cos_sim. CHUNK = 512 rows × N peak ≈ 45 MiB instead of ~1.8 GiB. Added a `_SparseSim` lookup with on-demand fallback so the existing group-sort and display code still has `sim.get(i, j)` access without keeping the full matrix.
+
+### Internationalization
+- `aisearch_settings_appearance.py`, `aisearch_settings_attrs.py` — bilingual labels for Theme radio (Dark/ダーク, Light/ライト) and the Attributes tab's coded-field section headers (Clothing/服装, Eyes/目, etc.). Stored JSON keys remain English so data compat is unchanged.
+
+### Other small fixes
+- `aisearch_app.py:on_right_key_press` — bails when the query file's directory is gone (Nemo external move). Drops stale row 0, rebases search on row 1.
+- `aisearch_front_page.py:open_in_nemo` — for files, opens parent folder (was launching default image viewer instead of Nemo).
+
 ## 2026-05-05 — v2.3
 
 ### Version

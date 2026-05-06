@@ -758,7 +758,7 @@ _DEFAULT_CODED_FIELDS = [
     ("B",   "Bust",          2),   # [2nd=size][1st=shape]
     ("WH",  "WaistHip",      2),   # [2nd=waist][1st=hip]
     ("PM",  "PostureMotion", 2),   # [2nd=posture][1st=motion]
-    ("CL",  "Clothing",      4),   # [4=topColor][3=top][2=botColor][1=bot]; 0=unknown 1=none f=custom
+    ("CL",  "Clothing / 服装", 4),   # [4=topColor][3=top][2=botColor][1=bot]; 0=unknown 1=none f=custom
     ("T",   "Tool",          2),   # 00=nothing  ff=custom
     # ── Technical ────────────────────────────────────────────────────────────
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
@@ -1430,7 +1430,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
-_AITAN_VERSION = "2.3"  # stamped into every AItan{} block as "ver"
+_AITAN_VERSION = "2.4"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""

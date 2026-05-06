@@ -21,7 +21,7 @@ from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
 
 import aisearch_logic as logic
 
-VERSION = "2.3a"
+VERSION = "2.4"
 
 
 _VALID_EXTS = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
