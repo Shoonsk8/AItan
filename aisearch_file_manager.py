@@ -313,9 +313,13 @@ class _FMTreeList(QTreeWidget):
 
     # ── Population ───────────────────────────────────────────────────────────
     def populate_root(self, dir_path):
-        # Cancel any prior loader; clear the (stale) item map.
+        # Cancel any prior loader and wait for it to exit before
+        # dropping the reference (Qt aborts if a QThread is destroyed
+        # while still running).
         if self._thumb_loader is not None:
             self._thumb_loader.cancel()
+            if self._thumb_loader.isRunning():
+                self._thumb_loader.wait(2000)
             self._thumb_loader = None
         self._items_by_key.clear()
         # Disable sorting during bulk insert — addTopLevelItem with sort
@@ -349,16 +353,25 @@ class _FMTreeList(QTreeWidget):
 
     def _kick_thumb_loader(self):
         """Start (or restart) the async thumbnail loader for any items
-        still missing icons. Cancels any running loader and starts a
-        fresh one — _items_by_key only contains UNloaded items (the
-        completed-handler removes them as they finish), so no work is
-        duplicated, and items added by lazy expansion mid-flight get
-        picked up immediately."""
+        still missing icons. Cancels any running loader, waits for it
+        to actually exit (otherwise Qt aborts with 'terminate called
+        without an active exception' when the old QThread is dropped
+        while still running), then starts a fresh one — _items_by_key
+        only contains UNloaded items, so no work is duplicated."""
         pending = [(k, p) for k, (it, p) in self._items_by_key.items()]
         if not pending:
             return
         if self._thumb_loader is not None:
             self._thumb_loader.cancel()
+            # Wait for the run loop to actually return before we drop
+            # the reference. Cancel only sets a flag — the thread may
+            # be mid-decode. Bound the wait so a slow video decode
+            # can't freeze us forever.
+            if not self._thumb_loader.wait(2000):
+                # Thread didn't exit in 2 s — leave it alone, Python
+                # will deal with it. This shouldn't happen in practice
+                # since the cancel flag is checked between every file.
+                pass
         self._thumb_loader = _ThumbLoader(pending, self._thumb_size, self)
         self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
         self._thumb_loader.start()
@@ -1042,8 +1055,13 @@ class FileManagerWindow(QWidget):
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
     def closeEvent(self, ev):
+        # Wait for any in-flight thumbnail loaders to exit before Qt
+        # tears down their owners. Without the wait, dropping the
+        # QThread reference mid-run aborts with "terminate called
+        # without an active exception".
         for pane in self._panes:
             tl = getattr(pane.tree, "_thumb_loader", None)
-            if tl is not None:
+            if tl is not None and tl.isRunning():
                 tl.cancel()
+                tl.wait(2000)
         super().closeEvent(ev)
