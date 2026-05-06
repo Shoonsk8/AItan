@@ -345,11 +345,12 @@ class FileManagerWindow(QWidget):
         self.list.clear()
         self._row_of_key.clear()
 
-        # ".." entry
+        # ".." entry — droppable so dragged files can move to parent
         if os.path.dirname(self._cur_dir) != self._cur_dir:
             it = QListWidgetItem("..")
             it.setData(Qt.ItemDataRole.UserRole, "..")
             it.setIcon(self._folder_icon())
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
             self.list.addItem(it)
 
         try:
@@ -358,7 +359,10 @@ class FileManagerWindow(QWidget):
         except OSError:
             entries = []
 
-        # Folders first (instant — generic icon)
+        # Folders first (instant — generic icon). Mark them droppable so
+        # Qt's per-item drop check accepts files dragged onto them; file
+        # items stay non-droppable (default), giving the right "stop"
+        # cursor when hovering a file.
         for name in entries:
             if name.startswith('.'):
                 continue
@@ -367,6 +371,7 @@ class FileManagerWindow(QWidget):
                 it = QListWidgetItem(name)
                 it.setIcon(self._folder_icon())
                 it.setData(Qt.ItemDataRole.UserRole, full)
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
                 self.list.addItem(it)
 
         # Files: add with placeholder, queue real thumbnails
