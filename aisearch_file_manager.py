@@ -32,6 +32,90 @@ _THUMB_CACHE: dict = {}
 _THUMB_CACHE_MAX = 500
 
 
+# ── Open / Open with… (module-level so other UIs can use them) ────────────
+_IMAGE_APPS_LINUX = [
+    ("Pix",      ["pix"]),
+    ("GIMP",     ["gimp"]),
+    ("Krita",    ["krita"]),
+    ("xviewer",  ["xviewer"]),
+    ("eog",      ["eog"]),
+    ("feh",      ["feh"]),
+]
+_VIDEO_APPS_LINUX = [
+    ("VLC",       ["vlc"]),
+    ("MPV",       ["mpv"]),
+    ("Celluloid", ["celluloid"]),
+    ("MPlayer",   ["mplayer"]),
+]
+_IMAGE_APPS_MAC = [
+    ("Preview",    ["open", "-a", "Preview"]),
+    ("GIMP",       ["open", "-a", "GIMP"]),
+    ("Pixelmator", ["open", "-a", "Pixelmator"]),
+]
+_VIDEO_APPS_MAC = [
+    ("QuickTime", ["open", "-a", "QuickTime Player"]),
+    ("VLC",       ["open", "-a", "VLC"]),
+    ("IINA",      ["open", "-a", "IINA"]),
+]
+_IMAGE_APPS_WIN = [
+    ("Paint",     ["mspaint.exe"]),
+    ("GIMP",      ["gimp"]),
+    ("IrfanView", ["i_view64.exe"]),
+]
+_VIDEO_APPS_WIN = [
+    ("VLC",       ["vlc"]),
+    ("MPV",       ["mpv"]),
+]
+
+
+def open_default(path):
+    """Open `path` with the system default app. Platform-dispatched:
+    Windows uses os.startfile, macOS uses `open`, Linux uses xdg-open.
+    User's OS-level MIME associations decide which program runs."""
+    import sys, subprocess
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        pass
+
+
+def open_with(cmd, path):
+    """Run a chosen program against `path`. `cmd` is the platform-
+    specific argv list ready to receive the file path appended."""
+    import subprocess
+    try:
+        args = cmd if isinstance(cmd, list) else [cmd]
+        subprocess.Popen(args + [path])
+    except (FileNotFoundError, Exception):
+        pass
+
+
+def app_choices(path):
+    """Return [(label, argv)] pairs for apps installed on the system
+    that handle this file's type. Only candidates whose leading
+    executable is on PATH are returned."""
+    import sys, shutil as _sh
+    ext = os.path.splitext(path)[1].lower()
+    if sys.platform == "win32":
+        img, vid = _IMAGE_APPS_WIN, _VIDEO_APPS_WIN
+    elif sys.platform == "darwin":
+        img, vid = _IMAGE_APPS_MAC, _VIDEO_APPS_MAC
+    else:
+        img, vid = _IMAGE_APPS_LINUX, _VIDEO_APPS_LINUX
+    candidates = (vid + img) if ext in logic.EXT_VID else img
+    out = []
+    for label, argv in candidates:
+        exe = argv[0]
+        if _sh.which(exe):
+            out.append((label, argv))
+    return out
+
+
 def _draw_video_rim(pixmap, width=3, color="#00ff00"):
     """Stamp a green border around a thumbnail to mark it as a video.
     Matches the rim style used on the main-window drop zone."""
@@ -1155,88 +1239,13 @@ class FileManagerWindow(QWidget):
             pass
 
     def _open_default(self, path):
-        """Open the file with the system default app. Platform-aware:
-        Windows uses os.startfile, macOS uses `open`, Linux uses
-        xdg-open. User's OS-level associations decide the program."""
-        import sys, subprocess
-        try:
-            if sys.platform == "win32":
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
+        open_default(path)
 
     def _open_with(self, cmd, path):
-        """Run a chosen program against `path`. `cmd` is the platform-
-        specific argv list ready to receive the file path appended."""
-        import subprocess
-        try:
-            args = cmd if isinstance(cmd, list) else [cmd]
-            subprocess.Popen(args + [path])
-        except (FileNotFoundError, Exception):
-            pass
-
-    # Per-platform "Open with" candidates. Filtered at menu-build time
-    # to those actually installed (shutil.which on Linux/Win, file
-    # existence under /Applications on macOS).
-    _IMAGE_APPS_LINUX = [
-        ("Pix",      ["pix"]),
-        ("GIMP",     ["gimp"]),
-        ("Krita",    ["krita"]),
-        ("xviewer",  ["xviewer"]),
-        ("eog",      ["eog"]),
-        ("feh",      ["feh"]),
-    ]
-    _VIDEO_APPS_LINUX = [
-        ("VLC",       ["vlc"]),
-        ("MPV",       ["mpv"]),
-        ("Celluloid", ["celluloid"]),
-        ("MPlayer",   ["mplayer"]),
-    ]
-    _IMAGE_APPS_MAC = [
-        ("Preview", ["open", "-a", "Preview"]),
-        ("GIMP",    ["open", "-a", "GIMP"]),
-        ("Pixelmator", ["open", "-a", "Pixelmator"]),
-    ]
-    _VIDEO_APPS_MAC = [
-        ("QuickTime", ["open", "-a", "QuickTime Player"]),
-        ("VLC",       ["open", "-a", "VLC"]),
-        ("IINA",      ["open", "-a", "IINA"]),
-    ]
-    _IMAGE_APPS_WIN = [
-        ("Photos", ["explorer.exe"]),    # `explorer file` opens default; placeholder
-        ("Paint",  ["mspaint.exe"]),
-        ("GIMP",   ["gimp"]),
-        ("IrfanView", ["i_view64.exe"]),
-    ]
-    _VIDEO_APPS_WIN = [
-        ("Movies & TV", ["explorer.exe"]),  # placeholder
-        ("VLC",         ["vlc"]),
-        ("MPV",         ["mpv"]),
-    ]
+        open_with(cmd, path)
 
     def _app_choices(self, path):
-        """Return [(label, argv)] pairs for apps installed on the
-        system that handle this file's type. Only argv combos whose
-        leading executable is actually present are returned."""
-        import sys, shutil as _sh
-        ext = os.path.splitext(path)[1].lower()
-        if sys.platform == "win32":
-            img, vid = self._IMAGE_APPS_WIN, self._VIDEO_APPS_WIN
-        elif sys.platform == "darwin":
-            img, vid = self._IMAGE_APPS_MAC, self._VIDEO_APPS_MAC
-        else:
-            img, vid = self._IMAGE_APPS_LINUX, self._VIDEO_APPS_LINUX
-        candidates = (vid + img) if ext in logic.EXT_VID else img
-        out = []
-        for label, argv in candidates:
-            exe = argv[0]
-            if _sh.which(exe):
-                out.append((label, argv))
-        return out
+        return app_choices(path)
 
     def _save_app_data(self):
         """Persist app.attrs_data + app.data to disk after FM-driven

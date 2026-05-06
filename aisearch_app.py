@@ -1103,7 +1103,6 @@ class AISearchApp(QMainWindow):
         self.table.model().rowsRemoved.connect(lambda *a: self._update_row_position_label())
         self.table.cellDoubleClicked.connect(lambda r, c: self.on_double_click())
         self.table.cellClicked.connect(self._on_group_cell_click)
-        self.popup_menu = front_page.create_context_menu(self.table, self)
         # Wrap the table with the search/dup progress label + bar above it so
         # they appear at the top edge of the list rather than pushing the
         # whole header down.
@@ -5362,7 +5361,35 @@ class AISearchApp(QMainWindow):
         item = self.table.itemAt(pos)
         if item:
             self.table.selectRow(self.table.row(item))
-        front_page.show_context_menu(self.table.mapToGlobal(pos), self.popup_menu)
+        # Build a fresh menu so Open with… can be populated per-file
+        # type (the cached self.popup_menu can't do that).
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+        import aisearch_file_manager as _fm
+        menu = QMenu(self.table)
+        row = self._current_row()
+        path = self.table.get_row_path(row) if row >= 0 else None
+
+        if path and os.path.isfile(path):
+            act_open = QAction(_t("Open / 開く"), self)
+            act_open.triggered.connect(lambda _, p=path: _fm.open_default(p))
+            menu.addAction(act_open)
+            sub = menu.addMenu(_t("Open with / アプリで開く"))
+            for label, argv in _fm.app_choices(path):
+                a = QAction(label, self)
+                a.triggered.connect(lambda _, c=argv, p=path: _fm.open_with(c, p))
+                sub.addAction(a)
+            menu.addSeparator()
+
+        menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
+                       self._open_fm_for_current_row)
+        menu.addAction(_t("📝 Rename (F2) / 📝 改名 (F2)"),
+                       lambda: self.rename_file(from_menu=True))
+        menu.addAction(_t("📦 Move to... (M) / 📦 移動... (M)"),
+                       self.move_to_folder_manually)
+        menu.addSeparator()
+        menu.addAction(_t("🗑️ Delete / 🗑️ 削除"), self.delete_file)
+        menu.exec(self.table.mapToGlobal(pos))
 
     def _update_drop_zone_thumb(self, path):
         """Update the header thumbnail to show path (used in browse mode)."""
