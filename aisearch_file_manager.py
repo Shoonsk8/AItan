@@ -380,7 +380,10 @@ class FileManagerWindow(QWidget):
     MAX_THUMB     = 256
 
     def __init__(self, app, initial_dir):
-        super().__init__()
+        # Parent to the main window with Window flag so we stay a separate
+        # top-level window but share its lifecycle — closing main closes
+        # the FM too.
+        super().__init__(app, Qt.WindowType.Window)
         self.app = app
         self.setWindowTitle(f"AItan — File Manager  Ver {VERSION}")
         self.resize(900, 650)
