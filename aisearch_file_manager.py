@@ -289,6 +289,8 @@ class _FMTreeList(QTreeWidget):
         # cache_key → QTreeWidgetItem for async-loaded thumbnails
         self._items_by_key = {}
         self._thumb_loader = None
+        self._suppress_collapse = False
+        self._thumb_size = self._TREE_THUMB_SIZE   # mutable via Ctrl+Wheel
 
     # ── Population ───────────────────────────────────────────────────────────
     def populate_root(self, dir_path):
@@ -332,9 +334,28 @@ class _FMTreeList(QTreeWidget):
         # fresh loader.
         if self._thumb_loader is not None and self._thumb_loader.isRunning():
             return
-        self._thumb_loader = _ThumbLoader(pending, self._TREE_THUMB_SIZE, self)
+        self._thumb_loader = _ThumbLoader(pending, self._thumb_size, self)
         self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
         self._thumb_loader.start()
+
+    # ── Ctrl+Wheel resize ────────────────────────────────────────────────────
+    _MIN_TREE_THUMB = 16
+    _MAX_TREE_THUMB = 128
+
+    def wheelEvent(self, ev):
+        if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = ev.angleDelta().y()
+            step = 8
+            new_size = self._thumb_size + (step if delta > 0 else -step)
+            new_size = max(self._MIN_TREE_THUMB, min(self._MAX_TREE_THUMB, new_size))
+            if new_size != self._thumb_size:
+                self._thumb_size = new_size
+                self.setIconSize(QSize(new_size, new_size))
+                # Re-render: tree items keyed by old size are stale — repopulate
+                self._fm._refresh()
+            ev.accept()
+            return
+        super().wheelEvent(ev)
 
     def _on_thumb_ready(self, cache_key, pixmap):
         if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
@@ -385,7 +406,7 @@ class _FMTreeList(QTreeWidget):
         it = QTreeWidgetItem([name, size, date, type_text])
         it.setData(0, Qt.ItemDataRole.UserRole, full)
         # Thumbnail icon — cached if available, otherwise queued
-        cache_key = f"{full}|{mtime}|{self._TREE_THUMB_SIZE}"
+        cache_key = f"{full}|{mtime}|{self._thumb_size}"
         cached = _THUMB_CACHE.get(cache_key)
         if cached is not None:
             it.setIcon(0, QIcon(cached))
@@ -426,8 +447,23 @@ class _FMTreeList(QTreeWidget):
         if obj is self.viewport():
             t = event.type()
             if t == event.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                self._press_pos = event.position().toPoint()
-                self._press_item = self.itemAt(self._press_pos)
+                pos = event.position().toPoint()
+                self._press_pos = pos
+                self._press_item = self.itemAt(pos)
+                # Plain click on an already-selected item in a multi-selection:
+                # Qt would collapse to just that item right now, killing the
+                # drag. Defer the collapse until release so a drag of the
+                # full multi-selection still works.
+                mods = event.modifiers()
+                modifierless = not (mods & (
+                    Qt.KeyboardModifier.ControlModifier |
+                    Qt.KeyboardModifier.ShiftModifier))
+                sel = self.selectedItems()
+                if (modifierless and self._press_item is not None
+                        and self._press_item in sel and len(sel) > 1):
+                    self._suppress_collapse = True
+                    return True   # swallow the press from Qt's default
+                self._suppress_collapse = False
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._press_pos is not None
@@ -435,9 +471,17 @@ class _FMTreeList(QTreeWidget):
                     cur = event.position().toPoint()
                     if (cur - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                         self._press_pos = None
+                        self._suppress_collapse = False
                         self._start_url_drag()
                         return True
             elif t == event.Type.MouseButtonRelease:
+                # No drag → if we suppressed the collapse on press, do it now.
+                if (self._suppress_collapse
+                        and self._press_item is not None):
+                    self.clearSelection()
+                    self._press_item.setSelected(True)
+                    self.setCurrentItem(self._press_item)
+                self._suppress_collapse = False
                 self._press_pos = None
                 self._press_item = None
         return super().eventFilter(obj, event)
