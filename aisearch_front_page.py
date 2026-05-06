@@ -59,13 +59,10 @@ def open_external_viewer(path, keep_open=True):
 
 def create_context_menu(parent_widget, app_instance):
     menu = QMenu(parent_widget)
-    menu.addAction(_t("📂 Open Folder / 📂 フォルダを開く"), app_instance.open_folder)
     menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
                    app_instance._open_fm_for_current_row)
     menu.addAction(_t("📝 Rename (F2) / 📝 改名 (F2)"),        lambda: app_instance.rename_file(from_menu=True))
     menu.addAction(_t("📦 Move to... (M) / 📦 移動... (M)"),     app_instance.move_to_folder_manually)
-    menu.addSeparator()
-    menu.addAction(_t("🏷 Attributes... / 🏷 属性..."),      app_instance.edit_attrs)
     menu.addSeparator()
     menu.addAction(_t("🗑️ Delete / 🗑️ 削除"),             app_instance.delete_file)
     return menu
