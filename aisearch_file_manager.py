@@ -127,48 +127,57 @@ class _FMIconList(QListWidget):
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
         self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self._install_viewport_filter()
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSpacing(6)
 
-    # Manual drag-start. Qt's auto drag-detection in QAbstractItemView
-    # doesn't always fire reliably in PyQt6 with custom items + IconMode,
-    # so we intercept mousePress/Move and start the drag ourselves.
+    # Manual drag-start via an event filter on the viewport. Qt's
+    # built-in QAbstractItemView drag-detection wasn't firing in PyQt6
+    # IconMode with custom items, and overriding mousePress/Move on the
+    # widget itself missed events that the viewport receives directly.
     _DRAG_THRESHOLD = 5
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._fm_press_pos = event.position().toPoint()
-            self._fm_press_item = self.itemAt(self._fm_press_pos)
-        else:
-            self._fm_press_pos = None
-            self._fm_press_item = None
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        # Only consider starting a drag when the left button is held and
-        # the press landed on an actual item (not empty space).
-        if (event.buttons() & Qt.MouseButton.LeftButton
-                and getattr(self, "_fm_press_pos", None) is not None
-                and getattr(self, "_fm_press_item", None) is not None):
-            cur = event.position().toPoint()
-            if (cur - self._fm_press_pos).manhattanLength() > self._DRAG_THRESHOLD:
-                self._fm_press_pos = None
-                self._start_url_drag()
-                return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
+    def _install_viewport_filter(self):
         self._fm_press_pos = None
         self._fm_press_item = None
-        super().mouseReleaseEvent(event)
+        self.viewport().installEventFilter(self)
 
-    def _start_url_drag(self):
+    def eventFilter(self, obj, event):
+        if obj is self.viewport():
+            t = event.type()
+            if t == event.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    pos = event.position().toPoint()
+                    self._fm_press_pos = pos
+                    self._fm_press_item = self.itemAt(pos)
+                else:
+                    self._fm_press_pos = None
+                    self._fm_press_item = None
+            elif t == event.Type.MouseMove:
+                if (event.buttons() & Qt.MouseButton.LeftButton
+                        and self._fm_press_pos is not None
+                        and self._fm_press_item is not None):
+                    cur = event.position().toPoint()
+                    if (cur - self._fm_press_pos).manhattanLength() > self._DRAG_THRESHOLD:
+                        self._fm_press_pos = None
+                        item = self._fm_press_item
+                        self._fm_press_item = None
+                        self._start_url_drag(seed_item=item)
+                        return True
+            elif t == event.Type.MouseButtonRelease:
+                self._fm_press_pos = None
+                self._fm_press_item = None
+        return super().eventFilter(obj, event)
+
+    def _start_url_drag(self, seed_item=None):
         items = self.selectedItems()
-        # Press-on-unselected → selection might not include the press
-        # item yet; fall back to it explicitly so a single click+drag in
-        # one motion works without a separate selection click first.
-        if not items and getattr(self, "_fm_press_item", None) is not None:
-            items = [self._fm_press_item]
+        # If selection is empty (or just-pressed item not in it yet),
+        # fall back to the seed item so single click+drag in one motion
+        # works without needing a separate selection click first.
+        if not items and seed_item is not None:
+            items = [seed_item]
+        elif seed_item is not None and seed_item not in items:
+            items = [seed_item] + [i for i in items if i is not seed_item]
         if not items:
             return
         urls = []
