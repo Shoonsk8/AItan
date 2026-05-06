@@ -3257,11 +3257,20 @@ class PreviewWindow(QWidget):
                                          Q_ARG(str, _face_full))
             # Auto-apply face result to person_id when a real person was detected
             _stored_pid_now = (app.attrs_data.get(path) or {}).get("person_id", "")
+            # Forward the top match's similarity so _auto_apply_face can
+            # decide whether to overwrite an existing stored pid.
+            _top_sim = 0.0
+            try:
+                if fi.get("matches"):
+                    _top_sim = float(fi["matches"][0][1])
+            except Exception:
+                _top_sim = 0.0
             if _detected_pid and _detected_pid != "000" and _detected_pid != _stored_pid_now:
                 QMetaObject.invokeMethod(self, "_auto_apply_face",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, path),
-                                         Q_ARG(str, _detected_pid))
+                                         Q_ARG(str, _detected_pid),
+                                         Q_ARG(float, _top_sim))
             # Auto-apply secondary faces to persons_with (PW). Same "don't
             # overwrite existing data" rule as primary — _auto_apply_pw bails
             # if the user already has a value.
@@ -3445,12 +3454,22 @@ class PreviewWindow(QWidget):
                     # Resize tile and shift tiles below — deferred so widget is laid out first
                     QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
 
-    @pyqtSlot(str, str)
-    def _auto_apply_face(self, path: str, pid: str):
+    # Confidence threshold (similarity) above which a detected face
+    # OVERRIDES an already-stored person_id. Below it we keep the
+    # existing value to avoid clobbering a manual user-set on a
+    # borderline auto-detect. similarity = 1 - face_distance.
+    _OVERRIDE_SIMILARITY = 0.55
+
+    @pyqtSlot(str, str, float)
+    def _auto_apply_face(self, path: str, pid: str, sim: float = 0.0):
         """Slot called from _on_inspect thread to auto-apply detected person_id.
-        Only applies when the entry has no real person_id yet — "000" (no
-        human) counts as empty, so a real detection like "058" can replace it.
-        Use the 'Apply' button to explicitly overwrite a non-zero stored ID."""
+        - No stored pid (or "000")     → always apply.
+        - Detected sim ≥ override thr  → overwrite the stored pid (the
+                                        AI is confident enough that the
+                                        stored value was wrong).
+        - Detected sim < override thr  → keep the stored pid (respect
+                                        the existing data on borderline
+                                        detections)."""
         if not path or not pid or pid == "000":
             return
         app = self.handler.app
@@ -3458,8 +3477,8 @@ class PreviewWindow(QWidget):
             return  # user navigated away
         entry = attrs_mod.get(app.attrs_data, path)
         old_pid = (entry.get("person_id") or "").strip().lower()
-        if old_pid and old_pid != "000":
-            return  # already set — respect existing data
+        if old_pid and old_pid != "000" and sim < self._OVERRIDE_SIMILARITY:
+            return  # weak detection — don't overwrite an existing pid
         entry["person_id"] = pid
         attrs_mod.save(app.current_project, app.attrs_data)
         self._refresh_attrs_inner(path)
