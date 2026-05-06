@@ -5158,10 +5158,18 @@ class AISearchApp(QMainWindow):
             return
         proj = getattr(self, "current_project", None)
         rules = attrs_mod.load_filename_rules(proj)
+        # Coded-field one-way rules — drive parse_filename_rules and
+        # rename_file_to_match_entry below.
         one_way = [r for r in rules
                    if r.get("field") and (
                        r.get("one_way") or r.get("extract")
                        or '/' in r.get("pattern", ""))]
+        # Tag-group rules (path-scoped, contain '/') — applied via
+        # attrs_mod.apply_path_rules. Without this, rules like
+        # "Nastia/" → ModelImage = a0 silently no-op'd.
+        path_tag_rules = [r for r in rules
+                          if r.get("tag_group")
+                          and '/' in r.get("pattern", "")]
         # Snapshot the row → path map at start of run so concurrent table
         # mutations (e.g. row removal) don't shift indices mid-walk.
         paths = []
@@ -5175,6 +5183,7 @@ class AISearchApp(QMainWindow):
         self._apply_rules_paths = paths
         self._apply_rules_idx = 0
         self._apply_rules_one_way = one_way
+        self._apply_rules_path_tag = path_tag_rules
         self._apply_rules_proj = proj
         self._apply_rules_renamed = 0
         try:
@@ -5199,6 +5208,7 @@ class AISearchApp(QMainWindow):
             return
         paths = self._apply_rules_paths
         one_way = self._apply_rules_one_way
+        path_tag_rules = getattr(self, "_apply_rules_path_tag", [])
         proj = self._apply_rules_proj
         i = self._apply_rules_idx
         n = len(paths)
@@ -5224,6 +5234,16 @@ class AISearchApp(QMainWindow):
                             continue
                         if entry.get(field.lower()) != value:
                             entry[field.lower()] = value
+            # 1b. Apply tag-group path rules (e.g. "Nastia/" → ModelImage = a0).
+            # These were silently skipped before — only the coded-field
+            # rules were honored. apply_path_rules handles the
+            # tag_group / matrix-table semantics.
+            if path_tag_rules:
+                try:
+                    self.attrs_data, _ = attrs_mod.apply_path_rules(
+                        self.attrs_data, path, proj, _path_rules=path_tag_rules)
+                except Exception:
+                    pass
             # 2. Rename if attrs disagree with filename. defer_save so we
             # don't write the JSON N times during the walk.
             if attrs_mod.would_rename(self.attrs_data, path, proj):
