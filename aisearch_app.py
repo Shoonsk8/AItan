@@ -2357,6 +2357,78 @@ class AISearchApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, _t("Add face / 顔追加"), f"{e}")
 
+    def _assign_new_person(self, path):
+        """Allocate the next free person ID, seed the faces DB with the
+        face encoding from `path`, and tag the file with that pid.
+        Use when an existing pid is wrong and the file represents
+        someone new (or someone we've never registered)."""
+        proj = getattr(self, "current_project", None)
+        if not proj or not path or not os.path.exists(path):
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            import face_recognition
+            if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+                import cv2
+                cap = cv2.VideoCapture(path)
+                ret, frame = cap.read()
+                cap.release()
+                if not ret or frame is None:
+                    QMessageBox.warning(self, _t("New person / 新規人物"),
+                        _t("Could not decode the first frame. / "
+                           "最初のフレームを読み込めませんでした。"))
+                    return
+                img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                img = face_recognition.load_image_file(path)
+            encs = face_recognition.face_encodings(img)
+            if not encs:
+                QMessageBox.warning(self, _t("New person / 新規人物"),
+                    _t("No face detected in this file. / "
+                       "このファイルから顔を検出できませんでした。"))
+                return
+            enc = encs[0]
+            db = attrs_mod.load_faces_db(proj)
+            faces = db.get("faces", {})
+            # Pick the next free pid — start at db.next_id and skip
+            # over any already-used keys.
+            n = max(int(db.get("next_id", 1)), 1)
+            while n <= 0xfff and format(n, "03x") in faces:
+                n += 1
+            if n > 0xfff:
+                QMessageBox.critical(self, _t("New person / 新規人物"),
+                    _t("Person ID space exhausted (0xfff used). / "
+                       "人物IDが枯渇しました（0xfff まで使用済み）。"))
+                return
+            new_id = format(n, "03x")
+            faces[new_id] = {
+                "embeddings": [enc.tolist()],
+                "source_path": os.path.abspath(path),
+            }
+            db["next_id"] = n + 1
+            attrs_mod.save_faces_db(proj, db)
+            try:
+                attrs_mod._faces_db_cache.pop(proj, None)
+            except Exception:
+                pass
+            # Tag the file with the new pid
+            entry = self.attrs_data.setdefault(path, {})
+            entry["person_id"] = new_id
+            attrs_mod.save(proj, self.attrs_data)
+            # Refresh preview if it's open on this file
+            try:
+                pw = getattr(self.preview_handler, "window", None)
+                if pw and getattr(self.preview_handler, "current_path", None) == path:
+                    pw._refresh_attrs_inner(path)
+            except Exception:
+                pass
+            self.statusBar().showMessage(
+                _t(f"Assigned new person P{new_id}. / "
+                   f"新規人物 P{new_id} を割当しました。"),
+                5000)
+        except Exception as e:
+            QMessageBox.critical(self, _t("New person / 新規人物"), f"{e}")
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the directory of
         the currently-selected row. Falls back to query_path if nothing
@@ -5540,6 +5612,15 @@ class AISearchApp(QMainWindow):
                     _t(f"Add this face to {pid} samples / {pid} のサンプルに追加"), self)
                 act_add.triggered.connect(lambda _, p=path, q=pid: self._add_face_sample(q, p))
                 menu.addAction(act_add)
+            # "Assign new person ID" — always available for files (even
+            # if person_id is empty / 000). Allocates the next free pid,
+            # registers the file's face encoding as its base sample,
+            # and tags the file.
+            act_new_person = QAction(
+                _t("Assign new person ID / 新規人物IDを割当"), self)
+            act_new_person.triggered.connect(
+                lambda _, p=path: self._assign_new_person(p))
+            menu.addAction(act_new_person)
             menu.addSeparator()
 
         menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
