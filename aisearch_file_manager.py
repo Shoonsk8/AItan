@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
                               QMessageBox, QInputDialog, QMenu, QStackedWidget,
                               QTableWidget, QTableWidgetItem, QHeaderView,
-                              QAbstractItemView, QTreeWidget, QTreeWidgetItem)
+                              QAbstractItemView, QTreeWidget, QTreeWidgetItem,
+                              QSplitter)
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
                          QColor, QPen, QShortcut, QKeySequence, QAction, QDrag)
@@ -577,40 +578,29 @@ class _FMTreeList(QTreeWidget):
                 except Exception: pass
 
 
-class FileManagerWindow(QWidget):
-    DEFAULT_THUMB = 96
-    MIN_THUMB     = 48
-    MAX_THUMB     = 256
+class FilePane(QWidget):
+    """One pane of the FM. Self-contained: toolbar (back/fwd/up + path)
+    + tree, with its own navigation state. The tree's `_fm` reference
+    points here so all the existing tree drag/drop/navigation hooks
+    keep working unchanged."""
 
-    def __init__(self, app, initial_dir):
-        # Parent to the main window with Window flag so we stay a separate
-        # top-level window but share its lifecycle — closing main closes
-        # the FM too.
-        super().__init__(app, Qt.WindowType.Window)
-        self.app = app
-        self.setWindowTitle(f"AItan — File Manager  Ver {VERSION}")
-        self.resize(900, 650)
-
-        self._cur_dir       = None
-        self._history       = []
-        self._history_idx   = -1
-        self._thumb_size    = self.DEFAULT_THUMB
-        self._folder_icon_cached = None
-        # path → row index, for async thumbnail apply lookups in the
-        # current view (cleared on each refresh)
-        self._row_of_key    = {}
-        self._thumb_loader  = None
+    def __init__(self, fm, initial_dir):
+        super().__init__()
+        self.fm = fm                  # main FileManagerWindow (shared ops)
+        self._cur_dir     = None
+        self._history     = []
+        self._history_idx = -1
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(6, 6, 6, 6)
-        v.setSpacing(4)
+        v.setContentsMargins(2, 2, 2, 2)
+        v.setSpacing(2)
 
         tb = QHBoxLayout()
         self.btn_back = QPushButton("◀")
         self.btn_fwd  = QPushButton("▶")
         self.btn_up   = QPushButton("▲")
         for b in (self.btn_back, self.btn_fwd, self.btn_up):
-            b.setFixedWidth(32)
+            b.setFixedWidth(28)
         self.btn_back.clicked.connect(self._go_back)
         self.btn_fwd.clicked.connect(self._go_forward)
         self.btn_up.clicked.connect(self._go_up)
@@ -620,37 +610,30 @@ class FileManagerWindow(QWidget):
         self.path_edit = QLineEdit()
         self.path_edit.returnPressed.connect(self._on_path_edit_enter)
         tb.addWidget(self.path_edit, 1)
-        # View toggle: 📋 list ⇄ 🔲 icons
-        self.btn_view_toggle = QPushButton("🔲")
-        self.btn_view_toggle.setToolTip("Toggle list / icon view")
-        self.btn_view_toggle.setFixedWidth(36)
-        self.btn_view_toggle.clicked.connect(self._toggle_view)
-        tb.addWidget(self.btn_view_toggle)
         v.addLayout(tb)
 
-        # Stacked: tree/list view (default) + icon view
-        self.stack       = QStackedWidget()
-        self.list_table  = _FMTreeList(self)
-        self.list_grid   = _FMIconList(self)
-        self.list_grid.itemDoubleClicked.connect(self._on_item_double_click)
-        self.list_grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_grid.customContextMenuRequested.connect(self._on_context_menu)
-        self.list_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_table.customContextMenuRequested.connect(self._on_context_menu)
-        self.stack.addWidget(self.list_table)   # index 0 = tree view
-        self.stack.addWidget(self.list_grid)    # index 1 = icon view
-        v.addWidget(self.stack, 1)
-        self._apply_thumb_size()
-
-        # F2 = rename selected, Delete = trash selected
-        QShortcut(QKeySequence("F2"), self, activated=self._rename_selected)
-        QShortcut(QKeySequence(Qt.Key.Key_Delete), self,
-                  activated=self._delete_selected)
+        self.tree = _FMTreeList(self)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        v.addWidget(self.tree, 1)
 
         if initial_dir and os.path.isdir(initial_dir):
             self.navigate(initial_dir)
 
-    # ── Navigation ───────────────────────────────────────────────────────────
+    # Surface that the tree expects ─────────────────────────────────────────
+    @property
+    def app(self):
+        return self.fm.app
+
+    def _folder_icon(self):
+        return self.fm._folder_icon()
+
+    def move_files_into(self, src_paths, target_dir):
+        # Delegate the heavy lifting to FM (touches app data + disk
+        # stores), then refresh both panes if dual-pane is active.
+        self.fm.move_files_into(src_paths, target_dir)
+
+    # ── Navigation ──────────────────────────────────────────────────────────
     def navigate(self, path):
         path = os.path.abspath(path)
         if not os.path.isdir(path):
@@ -675,18 +658,6 @@ class FileManagerWindow(QWidget):
         if parent and parent != self._cur_dir and os.path.isdir(parent):
             self.navigate(parent)
 
-    def _on_item_double_click(self, item):
-        target = item.data(Qt.ItemDataRole.UserRole)
-        if target == "..":
-            self._go_up()
-        elif target and os.path.isdir(target):
-            self.navigate(target)
-        elif target and os.path.isfile(target):
-            ph = getattr(self.app, "preview_handler", None)
-            if ph:
-                try: ph.show(target)
-                except Exception: pass
-
     def _on_path_edit_enter(self):
         p = self.path_edit.text().strip()
         if p and os.path.isdir(p):
@@ -694,153 +665,257 @@ class FileManagerWindow(QWidget):
         else:
             self.path_edit.setText(self._cur_dir or "")
 
-    # ── Refresh / render ─────────────────────────────────────────────────────
     def _refresh(self):
-        # Stop any in-flight thumbnail loader before changing the view —
-        # otherwise stale thumbnails arrive after the new folder is shown.
-        if self._thumb_loader is not None:
-            self._thumb_loader.cancel()
-            self._thumb_loader = None
-
         self._cur_dir = self._history[self._history_idx]
         self.path_edit.setText(self._cur_dir)
-        self.list_grid.clear()
-        self._row_of_key.clear()
-        # Tree view manages its own population (handles lazy expansion).
-        self.list_table.populate_root(self._cur_dir)
-
-        try:
-            entries = sorted(os.listdir(self._cur_dir),
-                             key=lambda n: n.lower())
-        except OSError:
-            entries = []
-
-        thumb_requests   = []
-        placeholder_icon = self._placeholder_file_icon()
-        folder_icon      = self._folder_icon()
-
-        if os.path.dirname(self._cur_dir) != self._cur_dir:
-            up = QListWidgetItem("..")
-            up.setData(Qt.ItemDataRole.UserRole, "..")
-            up.setIcon(folder_icon)
-            up.setFlags(up.flags() | Qt.ItemFlag.ItemIsDropEnabled)
-            self.list_grid.addItem(up)
-
-        for name in entries:
-            if name.startswith('.'):
-                continue
-            full = os.path.join(self._cur_dir, name)
-            if os.path.isdir(full):
-                grid_it = QListWidgetItem(name)
-                grid_it.setData(Qt.ItemDataRole.UserRole, full)
-                grid_it.setIcon(folder_icon)
-                grid_it.setFlags(grid_it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
-                self.list_grid.addItem(grid_it)
-
-        for name in entries:
-            if name.startswith('.'):
-                continue
-            full = os.path.join(self._cur_dir, name)
-            if not (os.path.isfile(full) and name.lower().endswith(_VALID_EXTS)):
-                continue
-            grid_it = QListWidgetItem(name)
-            grid_it.setData(Qt.ItemDataRole.UserRole, full)
-            grid_it.setFlags(grid_it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
-            try:
-                mtime = os.path.getmtime(full)
-            except OSError:
-                mtime = 0
-            cache_key = f"{full}|{mtime}|{self._thumb_size}"
-            cached = _THUMB_CACHE.get(cache_key)
-            if cached is not None:
-                grid_it.setIcon(QIcon(cached))
-            else:
-                grid_it.setIcon(placeholder_icon)
-                thumb_requests.append((cache_key, full))
-            self._row_of_key[cache_key] = self.list_grid.count()
-            self.list_grid.addItem(grid_it)
-
+        self.tree.populate_root(self._cur_dir)
         self._update_nav_buttons()
-        if thumb_requests:
-            self._thumb_loader = _ThumbLoader(
-                thumb_requests, self._thumb_size, self)
-            self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
-            self._thumb_loader.start()
-
-    def _on_thumb_ready(self, cache_key, pixmap):
-        if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
-            _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
-        _THUMB_CACHE[cache_key] = pixmap
-        row = self._row_of_key.get(cache_key)
-        if row is None:
-            return
-        item = self.list_grid.item(row)
-        if item is None:
-            return
-        item.setIcon(QIcon(pixmap))
-
-    # ── View toggle ──────────────────────────────────────────────────────────
-    def _toggle_view(self):
-        # 0 = list table, 1 = icon grid
-        new_idx = 1 if self.stack.currentIndex() == 0 else 0
-        self.stack.setCurrentIndex(new_idx)
-        # Toolbar glyph reflects the OTHER view (the one a click would
-        # take you to next).
-        self.btn_view_toggle.setText("🔲" if new_idx == 0 else "📋")
 
     def _update_nav_buttons(self):
         self.btn_back.setEnabled(self._history_idx > 0)
         self.btn_fwd.setEnabled(self._history_idx < len(self._history) - 1)
         self.btn_up.setEnabled(
-            bool(self._cur_dir) and
-            os.path.dirname(self._cur_dir) != self._cur_dir)
+            bool(self._cur_dir)
+            and os.path.dirname(self._cur_dir) != self._cur_dir)
 
-    # ── Icons ────────────────────────────────────────────────────────────────
+    # ── Selected-paths helpers (used by context menu / shortcuts) ───────────
+    def _path_at_pos(self, pos):
+        it = self.tree.itemAt(pos)
+        return it.data(0, Qt.ItemDataRole.UserRole) if it else None
+
+    def _current_path(self):
+        it = self.tree.currentItem()
+        return it.data(0, Qt.ItemDataRole.UserRole) if it else None
+
+    def _selected_paths(self):
+        out = []
+        for it in self.tree.selectedItems():
+            d = it.data(0, Qt.ItemDataRole.UserRole)
+            if d and d != ".." and d != _FMTreeList._PLACEHOLDER:
+                out.append(d)
+        return out
+
+    # ── Context menu / file ops (delegate to FM for app sync) ───────────────
+    def _on_context_menu(self, pos):
+        path = self._path_at_pos(pos)
+        menu = QMenu(self)
+        act_new = QAction("New Folder", self)
+        act_new.triggered.connect(self._new_folder)
+        menu.addAction(act_new)
+        if path and path != "..":
+            menu.addSeparator()
+            act_rename = QAction("Rename (F2)", self)
+            act_rename.triggered.connect(self._rename_selected)
+            menu.addAction(act_rename)
+            act_delete = QAction("Move to Trash (Del)", self)
+            act_delete.triggered.connect(self._delete_selected)
+            menu.addAction(act_delete)
+            act_open = QAction("Open in Nemo", self)
+            act_open.triggered.connect(lambda _, p=path: self.fm._open_in_nemo(p))
+            menu.addAction(act_open)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _new_folder(self):
+        if not self._cur_dir:
+            return
+        name, ok = QInputDialog.getText(
+            self, "New Folder", "Folder name:", QLineEdit.EchoMode.Normal, "")
+        if not ok:
+            return
+        name = name.strip()
+        if not name or name in (".", ".."):
+            return
+        if "/" in name or "\\" in name:
+            QMessageBox.warning(self, "New Folder",
+                "Folder name cannot contain '/' or '\\'.")
+            return
+        target = os.path.join(self._cur_dir, name)
+        try:
+            os.makedirs(target, exist_ok=False)
+        except FileExistsError:
+            QMessageBox.warning(self, "New Folder",
+                f"Folder already exists:\n{target}")
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "New Folder", f"Could not create:\n{e}")
+            return
+        self.fm.refresh_all()
+
+    def _rename_selected(self):
+        old_path = self._current_path()
+        if not old_path or old_path == "..":
+            return
+        old_name = os.path.basename(old_path)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename", f"New name for '{old_name}':",
+            QLineEdit.EchoMode.Normal, old_name)
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == old_name:
+            return
+        if "/" in new_name or "\\" in new_name:
+            QMessageBox.warning(self, "Rename",
+                "Name cannot contain '/' or '\\'.")
+            return
+        new_path = os.path.join(os.path.dirname(old_path), new_name)
+        if os.path.exists(new_path):
+            QMessageBox.warning(self, "Rename", f"Already exists:\n{new_path}")
+            return
+        try:
+            os.rename(old_path, new_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Rename", f"Could not rename:\n{e}")
+            return
+        if os.path.isfile(new_path):
+            self.fm._sync_in_memory(old_path, new_path)
+            try:
+                import aisearch_attrs as _am
+                _am.flush_path_renames_to_stores(
+                    {old_path: new_path},
+                    getattr(self.app, "current_project", None))
+            except Exception:
+                pass
+        elif os.path.isdir(new_path):
+            self.fm._sync_folder_rename(old_path, new_path)
+        self.fm.refresh_all()
+
+    def _delete_selected(self):
+        paths = self._selected_paths()
+        if not paths:
+            return
+        if len(paths) == 1:
+            msg = f"Move to trash:\n{paths[0]}"
+        else:
+            msg = f"Move {len(paths)} item(s) to trash?"
+        if QMessageBox.question(self, "Trash", msg,
+                                QMessageBox.StandardButton.Yes |
+                                QMessageBox.StandardButton.No
+                                ) != QMessageBox.StandardButton.Yes:
+            return
+        import aisearch_front_page as _fp
+        errors = []
+        for p in paths:
+            if not os.path.exists(p):
+                continue
+            try:
+                _tp, err = _fp.trash_file(p)
+                if err:
+                    errors.append(f"{os.path.basename(p)}: {err}")
+                    continue
+                self.fm._remove_from_app_state(p)
+            except Exception as e:
+                errors.append(f"{os.path.basename(p)}: {e}")
+        if errors:
+            QMessageBox.warning(self, "Trash",
+                f"Errors:\n" + "\n".join(errors[:10]))
+        self.fm.refresh_all()
+
+
+class FileManagerWindow(QWidget):
+    """Top-level FM window. Holds 1 (single) or 2 (dual) FilePanes in
+    a horizontal QSplitter. Toggle button switches between modes."""
+
+    DEFAULT_THUMB = 96
+
+    def __init__(self, app, initial_dir):
+        # Parent to the main window with Window flag so we stay a separate
+        # top-level window but share its lifecycle — closing main closes
+        # the FM too.
+        super().__init__(app, Qt.WindowType.Window)
+        self.app = app
+        self.setWindowTitle(f"AItan — File Manager  Ver {VERSION}")
+        self.resize(1200, 720)
+
+        self._folder_icon_cached = None
+        self._initial_dir = initial_dir
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(4)
+
+        # Top toolbar: only the dual-pane toggle for now.
+        tb = QHBoxLayout()
+        self.btn_pane_toggle = QPushButton("▥ Dual pane")
+        self.btn_pane_toggle.setToolTip("Toggle single / dual pane")
+        self.btn_pane_toggle.clicked.connect(self._toggle_dual_pane)
+        tb.addWidget(self.btn_pane_toggle)
+        tb.addStretch(1)
+        v.addLayout(tb)
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        v.addWidget(self.splitter, 1)
+
+        # Start in single-pane mode.
+        self._panes: list[FilePane] = []
+        self._add_pane(initial_dir)
+
+        # Shortcuts
+        QShortcut(QKeySequence("F2"), self, activated=self._rename_active)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self,
+                  activated=self._delete_active)
+
+    # ── Pane management ─────────────────────────────────────────────────────
+    def _add_pane(self, initial_dir):
+        pane = FilePane(self, initial_dir)
+        self._panes.append(pane)
+        self.splitter.addWidget(pane)
+
+    def _toggle_dual_pane(self):
+        if len(self._panes) == 1:
+            # Open second pane at the same dir as the first
+            cur = self._panes[0]._cur_dir or self._initial_dir
+            self._add_pane(cur)
+            self.btn_pane_toggle.setText("▣ Single pane")
+        else:
+            # Tear down the second pane
+            second = self._panes.pop()
+            second.setParent(None)
+            second.deleteLater()
+            self.btn_pane_toggle.setText("▥ Dual pane")
+
+    def _active_pane(self) -> FilePane:
+        # Pane that owns the focused widget; fall back to the first.
+        fw = self.focusWidget()
+        for p in self._panes:
+            w = fw
+            while w is not None:
+                if w is p:
+                    return p
+                w = w.parentWidget()
+        return self._panes[0]
+
+    def refresh_all(self):
+        for p in self._panes:
+            p._refresh()
+
+    # ── External entry point used by AISearchApp ────────────────────────────
+    def navigate(self, path):
+        """Called by main app's right-arrow handler. Navigate the active
+        pane (or the first pane if focus is elsewhere)."""
+        self._active_pane().navigate(path)
+
+    # ── Shortcut handlers — route to the active pane ────────────────────────
+    def _rename_active(self):
+        self._active_pane()._rename_selected()
+
+    def _delete_active(self):
+        self._active_pane()._delete_selected()
+
+    # ── Shared icon helpers ─────────────────────────────────────────────────
     def _folder_icon(self):
         if self._folder_icon_cached is None:
-            self._folder_icon_cached = self._render_emoji_icon("📁")
+            size = 32
+            px = QPixmap(size, size)
+            px.fill(Qt.GlobalColor.transparent)
+            p = QPainter(px)
+            f = p.font()
+            f.setPointSize(int(size * 0.55))
+            p.setFont(f)
+            p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, "📁")
+            p.end()
+            self._folder_icon_cached = QIcon(px)
         return self._folder_icon_cached
-
-    def _placeholder_file_icon(self):
-        # Cheap blank box — replaced async with the real thumbnail
-        s = self._thumb_size
-        px = QPixmap(s, s)
-        px.fill(Qt.GlobalColor.transparent)
-        return QIcon(px)
-
-    def _render_emoji_icon(self, emoji):
-        size = self._thumb_size
-        px = QPixmap(size, size)
-        px.fill(Qt.GlobalColor.transparent)
-        p = QPainter(px)
-        f = p.font()
-        f.setPointSize(int(size * 0.55))
-        p.setFont(f)
-        p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, emoji)
-        p.end()
-        return QIcon(px)
-
-    # ── Resize via Ctrl+Wheel ────────────────────────────────────────────────
-    def wheelEvent(self, ev):
-        if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            delta = ev.angleDelta().y()
-            step = 16
-            new_size = self._thumb_size + (step if delta > 0 else -step)
-            new_size = max(self.MIN_THUMB, min(self.MAX_THUMB, new_size))
-            if new_size != self._thumb_size:
-                self._thumb_size = new_size
-                self._folder_icon_cached = None
-                self._apply_thumb_size()
-                self._refresh()
-            ev.accept()
-        else:
-            super().wheelEvent(ev)
-
-    def _apply_thumb_size(self):
-        s = self._thumb_size
-        self.list_grid.setIconSize(QSize(s, s))
-        # Two-line label area below the icon. ~16 px per line + 8 px margin.
-        self.list_grid.setGridSize(QSize(s + 24, s + 48))
 
     # ── Move (drop target) ───────────────────────────────────────────────────
     @property
@@ -884,7 +959,7 @@ class FileManagerWindow(QWidget):
         if errors:
             QMessageBox.warning(self, "Move",
                 f"Moved {moved}; {len(errors)} error(s):\n" + "\n".join(errors[:10]))
-        self._refresh()
+        self.refresh_all()
 
     def _sync_in_memory(self, old_path, new_path):
         """Per-file in-memory updates only — disk-flush is batched by the
@@ -906,173 +981,9 @@ class FileManagerWindow(QWidget):
         except Exception:
             pass
 
-    # ── Active view helpers ─────────────────────────────────────────────────
-    def _active_view(self):
-        return self.stack.currentWidget()
-
-    def _path_at(self, view, pos):
-        """Path of the item at viewport pos in the given view, or None."""
-        if isinstance(view, QTreeWidget):
-            it = view.itemAt(pos)
-            return it.data(0, Qt.ItemDataRole.UserRole) if it else None
-        if isinstance(view, QListWidget):
-            it = view.itemAt(pos)
-            return it.data(Qt.ItemDataRole.UserRole) if it else None
-        return None
-
-    def _current_path(self):
-        view = self._active_view()
-        if isinstance(view, QTreeWidget):
-            it = view.currentItem()
-            return it.data(0, Qt.ItemDataRole.UserRole) if it else None
-        if isinstance(view, QListWidget):
-            it = view.currentItem()
-            return it.data(Qt.ItemDataRole.UserRole) if it else None
-        return None
-
-    def _selected_paths(self):
-        view = self._active_view()
-        out = []
-        if isinstance(view, QTreeWidget):
-            for it in view.selectedItems():
-                d = it.data(0, Qt.ItemDataRole.UserRole)
-                if d and d != ".." and d != "__placeholder__":
-                    out.append(d)
-        elif isinstance(view, QListWidget):
-            for it in view.selectedItems():
-                d = it.data(Qt.ItemDataRole.UserRole)
-                if d and d != "..":
-                    out.append(d)
-        return out
-
-    # ── Context menu ─────────────────────────────────────────────────────────
-    def _on_context_menu(self, pos):
-        view = self._active_view()
-        path = self._path_at(view, pos)
-        menu = QMenu(self)
-
-        act_new = QAction("New Folder", self)
-        act_new.triggered.connect(self._new_folder)
-        menu.addAction(act_new)
-
-        if path and path != "..":
-            menu.addSeparator()
-            act_rename = QAction("Rename (F2)", self)
-            act_rename.triggered.connect(self._rename_selected)
-            menu.addAction(act_rename)
-
-            act_delete = QAction("Move to Trash (Del)", self)
-            act_delete.triggered.connect(self._delete_selected)
-            menu.addAction(act_delete)
-
-            act_open_loc = QAction("Open in Nemo", self)
-            act_open_loc.triggered.connect(lambda _, p=path: self._open_in_nemo(p))
-            menu.addAction(act_open_loc)
-
-        menu.exec(view.viewport().mapToGlobal(pos))
-
-    # ── File operations ──────────────────────────────────────────────────────
-    def _new_folder(self):
-        if not self._cur_dir:
-            return
-        name, ok = QInputDialog.getText(
-            self, "New Folder", "Folder name:", QLineEdit.EchoMode.Normal, "")
-        if not ok:
-            return
-        name = name.strip()
-        if not name or name in (".", ".."):
-            return
-        # Sanitize against path separators — confine to the current dir
-        if "/" in name or "\\" in name:
-            QMessageBox.warning(self, "New Folder",
-                "Folder name cannot contain '/' or '\\'.")
-            return
-        target = os.path.join(self._cur_dir, name)
-        try:
-            os.makedirs(target, exist_ok=False)
-        except FileExistsError:
-            QMessageBox.warning(self, "New Folder",
-                f"Folder already exists:\n{target}")
-            return
-        except Exception as e:
-            QMessageBox.critical(self, "New Folder", f"Could not create:\n{e}")
-            return
-        self._refresh()
-
-    def _rename_selected(self):
-        old_path = self._current_path()
-        if not old_path or old_path == "..":
-            return
-        old_name = os.path.basename(old_path)
-        new_name, ok = QInputDialog.getText(
-            self, "Rename", f"New name for '{old_name}':",
-            QLineEdit.EchoMode.Normal, old_name)
-        if not ok:
-            return
-        new_name = new_name.strip()
-        if not new_name or new_name == old_name:
-            return
-        if "/" in new_name or "\\" in new_name:
-            QMessageBox.warning(self, "Rename",
-                "Name cannot contain '/' or '\\'.")
-            return
-        new_path = os.path.join(os.path.dirname(old_path), new_name)
-        if os.path.exists(new_path):
-            QMessageBox.warning(self, "Rename",
-                f"Already exists:\n{new_path}")
-            return
-        try:
-            os.rename(old_path, new_path)
-        except Exception as e:
-            QMessageBox.critical(self, "Rename", f"Could not rename:\n{e}")
-            return
-        # Sync app state if it's a tracked file
-        if os.path.isfile(new_path):
-            self._sync_in_memory(old_path, new_path)
-            try:
-                import aisearch_attrs as _am
-                _am.flush_path_renames_to_stores(
-                    {old_path: new_path},
-                    getattr(self.app, "current_project", None))
-            except Exception:
-                pass
-        # If the renamed path is a folder, walk app.data for any files
-        # whose path starts with old_path/ and remap.
-        elif os.path.isdir(new_path):
-            self._sync_folder_rename(old_path, new_path)
-        self._refresh()
-
-    def _delete_selected(self):
-        paths = self._selected_paths()
-        if not paths:
-            return
-        if len(paths) == 1:
-            msg = f"Move to trash:\n{paths[0]}"
-        else:
-            msg = f"Move {len(paths)} item(s) to trash?"
-        if QMessageBox.question(self, "Trash", msg,
-                                QMessageBox.StandardButton.Yes |
-                                QMessageBox.StandardButton.No
-                                ) != QMessageBox.StandardButton.Yes:
-            return
-        import aisearch_front_page as _fp
-        errors = []
-        for p in paths:
-            if not os.path.exists(p):
-                continue
-            try:
-                _tp, err = _fp.trash_file(p)
-                if err:
-                    errors.append(f"{os.path.basename(p)}: {err}")
-                    continue
-                # Sync app state
-                self._remove_from_app_state(p)
-            except Exception as e:
-                errors.append(f"{os.path.basename(p)}: {e}")
-        if errors:
-            QMessageBox.warning(self, "Trash",
-                f"Errors:\n" + "\n".join(errors[:10]))
-        self._refresh()
+    # Per-pane menus / shortcuts: each FilePane owns its own context
+    # menu, rename, delete, new-folder. Only the cross-pane refresh
+    # and app-data sync helpers stay on the FM.
 
     def _open_in_nemo(self, path):
         try:
@@ -1134,7 +1045,8 @@ class FileManagerWindow(QWidget):
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
     def closeEvent(self, ev):
-        if self._thumb_loader is not None:
-            self._thumb_loader.cancel()
-            self._thumb_loader = None
+        for pane in self._panes:
+            tl = getattr(pane.tree, "_thumb_loader", None)
+            if tl is not None:
+                tl.cancel()
         super().closeEvent(ev)
