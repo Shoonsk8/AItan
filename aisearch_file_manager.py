@@ -286,7 +286,6 @@ class _FMTreeList(QTreeWidget):
         self.setAllColumnsShowFocus(True)
         # Bigger indent + visible branch lines so nesting depth is obvious
         self.setIndentation(28)
-        self.setAlternatingRowColors(True)
         self.setStyleSheet(
             "QTreeView::branch:has-siblings:!adjoins-item {"
             "  border-image: none; border-left: 1px solid #555; }"
