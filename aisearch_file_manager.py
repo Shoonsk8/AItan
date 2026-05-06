@@ -288,15 +288,12 @@ class _FMTreeList(QTreeWidget):
         # tracks its own content.
         self.setUniformRowHeights(False)
         self.setAllColumnsShowFocus(True)
-        # Bigger indent + visible branch lines so nesting depth is obvious
+        # Bigger indent so nesting depth is visible. Leaving the branch
+        # styling at Qt's default — earlier custom border-image rules
+        # also wiped out the expand triangles, since Qt uses the same
+        # branch border-image to render both the lines AND the triangle
+        # for items with children.
         self.setIndentation(28)
-        self.setStyleSheet(
-            "QTreeView::branch:has-siblings:!adjoins-item {"
-            "  border-image: none; border-left: 1px solid #555; }"
-            "QTreeView::branch:has-siblings:adjoins-item {"
-            "  border-image: none; border-left: 1px solid #555; }"
-            "QTreeView::branch:!has-children:!has-siblings:adjoins-item {"
-            "  border-image: none; border-left: 1px solid #555; }")
         self.setIconSize(QSize(self._TREE_THUMB_SIZE, self._TREE_THUMB_SIZE))
         # Click column headers to re-sort. Default: Name column ascending.
         self.setSortingEnabled(True)
