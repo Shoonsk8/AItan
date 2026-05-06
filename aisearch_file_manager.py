@@ -2,23 +2,89 @@
 File Manager window — Nemo-style folder browser.
 
 Phase-1 cut: navigate folders, view icon grid of files+folders, multi-select,
-Ctrl+wheel to resize thumbnails. Drag-from-main-table → drop = move into the
-target folder is wired through dropEvent + URL MIME (handled by main app's
-drag overhaul, in a follow-up commit).
+Ctrl+wheel to resize thumbnails. Thumbnails load asynchronously in a worker
+thread so the window paints instantly even on big folders.
 """
 import os
 import shutil
+import time
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QListWidgetItem, QLabel, QPushButton, QLineEdit,
                               QMessageBox)
-from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData
-from PyQt6.QtGui import QPixmap, QIcon, QImageReader, QPainter, QFont, QImage
+from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal
+from PyQt6.QtGui import QPixmap, QIcon, QImageReader, QPainter, QImage
 
 import aisearch_logic as logic
 
 
 _VALID_EXTS = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
+
+# Persist across navigations so revisits are instant. Key: (path, mtime, size).
+# Values are QPixmap (cheap to wrap in QIcon at use time). Bounded.
+_THUMB_CACHE: dict = {}
+_THUMB_CACHE_MAX = 500
+
+
+def _make_thumb_pixmap(path, size):
+    """Build a thumbnail QPixmap from the file. May return None on failure
+    (corrupt / unsupported codec). Safe to call from a worker thread."""
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in logic.EXT_VID:
+            rgb = logic.get_video_thumbnail_rgb(path, first_only=True)
+            if rgb is None:
+                return None
+            h, w = rgb.shape[:2]
+            qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+            return QPixmap.fromImage(qimg).scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+        else:
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            orig = reader.size()
+            if orig.isValid() and max(orig.width(), orig.height()) > size * 2:
+                sc = (size * 2) / max(orig.width(), orig.height())
+                reader.setScaledSize(QSize(
+                    max(1, int(orig.width() * sc)),
+                    max(1, int(orig.height() * sc))))
+            img = reader.read()
+            if img.isNull():
+                return None
+            return QPixmap.fromImage(img).scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        return None
+
+
+class _ThumbLoader(QThread):
+    """Walks a list of (key, path) requests, emits a thumbnail QPixmap for
+    each. Cancellable — caller flips _cancel and the next iteration bails."""
+
+    thumb_ready = pyqtSignal(str, object)  # cache_key, QPixmap
+
+    def __init__(self, requests, size, parent=None):
+        super().__init__(parent)
+        self.requests = requests
+        self.size = size
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        for cache_key, path in self.requests:
+            if self._cancel:
+                return
+            px = _make_thumb_pixmap(path, self.size)
+            if self._cancel:
+                return
+            if px is not None:
+                self.thumb_ready.emit(cache_key, px)
 
 
 class _FMIconList(QListWidget):
@@ -34,10 +100,9 @@ class _FMIconList(QListWidget):
         self.setUniformItemSizes(True)
         self.setWordWrap(True)
         self.setAcceptDrops(True)
-        self.setDragEnabled(False)  # dragging FROM the FM is later work
+        self.setDragEnabled(False)
         self.setSpacing(6)
 
-    # ── Drop handling ────────────────────────────────────────────────────────
     def dragEnterEvent(self, ev):
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
@@ -53,8 +118,6 @@ class _FMIconList(QListWidget):
     def dropEvent(self, ev):
         if not ev.mimeData().hasUrls():
             ev.ignore(); return
-        # Resolve target: dropped onto an item (folder) → that folder;
-        # otherwise the current directory itself.
         item = self.itemAt(ev.position().toPoint())
         target = None
         if item:
@@ -73,9 +136,6 @@ class _FMIconList(QListWidget):
 
 
 class FileManagerWindow(QWidget):
-    """Top-level Nemo-style file manager window. Single instance, owned by
-    the main app. Opens at a given directory; navigates within it."""
-
     DEFAULT_THUMB = 96
     MIN_THUMB     = 48
     MAX_THUMB     = 256
@@ -85,20 +145,21 @@ class FileManagerWindow(QWidget):
         self.app = app
         self.setWindowTitle("AItan — File Manager")
         self.resize(900, 650)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
         self._cur_dir       = None
         self._history       = []
         self._history_idx   = -1
         self._thumb_size    = self.DEFAULT_THUMB
-        # Pre-rendered folder icon, regenerated when thumb size changes
         self._folder_icon_cached = None
+        # path → row index, for async thumbnail apply lookups in the
+        # current view (cleared on each refresh)
+        self._row_of_key    = {}
+        self._thumb_loader  = None
 
         v = QVBoxLayout(self)
         v.setContentsMargins(6, 6, 6, 6)
         v.setSpacing(4)
 
-        # Toolbar: nav buttons + path
         tb = QHBoxLayout()
         self.btn_back = QPushButton("◀")
         self.btn_fwd  = QPushButton("▶")
@@ -116,7 +177,6 @@ class FileManagerWindow(QWidget):
         tb.addWidget(self.path_edit, 1)
         v.addLayout(tb)
 
-        # Icon grid
         self.list = _FMIconList(self)
         self.list.itemDoubleClicked.connect(self._on_item_double_click)
         v.addWidget(self.list, 1)
@@ -130,7 +190,6 @@ class FileManagerWindow(QWidget):
         path = os.path.abspath(path)
         if not os.path.isdir(path):
             return
-        # Truncate forward history past current point
         self._history = self._history[:self._history_idx + 1]
         self._history.append(path)
         self._history_idx = len(self._history) - 1
@@ -168,26 +227,35 @@ class FileManagerWindow(QWidget):
         if p and os.path.isdir(p):
             self.navigate(p)
         else:
-            # Reset to current — invalid path
             self.path_edit.setText(self._cur_dir or "")
 
     # ── Refresh / render ─────────────────────────────────────────────────────
     def _refresh(self):
+        # Stop any in-flight thumbnail loader before changing the view —
+        # otherwise stale thumbnails arrive after the new folder is shown.
+        if self._thumb_loader is not None:
+            self._thumb_loader.cancel()
+            self._thumb_loader = None
+
         self._cur_dir = self._history[self._history_idx]
         self.path_edit.setText(self._cur_dir)
         self.list.clear()
-        # ".." entry (unless at filesystem root)
+        self._row_of_key.clear()
+
+        # ".." entry
         if os.path.dirname(self._cur_dir) != self._cur_dir:
             it = QListWidgetItem("..")
             it.setData(Qt.ItemDataRole.UserRole, "..")
             it.setIcon(self._folder_icon())
             self.list.addItem(it)
+
         try:
             entries = sorted(os.listdir(self._cur_dir),
                              key=lambda n: n.lower())
         except OSError:
             entries = []
-        # Folders first, then files
+
+        # Folders first (instant — generic icon)
         for name in entries:
             if name.startswith('.'):
                 continue
@@ -197,16 +265,55 @@ class FileManagerWindow(QWidget):
                 it.setIcon(self._folder_icon())
                 it.setData(Qt.ItemDataRole.UserRole, full)
                 self.list.addItem(it)
+
+        # Files: add with placeholder, queue real thumbnails
+        thumb_requests = []
+        placeholder_icon = self._placeholder_file_icon()
         for name in entries:
             if name.startswith('.'):
                 continue
             full = os.path.join(self._cur_dir, name)
-            if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
-                it = QListWidgetItem(name)
-                it.setIcon(self._file_icon(full))
-                it.setData(Qt.ItemDataRole.UserRole, full)
-                self.list.addItem(it)
+            if not (os.path.isfile(full) and name.lower().endswith(_VALID_EXTS)):
+                continue
+            it = QListWidgetItem(name)
+            it.setData(Qt.ItemDataRole.UserRole, full)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                mtime = 0
+            cache_key = f"{full}|{mtime}|{self._thumb_size}"
+            cached = _THUMB_CACHE.get(cache_key)
+            if cached is not None:
+                it.setIcon(QIcon(cached))
+            else:
+                it.setIcon(placeholder_icon)
+                thumb_requests.append((cache_key, full))
+            row = self.list.count()
+            self.list.addItem(it)
+            self._row_of_key[cache_key] = row
+
         self._update_nav_buttons()
+
+        # Kick off async thumbnail loader for misses
+        if thumb_requests:
+            self._thumb_loader = _ThumbLoader(
+                thumb_requests, self._thumb_size, self)
+            self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
+            self._thumb_loader.start()
+
+    def _on_thumb_ready(self, cache_key, pixmap):
+        # Save in cache (bounded)
+        if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+            _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
+        _THUMB_CACHE[cache_key] = pixmap
+        # Apply to the current view if still showing the right folder
+        row = self._row_of_key.get(cache_key)
+        if row is None:
+            return
+        item = self.list.item(row)
+        if item is None:
+            return
+        item.setIcon(QIcon(pixmap))
 
     def _update_nav_buttons(self):
         self.btn_back.setEnabled(self._history_idx > 0)
@@ -218,52 +325,27 @@ class FileManagerWindow(QWidget):
     # ── Icons ────────────────────────────────────────────────────────────────
     def _folder_icon(self):
         if self._folder_icon_cached is None:
-            size = self._thumb_size
-            px = QPixmap(size, size)
-            px.fill(Qt.GlobalColor.transparent)
-            p = QPainter(px)
-            f = p.font()
-            f.setPointSize(int(size * 0.55))
-            p.setFont(f)
-            p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, "📁")
-            p.end()
-            self._folder_icon_cached = QIcon(px)
+            self._folder_icon_cached = self._render_emoji_icon("📁")
         return self._folder_icon_cached
 
-    def _file_icon(self, path):
-        ext = os.path.splitext(path)[1].lower()
+    def _placeholder_file_icon(self):
+        # Cheap blank box — replaced async with the real thumbnail
+        s = self._thumb_size
+        px = QPixmap(s, s)
+        px.fill(Qt.GlobalColor.transparent)
+        return QIcon(px)
+
+    def _render_emoji_icon(self, emoji):
         size = self._thumb_size
-        try:
-            if ext in logic.EXT_VID:
-                rgb = logic.get_video_thumbnail_rgb(path, first_only=True)
-                if rgb is not None:
-                    h, w = rgb.shape[:2]
-                    qimg = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
-                    px = QPixmap.fromImage(qimg).scaled(
-                        size, size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-                    return QIcon(px)
-            else:
-                reader = QImageReader(path)
-                reader.setAutoTransform(True)
-                # Hint the decoder to scale during decode (DCT scaling for JPEG)
-                orig = reader.size()
-                if orig.isValid() and max(orig.width(), orig.height()) > size * 2:
-                    sc = (size * 2) / max(orig.width(), orig.height())
-                    reader.setScaledSize(QSize(
-                        max(1, int(orig.width() * sc)),
-                        max(1, int(orig.height() * sc))))
-                img = reader.read()
-                if not img.isNull():
-                    px = QPixmap.fromImage(img).scaled(
-                        size, size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-                    return QIcon(px)
-        except Exception:
-            pass
-        return QIcon()
+        px = QPixmap(size, size)
+        px.fill(Qt.GlobalColor.transparent)
+        p = QPainter(px)
+        f = p.font()
+        f.setPointSize(int(size * 0.55))
+        p.setFont(f)
+        p.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, emoji)
+        p.end()
+        return QIcon(px)
 
     # ── Resize via Ctrl+Wheel ────────────────────────────────────────────────
     def wheelEvent(self, ev):
@@ -284,13 +366,10 @@ class FileManagerWindow(QWidget):
     def _apply_thumb_size(self):
         s = self._thumb_size
         self.list.setIconSize(QSize(s, s))
-        # Grid cell: thumb + label margin
         self.list.setGridSize(QSize(s + 24, s + 36))
 
     # ── Move (drop target) ───────────────────────────────────────────────────
     def move_files_into(self, src_paths, target_dir):
-        """Move files into target_dir, updating the app's data + attrs.
-        Used by drop-from-main-table and any future drag-within-FM."""
         moved = 0
         errors = []
         for src in src_paths:
@@ -312,10 +391,7 @@ class FileManagerWindow(QWidget):
         self._refresh()
 
     def _sync_app_state(self, old_path, new_path):
-        """After a successful shutil.move, mirror the change in app.data,
-        attrs_data, and disk stores so search results stay consistent."""
         app = self.app
-        # DB paths
         try:
             paths = app.data["paths"] if app.data and "paths" in app.data else None
             if paths is not None:
@@ -326,16 +402,21 @@ class FileManagerWindow(QWidget):
                         break
         except Exception:
             pass
-        # attrs_data
         try:
             if old_path in app.attrs_data:
                 app.attrs_data[new_path] = app.attrs_data.pop(old_path)
         except Exception:
             pass
-        # Sister stores (filename rules, faces, etc.)
         try:
             import aisearch_attrs as _am
             _am.update_path_in_all_stores(old_path, new_path,
                                           getattr(app, "current_project", None))
         except Exception:
             pass
+
+    # ── Cleanup ──────────────────────────────────────────────────────────────
+    def closeEvent(self, ev):
+        if self._thumb_loader is not None:
+            self._thumb_loader.cancel()
+            self._thumb_loader = None
+        super().closeEvent(ev)
