@@ -325,15 +325,16 @@ class _FMTreeList(QTreeWidget):
 
     def _kick_thumb_loader(self):
         """Start (or restart) the async thumbnail loader for any items
-        still missing icons."""
+        still missing icons. Cancels any running loader and starts a
+        fresh one — _items_by_key only contains UNloaded items (the
+        completed-handler removes them as they finish), so no work is
+        duplicated, and items added by lazy expansion mid-flight get
+        picked up immediately."""
         pending = [(k, p) for k, (it, p) in self._items_by_key.items()]
         if not pending:
             return
-        # Don't double-fire — the existing loader already covers these
-        # keys when it gets to them. New keys added later trigger a
-        # fresh loader.
-        if self._thumb_loader is not None and self._thumb_loader.isRunning():
-            return
+        if self._thumb_loader is not None:
+            self._thumb_loader.cancel()
         self._thumb_loader = _ThumbLoader(pending, self._thumb_size, self)
         self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
         self._thumb_loader.start()
