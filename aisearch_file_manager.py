@@ -255,10 +255,12 @@ class _FMIconList(QListWidget):
 class _FMTreeList(QTreeWidget):
     """Tree/details view: triangles expand folders inline. Lazy-loads
     children on first expand (so opening at a deep root is fast).
-    4 columns: Name · Size · Date · Type."""
+    4 columns: Name · Size · Date · Type. File rows show a small
+    thumbnail icon (loaded async)."""
 
-    _DRAG_THRESHOLD = 5
-    _PLACEHOLDER = "__placeholder__"
+    _DRAG_THRESHOLD  = 5
+    _PLACEHOLDER     = "__placeholder__"
+    _TREE_THUMB_SIZE = 32
 
     def __init__(self, fm):
         super().__init__(fm)
@@ -276,6 +278,7 @@ class _FMTreeList(QTreeWidget):
         self.setRootIsDecorated(True)   # show expand triangles on top-level
         self.setUniformRowHeights(True)
         self.setAllColumnsShowFocus(True)
+        self.setIconSize(QSize(self._TREE_THUMB_SIZE, self._TREE_THUMB_SIZE))
         self.itemDoubleClicked.connect(self._on_double_click)
         self.itemExpanded.connect(self._on_expand)
         # Manual drag start via viewport eventFilter (same pattern as
@@ -283,9 +286,17 @@ class _FMTreeList(QTreeWidget):
         self._press_pos  = None
         self._press_item = None
         self.viewport().installEventFilter(self)
+        # cache_key → QTreeWidgetItem for async-loaded thumbnails
+        self._items_by_key = {}
+        self._thumb_loader = None
 
     # ── Population ───────────────────────────────────────────────────────────
     def populate_root(self, dir_path):
+        # Cancel any prior loader; clear the (stale) item map.
+        if self._thumb_loader is not None:
+            self._thumb_loader.cancel()
+            self._thumb_loader = None
+        self._items_by_key.clear()
         self.clear()
         if os.path.dirname(dir_path) != dir_path:
             up = QTreeWidgetItem(["..", "", "", ""])
@@ -308,6 +319,36 @@ class _FMTreeList(QTreeWidget):
             full = os.path.join(dir_path, name)
             if os.path.isfile(full) and name.lower().endswith(_VALID_EXTS):
                 self.addTopLevelItem(self._make_file_item(name, full))
+        self._kick_thumb_loader()
+
+    def _kick_thumb_loader(self):
+        """Start (or restart) the async thumbnail loader for any items
+        still missing icons."""
+        pending = [(k, p) for k, (it, p) in self._items_by_key.items()]
+        if not pending:
+            return
+        # Don't double-fire — the existing loader already covers these
+        # keys when it gets to them. New keys added later trigger a
+        # fresh loader.
+        if self._thumb_loader is not None and self._thumb_loader.isRunning():
+            return
+        self._thumb_loader = _ThumbLoader(pending, self._TREE_THUMB_SIZE, self)
+        self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
+        self._thumb_loader.start()
+
+    def _on_thumb_ready(self, cache_key, pixmap):
+        if len(_THUMB_CACHE) >= _THUMB_CACHE_MAX:
+            _THUMB_CACHE.pop(next(iter(_THUMB_CACHE)))
+        _THUMB_CACHE[cache_key] = pixmap
+        entry = self._items_by_key.pop(cache_key, None)
+        if entry is None:
+            return
+        item, _path = entry
+        try:
+            item.setIcon(0, QIcon(pixmap))
+        except RuntimeError:
+            # Item was deleted (e.g. tree was cleared mid-load)
+            pass
 
     def _make_folder_item(self, name, full):
         it = QTreeWidgetItem([name, "", "", "Folder"])
@@ -331,17 +372,25 @@ class _FMTreeList(QTreeWidget):
     def _make_file_item(self, name, full):
         size = ""
         date = ""
+        mtime = 0
         try:
+            mtime = os.path.getmtime(full)
             size = logic.get_sz_readable(full)
             import datetime as _dt
-            date = _dt.datetime.fromtimestamp(
-                os.path.getmtime(full)).strftime("%Y-%m-%d %H:%M")
+            date = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         except Exception:
             pass
         ext = os.path.splitext(name)[1].lower().lstrip(".")
         type_text = ext.upper() if ext else "File"
         it = QTreeWidgetItem([name, size, date, type_text])
         it.setData(0, Qt.ItemDataRole.UserRole, full)
+        # Thumbnail icon — cached if available, otherwise queued
+        cache_key = f"{full}|{mtime}|{self._TREE_THUMB_SIZE}"
+        cached = _THUMB_CACHE.get(cache_key)
+        if cached is not None:
+            it.setIcon(0, QIcon(cached))
+        else:
+            self._items_by_key[cache_key] = (it, full)
         return it
 
     def _on_expand(self, item):
@@ -370,6 +419,7 @@ class _FMTreeList(QTreeWidget):
                         if (os.path.isfile(sub)
                                 and name.lower().endswith(_VALID_EXTS)):
                             item.addChild(self._make_file_item(name, sub))
+                    self._kick_thumb_loader()
 
     # ── Drag start ───────────────────────────────────────────────────────────
     def eventFilter(self, obj, event):
