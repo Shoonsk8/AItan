@@ -278,6 +278,16 @@ class _FMTreeList(QTreeWidget):
         self.setRootIsDecorated(True)   # show expand triangles on top-level
         self.setUniformRowHeights(True)
         self.setAllColumnsShowFocus(True)
+        # Bigger indent + visible branch lines so nesting depth is obvious
+        self.setIndentation(28)
+        self.setAlternatingRowColors(True)
+        self.setStyleSheet(
+            "QTreeView::branch:has-siblings:!adjoins-item {"
+            "  border-image: none; border-left: 1px solid #555; }"
+            "QTreeView::branch:has-siblings:adjoins-item {"
+            "  border-image: none; border-left: 1px solid #555; }"
+            "QTreeView::branch:!has-children:!has-siblings:adjoins-item {"
+            "  border-image: none; border-left: 1px solid #555; }")
         self.setIconSize(QSize(self._TREE_THUMB_SIZE, self._TREE_THUMB_SIZE))
         # Click column headers to re-sort. Default: Name column ascending.
         self.setSortingEnabled(True)
