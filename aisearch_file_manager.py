@@ -228,7 +228,12 @@ class _FMIconList(QListWidget):
         if not srcs or not os.path.isdir(target):
             ev.ignore(); return
         ev.acceptProposedAction()
-        self._fm.move_files_into(srcs, target)
+        try:
+            self._fm.move_files_into(srcs, target)
+        except Exception as e:
+            import traceback
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Drop Error", f"Failed to move files:\n{e}\n{traceback.format_exc()}")
 
 
 class FileManagerWindow(QWidget):
@@ -360,9 +365,11 @@ class FileManagerWindow(QWidget):
             entries = []
 
         # Folders first (instant — generic icon). Mark them droppable so
-        # Qt's per-item drop check accepts files dragged onto them; file
-        # items stay non-droppable (default), giving the right "stop"
-        # cursor when hovering a file.
+        # Qt's per-item drop check shows STOP cursor on items lacking
+        # ItemIsDropEnabled. Nemo never shows STOP — drops just go to
+        # whatever target makes sense. Mark every item droppable; the
+        # widget-level dropEvent decides what to do (folder = move
+        # there, file / empty = no-op silently).
         for name in entries:
             if name.startswith('.'):
                 continue
@@ -385,6 +392,11 @@ class FileManagerWindow(QWidget):
                 continue
             it = QListWidgetItem(name)
             it.setData(Qt.ItemDataRole.UserRole, full)
+            # Drop on a file is harmless (dropEvent falls through to
+            # current dir) — keeping ItemIsDropEnabled on prevents the
+            # STOP cursor from flickering as the user drags across the
+            # grid in Nemo style.
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsDropEnabled)
             try:
                 mtime = os.path.getmtime(full)
             except OSError:
@@ -478,10 +490,15 @@ class FileManagerWindow(QWidget):
         self.list.setGridSize(QSize(s + 24, s + 48))
 
     # ── Move (drop target) ───────────────────────────────────────────────────
+    @property
+    def config(self):
+        return self.app.config if hasattr(self, 'app') and hasattr(self.app, 'config') else {}
+
     def move_files_into(self, src_paths, target_dir):
         moved   = 0
         renames = {}            # old → new (for batched store flush)
         errors  = []
+        batch   = []
         for src in src_paths:
             if not os.path.exists(src):
                 errors.append(f"Missing: {os.path.basename(src)}")
@@ -493,6 +510,7 @@ class FileManagerWindow(QWidget):
                 shutil.move(src, dst)
                 self._sync_in_memory(src, dst)
                 renames[src] = dst
+                batch.append({"type": "move", "old_path": src, "new_path": dst})
                 moved += 1
             except Exception as e:
                 errors.append(f"{os.path.basename(src)}: {e}")
@@ -504,6 +522,10 @@ class FileManagerWindow(QWidget):
                 import aisearch_attrs as _am
                 _am.flush_path_renames_to_stores(
                     renames, getattr(self.app, "current_project", None))
+                if getattr(self.app, "current_project", None):
+                    _am.save(self.app.current_project, self.app.attrs_data)
+                if hasattr(self.app, "_push_undo"):
+                    self.app._push_undo(batch)
             except Exception:
                 pass
         if errors:
