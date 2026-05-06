@@ -804,15 +804,29 @@ class FilePane(QWidget):
         menu.addAction(act_new)
         if path and path != "..":
             menu.addSeparator()
+            # Open / Open with — only meaningful for files
+            if os.path.isfile(path):
+                act_open_default = QAction("Open", self)
+                act_open_default.triggered.connect(
+                    lambda _, p=path: self.fm._open_default(p))
+                menu.addAction(act_open_default)
+                open_with = menu.addMenu("Open with")
+                for app_name, cmd in self.fm._app_choices(path):
+                    a = QAction(app_name, self)
+                    a.triggered.connect(
+                        lambda _, c=cmd, p=path: self.fm._open_with(c, p))
+                    open_with.addAction(a)
+                menu.addSeparator()
             act_rename = QAction("Rename (F2)", self)
             act_rename.triggered.connect(self._rename_selected)
             menu.addAction(act_rename)
             act_delete = QAction("Move to Trash (Del)", self)
             act_delete.triggered.connect(self._delete_selected)
             menu.addAction(act_delete)
-            act_open = QAction("Open in Nemo", self)
-            act_open.triggered.connect(lambda _, p=path: self.fm._open_in_nemo(p))
-            menu.addAction(act_open)
+            act_open_loc = QAction("Open in Nemo", self)
+            act_open_loc.triggered.connect(
+                lambda _, p=path: self.fm._open_in_nemo(p))
+            menu.addAction(act_open_loc)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _new_folder(self):
@@ -1097,6 +1111,60 @@ class FileManagerWindow(QWidget):
             _fp.open_in_nemo(path)
         except Exception:
             pass
+
+    def _open_default(self, path):
+        """Open the file with its system default app (xdg-open). User's
+        MIME associations decide which program — for images on
+        Cinnamon that's typically pix."""
+        try:
+            import subprocess
+            subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+
+    def _open_with(self, cmd, path):
+        """Run `cmd path` with the chosen program. cmd may be a single
+        executable name or a list."""
+        try:
+            import subprocess
+            args = cmd if isinstance(cmd, list) else [cmd]
+            subprocess.Popen(args + [path])
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
+    # Common image/video apps to offer in "Open with". Filtered at
+    # menu-build time to those actually installed.
+    _IMAGE_APPS = [
+        ("Pix",      "pix"),
+        ("GIMP",     "gimp"),
+        ("Krita",    "krita"),
+        ("xviewer",  "xviewer"),
+        ("eog",      "eog"),
+        ("feh",      "feh"),
+    ]
+    _VIDEO_APPS = [
+        ("VLC",      "vlc"),
+        ("MPV",      "mpv"),
+        ("Celluloid","celluloid"),
+        ("MPlayer",  "mplayer"),
+    ]
+
+    def _app_choices(self, path):
+        """Return [(label, executable)] pairs for apps installed on the
+        system that handle this file's type."""
+        import shutil as _sh
+        ext = os.path.splitext(path)[1].lower()
+        if ext in logic.EXT_VID:
+            candidates = self._VIDEO_APPS + self._IMAGE_APPS  # videos may also open in image viewers
+        else:
+            candidates = self._IMAGE_APPS
+        out = []
+        for label, exe in candidates:
+            if _sh.which(exe):
+                out.append((label, exe))
+        return out
 
     def _save_app_data(self):
         """Persist app.attrs_data + app.data to disk after FM-driven
