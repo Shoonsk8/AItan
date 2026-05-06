@@ -2212,6 +2212,35 @@ class AISearchApp(QMainWindow):
         self._fm_win.raise_()
         self._fm_win.activateWindow()
 
+    def _set_rep_pic(self, pid, path):
+        """Set `path` as the representative picture for person `pid` —
+        updates faces_<project>.json's source_path field. Used from
+        the main-table right-click menu when an old rep pic is no
+        longer correct."""
+        proj = getattr(self, "current_project", None)
+        if not proj or not pid or not path or not os.path.exists(path):
+            return
+        try:
+            db = attrs_mod.load_faces_db(proj)
+            faces = db.get("faces", {})
+            if pid not in faces:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, _t("Set rep / 代表画像設定"),
+                    _t(f"Person ID {pid} not found in faces DB.\n"
+                       f"Run face detection on this file first.\n\n"
+                       f"人物ID {pid} がfaces DBに見つかりません。\n"
+                       f"このファイルで顔検出を先に実行してください。"))
+                return
+            faces[pid]["source_path"] = os.path.abspath(path)
+            attrs_mod.save_faces_db(proj, db)
+            self.statusBar().showMessage(
+                _t(f"Rep pic for {pid} updated. / {pid} の代表画像を更新しました。"),
+                4000)
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, _t("Set rep / 代表画像設定"),
+                f"Could not update rep pic:\n{e}")
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the directory of
         the currently-selected row. Falls back to query_path if nothing
@@ -5379,6 +5408,14 @@ class AISearchApp(QMainWindow):
                 a = QAction(label, self)
                 a.triggered.connect(lambda _, c=argv, p=path: _fm.open_with(c, p))
                 sub.addAction(a)
+            # Set this file as the rep pic for its assigned person
+            entry = (self.attrs_data or {}).get(path) or {}
+            pid = (entry.get("person_id") or "").strip()
+            if pid and pid != "000":
+                act_rep = QAction(
+                    _t(f"Set as rep pic for {pid} / {pid} の代表画像に設定"), self)
+                act_rep.triggered.connect(lambda _, p=path, q=pid: self._set_rep_pic(q, p))
+                menu.addAction(act_rep)
             menu.addSeparator()
 
         menu.addAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"),
