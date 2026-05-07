@@ -6525,11 +6525,7 @@ class AISearchApp(QMainWindow):
                     torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                 if old_path in self.attrs_data:
                     self.attrs_data[new_path] = self.attrs_data.pop(old_path)
-                # Manual rename auto-locks the file (separate from the
-                # explicit Lock/Unlock toggle, but the rename action
-                # itself flips editable→False without user thought).
-                self.attrs_data.setdefault(new_path, {})["editable"] = False
-                attrs_mod.save(self.current_project, self.attrs_data)
+                    attrs_mod.save(self.current_project, self.attrs_data)
                 attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
                 if self.preview_handler.current_path == old_path:
                     self.preview_handler.current_path = new_path

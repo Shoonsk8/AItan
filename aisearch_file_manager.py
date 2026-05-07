@@ -1236,16 +1236,6 @@ class FilePane(QWidget):
                     renames, getattr(self.app, "current_project", None))
             except Exception:
                 pass
-            # Manual rename auto-locks the file (separate from the
-            # explicit Lock/Unlock toggle in the right-click menu, but
-            # the rename action itself flips editable→False without
-            # the user having to think about it).
-            try:
-                attrs_data = getattr(self.app, "attrs_data", None)
-                if isinstance(attrs_data, dict):
-                    attrs_data.setdefault(new_path, {})["editable"] = False
-            except Exception:
-                pass
         elif os.path.isdir(new_path):
             renames = self.fm._sync_folder_rename(old_path, new_path)
         # Persist attrs.json + features.pt — without this the in-memory
