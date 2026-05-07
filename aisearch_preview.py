@@ -4503,6 +4503,19 @@ class PreviewWindow(QWidget):
             # runs. Independent of the explicit Lock/Unlock toggle.
             app.attrs_data.setdefault(path, {})["editable"] = False
             attrs_mod.save(app.current_project, app.attrs_data)
+            # Embed the AItan block into the renamed file. We
+            # suspended auto-bake during _save_attrs above (to avoid
+            # a phantom-file race when the path changes mid-thread),
+            # so the renamed file has no embedded metadata yet. Bake
+            # synchronously now against the NEW path. User reported
+            # the renamed file's raw metadata showed only basic JPEG
+            # flags ("[progressive] 1") with no AItan content, even
+            # though the filename had encoded fields.
+            try:
+                _entry_for_bake = attrs_mod.get(app.attrs_data, path)
+                attrs_mod.embed_aitan_meta(path, _entry_for_bake)
+            except Exception:
+                pass
         finally:
             app._watcher_paused = _was_paused
         self._update_rename_btn("ok")
