@@ -416,6 +416,15 @@ class _FMTreeList(QTreeWidget):
         # blocks our own revert setText() from re-entering.
         self._editing_lock = False
         self.itemChanged.connect(self._on_item_changed)
+        # Edge-scroll during drag: when the cursor hovers near the
+        # top or bottom of the viewport while dragging, the tree
+        # scrolls so the user can drop on rows that are off-screen.
+        # Speed scales with how close the cursor is to the edge.
+        from PyQt6.QtCore import QTimer
+        self._drag_scroll_timer = QTimer(self)
+        self._drag_scroll_timer.setInterval(40)   # ~25 fps
+        self._drag_scroll_timer.timeout.connect(self._drag_scroll_tick)
+        self._drag_scroll_speed = 0   # px per tick; sign = direction
         # Manual drag start via viewport eventFilter (same pattern as
         # main's FileTable, which works in PyQt6).
         self._press_pos  = None
@@ -714,6 +723,9 @@ class _FMTreeList(QTreeWidget):
         drag.exec(Qt.DropAction.MoveAction)
 
     # ── Drop handling ────────────────────────────────────────────────────────
+    _EDGE_BAND = 28      # px from top/bottom that triggers auto-scroll
+    _EDGE_MAX_SPEED = 12 # max px per 40 ms tick
+
     def dragEnterEvent(self, ev):
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
@@ -723,10 +735,41 @@ class _FMTreeList(QTreeWidget):
     def dragMoveEvent(self, ev):
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
+            # Update auto-scroll based on cursor distance from viewport
+            # edges. Speed grows linearly as the cursor enters the band.
+            vp_h = self.viewport().height()
+            y = ev.position().toPoint().y()
+            band = self._EDGE_BAND
+            if y < band:
+                # Top edge — scroll up; closer to edge → faster.
+                frac = max(0.0, min(1.0, (band - y) / band))
+                self._drag_scroll_speed = -int(self._EDGE_MAX_SPEED * frac) or -1
+            elif y > vp_h - band:
+                frac = max(0.0, min(1.0, (y - (vp_h - band)) / band))
+                self._drag_scroll_speed = int(self._EDGE_MAX_SPEED * frac) or 1
+            else:
+                self._drag_scroll_speed = 0
+            if self._drag_scroll_speed and not self._drag_scroll_timer.isActive():
+                self._drag_scroll_timer.start()
+            elif not self._drag_scroll_speed and self._drag_scroll_timer.isActive():
+                self._drag_scroll_timer.stop()
         else:
             ev.ignore()
 
+    def dragLeaveEvent(self, ev):
+        self._drag_scroll_timer.stop()
+        self._drag_scroll_speed = 0
+        super().dragLeaveEvent(ev)
+
+    def _drag_scroll_tick(self):
+        if not self._drag_scroll_speed:
+            return
+        sb = self.verticalScrollBar()
+        sb.setValue(sb.value() + self._drag_scroll_speed)
+
     def dropEvent(self, ev):
+        self._drag_scroll_timer.stop()
+        self._drag_scroll_speed = 0
         if not ev.mimeData().hasUrls():
             ev.ignore(); return
         target = None
