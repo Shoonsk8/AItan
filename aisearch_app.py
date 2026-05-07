@@ -5784,6 +5784,16 @@ class AISearchApp(QMainWindow):
             self.statusBar().showMessage(msg + ".", 5000)
         except Exception:
             pass
+        # Apply Rules can rename files on disk — the FM tree's cached
+        # paths are now stale. Repopulate it so the new filenames
+        # appear. (refresh_rims_only doesn't help here because the
+        # tree's UserRole entries still hold the old paths.)
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
 
     def _apply_path_rules_to_browse_dir(self):
         """Walk the currently-browsed directory recursively and re-apply path
@@ -5834,6 +5844,14 @@ class AISearchApp(QMainWindow):
             _t(f"Path rules applied: {n_changed} of {n_total} files changed{suffix}. / "
                f"パス規則適用：{n_total}件中{n_changed}件更新"
                + (f"（{n_locked}件ロック中スキップ）" if n_locked else "") + "。"), 5000)
+        # Files may have been renamed on disk — repopulate the FM
+        # tree so the new names show up.
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
 
     def _exit_browse_mode(self):
         self._browse_dir = None
