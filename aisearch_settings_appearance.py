@@ -348,7 +348,7 @@ class _AppearanceMixin:
             btn.setFixedSize(48, 24)
             cur = self.app.config.get(key, _rim_defaults[key])
             btn.setStyleSheet(f"background-color:{cur}; border:1px solid #666;")
-            def _pick(k=key, b=btn):
+            def _pick(_checked=False, k=key, b=btn):
                 c = QColorDialog.getColor(
                     QColor(self.app.config.get(k, _rim_defaults[k])), self)
                 if c.isValid():
