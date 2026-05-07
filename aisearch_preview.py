@@ -2507,6 +2507,15 @@ class PreviewWindow(QWidget):
                             # seed) with our stale background-thread copy.
                             if _k in ("prompt", "seed", "person_id") and _live.get(_k):
                                 continue
+                            # `editable` is a deliberate flag — once it's set
+                            # in the live entry (lock toggle, rename auto-lock,
+                            # explicit user action), never let a stale snapshot
+                            # overwrite it. Was: this loop blindly copied
+                            # _entry["editable"]→_live["editable"], silently
+                            # flipping a just-locked file back to editable=True
+                            # the next time the auto-detect thread completed.
+                            if _k == "editable" and "editable" in _live:
+                                continue
                             _live[_k] = _entry[_k]
                     attrs_mod.save(app.current_project, app.attrs_data)
                 def _safe_refresh(p=p, pid=_matched_pid):
