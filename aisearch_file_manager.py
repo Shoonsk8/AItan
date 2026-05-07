@@ -1033,21 +1033,25 @@ class FilePane(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Rename", f"Could not rename:\n{e}")
             return
+        renames = {}
         if os.path.isfile(new_path):
             self.fm._sync_in_memory(old_path, new_path)
+            renames[old_path] = new_path
             try:
                 import aisearch_attrs as _am
                 _am.flush_path_renames_to_stores(
-                    {old_path: new_path},
-                    getattr(self.app, "current_project", None))
+                    renames, getattr(self.app, "current_project", None))
             except Exception:
                 pass
         elif os.path.isdir(new_path):
-            self.fm._sync_folder_rename(old_path, new_path)
+            renames = self.fm._sync_folder_rename(old_path, new_path)
         # Persist attrs.json + features.pt — without this the in-memory
         # path swap was lost on next launch and the file looked like
         # it had no attributes (entry stuck under the old path key).
         self.fm._save_app_data()
+        # Mirror the rename in the main window's table so any visible
+        # row pointing at the old path flips to the new one.
+        self.fm._update_main_table_paths(renames)
         self.fm.refresh_all()
 
     def _delete_selected(self):
@@ -1235,6 +1239,8 @@ class FileManagerWindow(QWidget):
         if errors:
             QMessageBox.warning(self, "Move",
                 f"Moved {moved}; {len(errors)} error(s):\n" + "\n".join(errors[:10]))
+        # Mirror moves into the main window's table rows.
+        self._update_main_table_paths(renames)
         self.refresh_all()
 
     def _sync_in_memory(self, old_path, new_path):
@@ -1294,10 +1300,33 @@ class FileManagerWindow(QWidget):
         except Exception:
             pass
 
+    def _update_main_table_paths(self, renames):
+        """Walk the main app's table and rewrite any row whose path is
+        in `renames` to its new path. Without this, the main window
+        keeps showing the old filename / dirname after an FM rename."""
+        if not renames:
+            return
+        try:
+            table = getattr(self.app, "table", None)
+            if table is None or not hasattr(table, "set_row_path"):
+                return
+            norm = {os.path.normpath(os.path.abspath(k)): v
+                    for k, v in renames.items()}
+            for row in range(table.rowCount()):
+                rp = table.get_row_path(row)
+                if not rp:
+                    continue
+                k = os.path.normpath(os.path.abspath(rp))
+                if k in norm:
+                    table.set_row_path(row, norm[k])
+        except Exception:
+            pass
+
     def _sync_folder_rename(self, old_dir, new_dir):
         """When a directory is renamed, remap any tracked file paths that
         live under it. Builds a renames dict so the on-disk stores can be
-        flushed in a single batch."""
+        flushed in a single batch. Returns the renames dict so callers
+        can pass it on to other consumers (e.g. main-table refresh)."""
         app = self.app
         old_prefix = os.path.normpath(os.path.abspath(old_dir)) + os.sep
         new_prefix = os.path.normpath(os.path.abspath(new_dir)) + os.sep
@@ -1328,6 +1357,7 @@ class FileManagerWindow(QWidget):
                     renames, getattr(app, "current_project", None))
             except Exception:
                 pass
+        return renames
 
     def _remove_from_app_state(self, path):
         """Remove a trashed path from app.data, attrs_data, and the main
