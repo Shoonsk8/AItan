@@ -1244,6 +1244,10 @@ class FileManagerWindow(QWidget):
         QShortcut(QKeySequence("F2"), self, activated=self._rename_active)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self,
                   activated=self._delete_active)
+        # Ctrl+Z routes to the main app's undo stack — FM moves are
+        # already pushed there by move_files_into. Without this binding
+        # the user had to click back on the main window to undo.
+        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self._undo_active)
 
     # ── Pane management ─────────────────────────────────────────────────────
     def _add_pane(self, initial_dir):
@@ -1291,6 +1295,13 @@ class FileManagerWindow(QWidget):
 
     def _delete_active(self):
         self._active_pane()._delete_selected()
+
+    def _undo_active(self):
+        if hasattr(self.app, "_undo_last") and self.app._undo_stack:
+            self.app._undo_last()
+            # Refresh both panes so the file reappears in its old folder
+            # and disappears from the destination.
+            self.refresh_all()
 
     # ── Shared icon helpers ─────────────────────────────────────────────────
     def _folder_icon(self):
