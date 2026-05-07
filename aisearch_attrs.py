@@ -1598,7 +1598,21 @@ def _build_aitan_block(entry: dict) -> str:
     return _AITAN_PREFIX + json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
 
 def read_raw_embedded_text(path: str) -> str:
-    """Return all raw embedded metadata text from a file as a formatted string."""
+    """Return all raw embedded metadata text from a file as a formatted string.
+
+    Tolerant of transient FileNotFound during a concurrent rename / bake
+    swap (`embed_aitan_meta` writes to a `.aitan_tmp` and `shutil.move`s
+    over the target — the target briefly disappears on cross-filesystem
+    moves). We re-check after a short wait before reporting "missing"."""
+    if not os.path.exists(path):
+        # Race against concurrent bake/rename — wait briefly and re-check.
+        import time as _time
+        for _i in range(3):
+            _time.sleep(0.08)
+            if os.path.exists(path):
+                break
+        if not os.path.exists(path):
+            return "(file not found at this path — may have just been renamed)"
     ext = os.path.splitext(path)[1].lower()
     parts = []
     try:
@@ -1646,6 +1660,9 @@ def read_raw_embedded_text(path: str) -> str:
                             except Exception:
                                 v = repr(v)
                         parts.append(f"[EXIF:{tag_name}]\n{v}")
+    except FileNotFoundError:
+        # File vanished mid-read — concurrent rename or bake swap.
+        return "(file not found at this path — may have just been renamed)"
     except Exception as e:
         parts.append(f"(error reading metadata: {e})")
     return "\n\n".join(parts)
