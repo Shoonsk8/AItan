@@ -4503,6 +4503,20 @@ class PreviewWindow(QWidget):
             # runs. Independent of the explicit Lock/Unlock toggle.
             app.attrs_data.setdefault(path, {})["editable"] = False
             attrs_mod.save(app.current_project, app.attrs_data)
+            # Sync the preview window's Protected button so the user
+            # sees the lock visually. Block signals so the toggle
+            # doesn't fire _save_attrs again, which would just rewrite
+            # the same value.
+            try:
+                pc = getattr(self, "_protected_check", None)
+                if pc is not None:
+                    pc.blockSignals(True)
+                    pc.setChecked(True)
+                    pc.blockSignals(False)
+                    if hasattr(self, "_apply_protected_lock"):
+                        self._apply_protected_lock(True)
+            except Exception:
+                pass
             # Embed the AItan block into the renamed file. We
             # suspended auto-bake during _save_attrs above (to avoid
             # a phantom-file race when the path changes mid-thread),
