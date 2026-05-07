@@ -411,6 +411,11 @@ class _FMTreeList(QTreeWidget):
         self.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self.itemDoubleClicked.connect(self._on_double_click)
         self.itemExpanded.connect(self._on_expand)
+        # Inline-rename: when the user commits an edit on column 0,
+        # itemChanged fires and we run the on-disk rename. The lock
+        # blocks our own revert setText() from re-entering.
+        self._editing_lock = False
+        self.itemChanged.connect(self._on_item_changed)
         # Manual drag start via viewport eventFilter (same pattern as
         # main's FileTable, which works in PyQt6).
         self._press_pos  = None
@@ -564,6 +569,10 @@ class _FMTreeList(QTreeWidget):
         it = _FMItem([name, "", "", "Folder"], kind="dir")
         it.setData(0, Qt.ItemDataRole.UserRole, full)
         it.setIcon(0, self._fm._folder_icon())
+        # Editable so F2 can edit the name in place. NoEditTriggers
+        # is set on the tree, so editing only starts when we call
+        # editItem() explicitly (from _rename_selected).
+        it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
         # Placeholder child → triangle appears even before we've scanned.
         # The real children are loaded on first expand.
         try:
@@ -594,6 +603,7 @@ class _FMTreeList(QTreeWidget):
         type_text = ext.upper() if ext else "File"
         it = _FMItem([name, size, date, type_text], kind="file")
         it.setData(0, Qt.ItemDataRole.UserRole, full)
+        it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
         # Thumbnail icon — cached if available, otherwise queued
         cache_key = f"{full}|{mtime}|{self._thumb_size}"
         cached = _THUMB_CACHE.get(cache_key)
@@ -770,6 +780,20 @@ class _FMTreeList(QTreeWidget):
             if ph:
                 try: ph.show(target)
                 except Exception: pass
+
+    def _on_item_changed(self, item, col):
+        # Fired both for our own setText calls and for user inline edits.
+        # _editing_lock skips the recursive case (revert on failure).
+        if self._editing_lock or col != 0:
+            return
+        full = item.data(0, Qt.ItemDataRole.UserRole)
+        if not full or full == ".." or full == self._PLACEHOLDER:
+            return
+        new_name = item.text(0).strip()
+        old_name = os.path.basename(full)
+        if not new_name or new_name == old_name:
+            return
+        self._fm._handle_inline_rename(item, full, new_name)
 
 
 class FilePane(QWidget):
@@ -1039,31 +1063,45 @@ class FilePane(QWidget):
         self.fm.refresh_all()
 
     def _rename_selected(self):
-        old_path = self._current_path()
-        if not old_path or old_path == "..":
+        # Nemo-style inline rename: the name cell becomes an editable
+        # QLineEdit. Commit on Enter, cancel on Esc. The rename runs
+        # from _handle_inline_rename when the editor closes.
+        item = self.tree.currentItem()
+        if item is None:
             return
+        full = item.data(0, Qt.ItemDataRole.UserRole)
+        if not full or full == "..":
+            return
+        self.tree.editItem(item, 0)
+
+    def _handle_inline_rename(self, item, old_path, new_name):
+        """Called from _FMTreeList._on_item_changed once the editor
+        closes with a non-empty, changed name. Performs the on-disk
+        rename + in-memory sync, or reverts the name on failure."""
         old_name = os.path.basename(old_path)
-        new_name, ok = QInputDialog.getText(
-            self, "Rename", f"New name for '{old_name}':",
-            QLineEdit.EchoMode.Normal, old_name)
-        if not ok:
-            return
-        new_name = new_name.strip()
-        if not new_name or new_name == old_name:
-            return
         if "/" in new_name or "\\" in new_name:
             QMessageBox.warning(self, "Rename",
                 "Name cannot contain '/' or '\\'.")
+            self._revert_item_name(item, old_name)
             return
         new_path = os.path.join(os.path.dirname(old_path), new_name)
         if os.path.exists(new_path):
             QMessageBox.warning(self, "Rename", f"Already exists:\n{new_path}")
+            self._revert_item_name(item, old_name)
             return
         try:
             os.rename(old_path, new_path)
         except Exception as e:
             QMessageBox.critical(self, "Rename", f"Could not rename:\n{e}")
+            self._revert_item_name(item, old_name)
             return
+        # Update the item's stored path (UserRole) so future renames
+        # work from the new path.
+        self.tree._editing_lock = True
+        try:
+            item.setData(0, Qt.ItemDataRole.UserRole, new_path)
+        finally:
+            self.tree._editing_lock = False
         renames = {}
         if os.path.isfile(new_path):
             self.fm._sync_in_memory(old_path, new_path)
@@ -1083,7 +1121,19 @@ class FilePane(QWidget):
         # Mirror the rename in the main window's table so any visible
         # row pointing at the old path flips to the new one.
         self.fm._update_main_table_paths(renames)
-        self.fm.refresh_all()
+        # Other panes may be viewing the same dir — refresh them.
+        # Our own pane already shows the new name (inline edit committed
+        # the text), so don't rebuild it.
+        for p in self.fm._panes:
+            if p is not self:
+                p._refresh()
+
+    def _revert_item_name(self, item, old_name):
+        self.tree._editing_lock = True
+        try:
+            item.setText(0, old_name)
+        finally:
+            self.tree._editing_lock = False
 
     def _delete_selected(self):
         paths = self._selected_paths()
