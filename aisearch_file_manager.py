@@ -664,12 +664,10 @@ class _FMTreeList(QTreeWidget):
                         self._start_url_drag()
                         return True
             elif t == event.Type.MouseButtonRelease:
-                # No drag → if we suppressed the collapse on press, do it now.
-                if (self._suppress_collapse
-                        and self._press_item is not None):
-                    self.clearSelection()
-                    self._press_item.setSelected(True)
-                    self.setCurrentItem(self._press_item)
+                # Nemo-style: a plain click on an already-selected item
+                # in a multi-selection does NOT collapse on release.
+                # Was: we'd clearSelection + reselect just the clicked
+                # one, which deselected everything the user had picked.
                 self._suppress_collapse = False
                 self._press_pos = None
                 self._press_item = None
