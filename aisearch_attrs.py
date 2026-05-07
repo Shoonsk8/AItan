@@ -20,6 +20,49 @@ def _face_encodings_with_fallback(img):
         return []
     return _fr.face_encodings(img, known_face_locations=locations)
 
+
+def _load_image_or_video_frame(path):
+    """Return an RGB numpy array suitable for face_recognition,
+    auto-detecting whether the file is actually an image or a video
+    regardless of its extension. The user reported renaming MP4 files
+    with .jpg extensions; the previous extension-only check ran
+    load_image_file on those, which raised silently and returned no
+    faces. Returns None on hard failure."""
+    import face_recognition as _fr
+    _VID_EXT = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv")
+    _ext = os.path.splitext(path)[1].lower()
+    # Try the path that matches the extension first.
+    if _ext in _VID_EXT:
+        return _decode_video_first_frame(path) or _try_image(path) or None
+    # Image-extension first; if PIL can't read it, try as video.
+    img = _try_image(path)
+    if img is not None:
+        return img
+    return _decode_video_first_frame(path)
+
+
+def _try_image(path):
+    """Attempt PIL image decode. Returns RGB array or None."""
+    try:
+        from PIL import UnidentifiedImageError
+        import face_recognition as _fr
+        return _fr.load_image_file(path)
+    except Exception:
+        return None
+
+
+def _decode_video_first_frame(path):
+    """ffmpeg/cv2 first-frame decode. Returns RGB array or None."""
+    try:
+        cap = cv2.VideoCapture(path)
+        ok, frame = cap.read()
+        cap.release()
+        if not ok or frame is None:
+            return None
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    except Exception:
+        return None
+
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_DIR, "data")
 DATA_DIR  = _DATA_DIR   # exported for use by other modules
@@ -988,27 +1031,14 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
     across all samples so accuracy improves as more images are confirmed.
     Assigns a new ID (001–fff) if no known person matches. 000 = no human.
     If raise_errors=True, exceptions propagate instead of returning None."""
-    _VIDEO_EXTS = ('.mp4', '.mkv', '.mov', '.avi', '.webm')
-    _is_video = path.lower().endswith(_VIDEO_EXTS)
     try:
         import face_recognition
         import numpy as np
-        if _is_video:
-            # Extract a frame from the middle of the video for face detection
-            import cv2
-            cap = cv2.VideoCapture(path)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret or frame is None:
-                return None
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            from PIL import UnidentifiedImageError
-            try:
-                img = face_recognition.load_image_file(path)
-            except (UnidentifiedImageError, OSError):
-                # File has image extension but is not a valid image (e.g. MP4 with .jpg)
-                return None
+        # Auto-detect image vs video — handles .jpg files that are
+        # actually MP4 (or vice versa) instead of failing silently.
+        img = _load_image_or_video_frame(path)
+        if img is None:
+            return None
         # dlib is not thread-safe — serialize all face encoding calls
         with _face_lock:
             encodings = _face_encodings_with_fallback(img)
@@ -1076,23 +1106,12 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
 def match_person_id(path, project, threshold=0.65):
     """Match face in image against known people — never assigns a new ID.
     Returns the best matching person ID string, or None if no confident match."""
-    _is_video = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
     try:
         import face_recognition
-        if _is_video:
-            import cv2
-            cap = cv2.VideoCapture(path)
-            ret, frame = cap.read()
-            cap.release()
-            if not ret or frame is None:
-                return None
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            from PIL import UnidentifiedImageError
-            try:
-                img = face_recognition.load_image_file(path)
-            except (UnidentifiedImageError, OSError):
-                return None
+        # Same content-vs-extension auto-detect as detect_or_assign.
+        img = _load_image_or_video_frame(path)
+        if img is None:
+            return None
         with _face_lock:
             encodings = _face_encodings_with_fallback(img)
         if not encodings:
@@ -3573,18 +3592,14 @@ def inspect_face_detection(path, project):
     try:
         import face_recognition
         import numpy as np
-        _ext = os.path.splitext(path)[1].lower()
-        _VID = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv")
-        if _ext in _VID:
-            cap = cv2.VideoCapture(path)
-            _ok, _frame = cap.read()
-            cap.release()
-            if not _ok or _frame is None:
-                result["error"] = "could not decode first frame of video"
-                return result
-            img = cv2.cvtColor(_frame, cv2.COLOR_BGR2RGB)
-        else:
-            img = face_recognition.load_image_file(path)
+        # Use the auto-detect loader so files with mismatched
+        # extensions (e.g. an MP4 renamed with a .jpg suffix) still
+        # decode. Without this, the user reported "face clearly
+        # exists" but Faces found: 0.
+        img = _load_image_or_video_frame(path)
+        if img is None:
+            result["error"] = "could not decode file as image or video"
+            return result
         # First pass: HOG model with default upsample (fast). Most faces
         # land here. If nothing's found, retry with upsample=2 — that's
         # where small / off-angle / AI-generated faces typically show up.
