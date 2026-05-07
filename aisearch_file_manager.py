@@ -948,6 +948,14 @@ class FilePane(QWidget):
         return out
 
     # ── Context menu / file ops (delegate to FM for app sync) ───────────────
+    def _other_pane(self):
+        """Return the OTHER FilePane when the FM is in dual-pane mode,
+        else None."""
+        panes = self.fm._panes
+        if len(panes) != 2:
+            return None
+        return panes[1] if panes[0] is self else panes[0]
+
     def _on_context_menu(self, pos):
         path = self._path_at_pos(pos)
         menu = QMenu(self)
@@ -956,6 +964,18 @@ class FilePane(QWidget):
         menu.addAction(act_new)
         if path and path != "..":
             menu.addSeparator()
+            # Dual-pane only: navigate the OTHER pane to this folder.
+            other = self._other_pane()
+            if other is not None and os.path.isdir(path):
+                first_pane = self.fm._panes[0]
+                label = ("Show in right pane"
+                         if other is not first_pane
+                         else "Show in left pane")
+                act_other = QAction(label, self)
+                act_other.triggered.connect(
+                    lambda _, p=path, o=other: o.navigate(p))
+                menu.addAction(act_other)
+                menu.addSeparator()
             # Open / Open with — only meaningful for files
             if os.path.isfile(path):
                 act_open_default = QAction("Open", self)
