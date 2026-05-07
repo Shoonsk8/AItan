@@ -2038,24 +2038,18 @@ class AISearchApp(QMainWindow):
             if ans != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+            # Request stop and exit. Was: pumped events for 800 ms via
+            # processEvents() so CUDA tensors got released before the
+            # daemon thread died — but processEvents() inside closeEvent
+            # confuses Qt's close sequence and the window failed to
+            # actually close. The daemon thread will die when the
+            # process exits, the kernel reclaims its CUDA context, and
+            # PyTorch's allocator pool gets freed by the OS.
             try:
                 sw._unified_stop()
-                # Pump the event loop briefly so the worker's stop
-                # check fires and CUDA tensors actually get freed
-                # before the daemon thread is torn down. Without this,
-                # PyTorch's allocator pool can leak across the next
-                # launch and trigger CUDA OOM on model load.
-                from PyQt6.QtCore import QEventLoop, QTimer
-                loop = QTimer()
-                loop.setSingleShot(True)
-                loop.start(800)
-                while loop.isActive() and getattr(sw, "_is_scanning", False):
-                    QApplication.processEvents(
-                        QEventLoop.ProcessEventsFlag.AllEvents, 50)
             except Exception:
                 pass
-        # Best-effort: drop any CUDA cache we still hold. Frees the
-        # 200–400 MiB of fragmented blocks PyTorch holds onto.
+        # Best-effort CUDA cache drop. Synchronous, fast.
         try:
             import torch as _torch
             if _torch.cuda.is_available():
@@ -2065,14 +2059,35 @@ class AISearchApp(QMainWindow):
 
         if self.preview_handler.window:
             self.preview_handler.window.close()
-        g = self.geometry()
-        self.config["main_geometry"] = [g.x(), g.y(), g.width(), g.height()]
-        self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(6)}
-        cfg.save_config(self.config, getattr(self, "current_project", None))
-        self._save_dup_results()
-        # Flush any pending debounced missing-file removals before exit
+        # FM is a separate top-level window — it's logically parented
+        # to the main window but Qt won't auto-close it when we go
+        # away. Without an explicit close, the FM stays visible after
+        # the main app closes and keeps the process alive.
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.close()
+            except Exception:
+                pass
+        # Wrap the disk writes — if any of them raise we still want the
+        # window to close, otherwise the user is stuck staring at an
+        # un-closeable window.
+        try:
+            g = self.geometry()
+            self.config["main_geometry"] = [g.x(), g.y(), g.width(), g.height()]
+            self.config["col_widths"] = {str(col): self.table.columnWidth(col) for col in range(6)}
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+        except Exception:
+            pass
+        try:
+            self._save_dup_results()
+        except Exception:
+            pass
         if getattr(self, '_missing_save_dirty', False):
-            self._flush_missing_removals()
+            try:
+                self._flush_missing_removals()
+            except Exception:
+                pass
         event.accept()
 
     def _reset_project_memory(self):
