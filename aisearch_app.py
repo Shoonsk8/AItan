@@ -2504,6 +2504,70 @@ class AISearchApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, _t("New person / 新規人物"), f"{e}")
 
+    def _dismantle_face_assignment(self, path):
+        """Wrong-face cleanup: drop this file's face sample from the
+        currently-tagged pid in the faces DB, and clear person_id from
+        the file's attrs entry. If the pid ends up with zero samples
+        the pid is deleted entirely. Used from right-click → "Dismantle
+        face data" when the user spots a misassignment.
+
+        Does NOT rename the file — that's a separate decision (P-prefix
+        in the filename can be removed via the rename dialog or a
+        manual rename)."""
+        proj = getattr(self, "current_project", None)
+        if not proj or not path or not os.path.exists(path):
+            return
+        from PyQt6.QtWidgets import QMessageBox
+        entry = self.attrs_data.get(path, {}) or {}
+        pid = (entry.get("person_id") or "").strip()
+        if not pid:
+            QMessageBox.information(self, _t("Dismantle / 解除"),
+                _t("This file has no person_id assigned. / "
+                   "このファイルには人物IDが割当されていません。"))
+            return
+        ans = QMessageBox.question(
+            self, _t("Dismantle face data / 顔データ解除"),
+            _t(f"Remove this file's contribution to P{pid} from the "
+               f"faces DB and clear its person_id?\n\n"
+               f"P{pid} に対するこのファイルの寄与を顔DBから削除し、"
+               f"person_id を解除しますか？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        result = attrs_mod.dismantle_face_assignment(path, proj, pid)
+        if result is None:
+            QMessageBox.warning(self, _t("Dismantle / 解除"),
+                _t("Could not extract a face from this file. "
+                   "person_id was cleared anyway. / "
+                   "このファイルから顔を抽出できませんでした。"
+                   "person_id は解除しました。"))
+        # Clear person_id in attrs_data regardless — the user has
+        # asked to disassociate this file from any pid.
+        if path in self.attrs_data:
+            self.attrs_data[path]["person_id"] = ""
+            attrs_mod.save(proj, self.attrs_data)
+        # Refresh preview if it's open on this file
+        try:
+            pw = getattr(self.preview_handler, "window", None)
+            if pw and getattr(self.preview_handler, "current_path", None) == path:
+                pw._refresh_attrs_inner(path)
+        except Exception:
+            pass
+        self._refresh_persons_tab_if_open()
+        if result:
+            msg_parts = []
+            if result["samples_removed"]:
+                msg_parts.append(f"removed {result['samples_removed']} sample")
+            if result["pid_deleted"]:
+                msg_parts.append(f"P{pid} had no samples left — pid deleted")
+            elif result["source_path_cleared"]:
+                msg_parts.append(f"P{pid} rep pic cleared")
+            self.statusBar().showMessage(
+                _t(f"Dismantled: {', '.join(msg_parts) or 'attrs only'} / "
+                   f"解除: {', '.join(msg_parts) or 'attrs のみ'}"),
+                5000)
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the parent folder
         of the currently-selected row AND highlight the file in the
@@ -5694,6 +5758,16 @@ class AISearchApp(QMainWindow):
                     _t(f"Add this face to {pid} samples / {pid} のサンプルに追加"), self)
                 act_add.triggered.connect(lambda _, p=path, q=pid: self._add_face_sample(q, p))
                 menu.addAction(act_add)
+                # Wrong-face cleanup: drop this file's contribution to
+                # `pid` and clear person_id. Use when the assignment was
+                # incorrect and you don't want this face polluting future
+                # matches under that pid.
+                act_dismantle = QAction(
+                    _t(f"🚮 Dismantle face data from {pid} / "
+                       f"🚮 {pid} から顔データを解除"), self)
+                act_dismantle.triggered.connect(
+                    lambda _, p=path: self._dismantle_face_assignment(p))
+                menu.addAction(act_dismantle)
             # "Assign new person ID" lives on the preview window's P
             # attribute field (➕ button) — that's the workflow point
             # right after the user runs Update Face and sees the wrong

@@ -1121,6 +1121,88 @@ def _add_embedding(fdata, enc, max_samples=20):
     fdata["embeddings"] = samples
 
 
+def dismantle_face_assignment(path, project, pid):
+    """Strip every trace this file contributed to person `pid` in the
+    faces DB. Used when the user finds a wrong assignment and wants
+    the matcher to forget this file ever existed under that pid:
+
+      - Extract the face encoding from `path`.
+      - In faces[pid].embeddings, drop the sample most similar to it
+        (face_distance argmin). That's the one this file most likely
+        added during a prior detect/correct.
+      - If faces[pid].source_path == path, clear it (caller can pick
+        a new rep pic).
+      - If faces[pid] now has zero embeddings, delete the pid entirely.
+
+    Caller is responsible for clearing entry["person_id"] in attrs and
+    for any filename renames — this function only touches the faces DB.
+    Returns a dict describing what changed: {samples_removed, pid_deleted,
+    source_path_cleared} or None on failure."""
+    try:
+        import face_recognition
+        import numpy as np
+        if not project or not pid or not path or not os.path.exists(path):
+            return None
+        # Decode image (or first video frame)
+        if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
+            import cv2
+            cap = cv2.VideoCapture(path)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                return None
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            from PIL import UnidentifiedImageError
+            try:
+                img = face_recognition.load_image_file(path)
+            except (UnidentifiedImageError, OSError):
+                return None
+        with _face_lock:
+            encs = face_recognition.face_encodings(img)
+        if not encs:
+            return None
+        enc = encs[0]
+
+        db = load_faces_db(project)
+        faces = db.get("faces", {})
+        if pid not in faces:
+            return {"samples_removed": 0, "pid_deleted": False, "source_path_cleared": False}
+        fdata = faces[pid]
+        samples = list(fdata.get("embeddings", []))
+        # Migrate legacy single-embedding entries
+        if not samples and fdata.get("embedding"):
+            samples = [fdata["embedding"]]
+        samples_removed = 0
+        if samples:
+            dists = face_recognition.face_distance(np.array(samples), enc)
+            worst_idx = int(np.argmin(dists))
+            samples.pop(worst_idx)
+            samples_removed = 1
+        fdata["embeddings"] = samples
+        # Clear legacy single-emb field if it pointed at this same enc
+        fdata.pop("embedding", None)
+
+        source_path_cleared = False
+        if os.path.normpath(fdata.get("source_path", "")) == os.path.normpath(path):
+            fdata["source_path"] = ""
+            source_path_cleared = True
+
+        pid_deleted = False
+        if not samples:
+            # No samples left → the pid is empty. Delete it so it
+            # doesn't haunt the matcher and the registry.
+            faces.pop(pid, None)
+            pid_deleted = True
+
+        save_faces_db(project, db)
+        return {"samples_removed": samples_removed,
+                "pid_deleted": pid_deleted,
+                "source_path_cleared": source_path_cleared}
+    except Exception:
+        return None
+
+
 def correct_person_id(path, project, correct_id, wrong_id=None):
     """Register face from path under correct_id.
     If wrong_id is given, removes this face's contribution from that ID's samples."""
