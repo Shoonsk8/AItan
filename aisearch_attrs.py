@@ -2111,8 +2111,26 @@ def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
             except Exception:
                 _is_img = False
             if not _is_img:
-                # Not an image at all (e.g. MP4 with .jpg extension) — try video path
-                return _embed_aitan_video(path, block, _raise=_raise)
+                # The original code fell through to _embed_aitan_video here.
+                # That was a bug: when called on a real-but-corrupt JPEG
+                # (or any file PIL couldn't classify), ffmpeg WOULD read
+                # the input and re-mux it as MP4, then shutil.move'd
+                # tmp.mp4 over the original .jpg path — silently
+                # converting the user's JPEG into MP4-with-.jpg-extension.
+                # Audit found 92 such files in the user's project.
+                #
+                # New rule: video bake is ONLY for files with video
+                # extensions, never as an "image fallback". A truly
+                # mismatched file (MP4 saved as .jpg) is left alone —
+                # the audit tool can rename it to the right extension.
+                if _raise:
+                    raise RuntimeError(
+                        "PIL could not classify this file as an image; "
+                        "refusing to fall back to video bake (would have "
+                        "overwritten the file with MP4 content)")
+                print(f"[embed] skipped — file at {path} is not a "
+                      f"recognizable image; refusing video fallback")
+                return False
         with Image.open(path) as img:
             if ext == ".png":
                 # Preserve every existing text chunk verbatim; AItan goes in
