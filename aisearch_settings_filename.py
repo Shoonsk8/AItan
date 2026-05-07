@@ -332,8 +332,16 @@ class _FilenameMixin:
         def _tag_options_for(key):
             if key.startswith("TAG:"):
                 grp = key[4:]
-                opts = (_am.TAG_GROUPS.get(grp) or _proj_tg.get(grp)
-                        or _am.TAG_GROUPS.get(grp + "_Table") or _proj_tg.get(grp + "_Table")
+                # Project-specific FIRST — the user's per-project
+                # additions (e.g. ModelImage_Table extended via
+                # Attributes tab) live in _proj_tg. The global
+                # _am.TAG_GROUPS is the bundled default and gets stale
+                # the moment a project diverges. The previous order
+                # checked global first; if global had ANY entries (even
+                # outdated ones) they short-circuited the chain and
+                # the user's new project entries were never read.
+                opts = (_proj_tg.get(grp) or _proj_tg.get(grp + "_Table")
+                        or _am.TAG_GROUPS.get(grp) or _am.TAG_GROUPS.get(grp + "_Table")
                         or [])
                 return [(f"{lbl}  ({k})", k) for k, lbl in opts]
             if key == "P":
