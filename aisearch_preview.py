@@ -2484,7 +2484,12 @@ class PreviewWindow(QWidget):
                         _entry["person_id"] = _matched_pid
                         _changed = True
                 # Mark file editable on first auto-detection (auto-adoption)
-                if not _entry.get("editable", False):
+                # only when the key is ABSENT — must not flip an explicit
+                # `editable: False` (locked) back to True. The previous
+                # check used `.get("editable", False)` which defaulted to
+                # False and therefore matched both "missing" and "locked",
+                # silently unlocking files the user had renamed/locked.
+                if "editable" not in _entry:
                     _entry["editable"] = True
                     _changed = True
                 if _changed:
