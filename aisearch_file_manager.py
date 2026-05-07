@@ -1118,9 +1118,45 @@ class FilePane(QWidget):
                                      getattr(self.app, "current_project", None))
                 except Exception:
                     pass
+        # Pick a sibling to focus AFTER delete — prefer the row directly
+        # below the bottom-most selected row, falling back to the row
+        # above the top-most. Captured before any deletion so it can't
+        # be wiped by a refresh. Keeps the FM focused so the next file
+        # shows in preview without a click.
+        sel_set = set(paths)
+        sel_items = [it for it in self.tree.selectedItems()
+                     if it.data(0, Qt.ItemDataRole.UserRole) in sel_set]
+        next_focus_item = None
+        if sel_items:
+            def _row(it):
+                par = it.parent() or self.tree.invisibleRootItem()
+                return par.indexOfChild(it)
+            last  = max(sel_items, key=_row)
+            first = min(sel_items, key=_row)
+            par = last.parent() or self.tree.invisibleRootItem()
+            for i in range(par.indexOfChild(last) + 1, par.childCount()):
+                sib = par.child(i)
+                sp  = sib.data(0, Qt.ItemDataRole.UserRole)
+                if (sp and sp != ".."
+                        and sp != _FMTreeList._PLACEHOLDER
+                        and sp not in sel_set):
+                    next_focus_item = sib
+                    break
+            if next_focus_item is None:
+                par2 = first.parent() or self.tree.invisibleRootItem()
+                for i in range(par2.indexOfChild(first) - 1, -1, -1):
+                    sib = par2.child(i)
+                    sp  = sib.data(0, Qt.ItemDataRole.UserRole)
+                    if (sp and sp != ".."
+                            and sp != _FMTreeList._PLACEHOLDER
+                            and sp not in sel_set):
+                        next_focus_item = sib
+                        break
+
         import aisearch_front_page as _fp
         errors = []
         any_removed = False
+        trashed = set()
         for p in paths:
             if not os.path.exists(p):
                 continue
@@ -1130,6 +1166,7 @@ class FilePane(QWidget):
                     errors.append(f"{os.path.basename(p)}: {err}")
                     continue
                 self.fm._remove_from_app_state(p)
+                trashed.add(p)
                 any_removed = True
             except Exception as e:
                 errors.append(f"{os.path.basename(p)}: {e}")
@@ -1140,7 +1177,29 @@ class FilePane(QWidget):
         if errors:
             QMessageBox.warning(self, "Trash",
                 f"Errors:\n" + "\n".join(errors[:10]))
-        self.fm.refresh_all()
+        # Surgical tree update — remove only the rows we trashed,
+        # leaving the rest of the tree (and its scroll position) alone.
+        # A full refresh would rebuild the tree, dropping focus and
+        # whatever expansion state the user had.
+        for it in list(sel_items):
+            sp = it.data(0, Qt.ItemDataRole.UserRole)
+            if sp in trashed:
+                par = it.parent() or self.tree.invisibleRootItem()
+                par.removeChild(it)
+        # The OTHER pane(s) may have been viewing the same dir, so
+        # refresh those — but not us.
+        for p in self.fm._panes:
+            if p is not self:
+                p._refresh()
+        # Park focus on the chosen next sibling. setCurrentItem fires
+        # currentItemChanged, which auto-shows the next file in preview.
+        if next_focus_item is not None:
+            try:
+                self.tree.setCurrentItem(next_focus_item)
+                self.tree.scrollToItem(next_focus_item)
+            except RuntimeError:
+                pass
+        self.tree.setFocus()
 
 
 class FileManagerWindow(QWidget):
