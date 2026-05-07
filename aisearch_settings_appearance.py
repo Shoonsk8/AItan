@@ -330,6 +330,50 @@ class _AppearanceMixin:
         ]:
             fl.addLayout(_btn_color_row(label, key))
 
+        # ── FM thumbnail rim colors ─────────────────────────────────────
+        fl.addWidget(_hsep())
+        fl.addWidget(QLabel(_t("FM Thumbnail Rim Colors: / FM サムネイル枠色：")))
+
+        # Rim defaults match aisearch_file_manager._RIM_DEFAULTS — keep
+        # in sync if either side changes.
+        _rim_defaults = {
+            "rim_video_open": "#00ff00",
+            "rim_video_lock": "#1a6a1a",
+            "rim_pic_lock":   "#a01a1a",
+        }
+
+        def _rim_color_row(label, key):
+            row = QHBoxLayout()
+            btn = QPushButton()
+            btn.setFixedSize(48, 24)
+            cur = self.app.config.get(key, _rim_defaults[key])
+            btn.setStyleSheet(f"background-color:{cur}; border:1px solid #666;")
+            def _pick(k=key, b=btn):
+                c = QColorDialog.getColor(
+                    QColor(self.app.config.get(k, _rim_defaults[k])), self)
+                if c.isValid():
+                    self.app.config[k] = c.name()
+                    b.setStyleSheet(f"background-color:{c.name()}; border:1px solid #666;")
+                    cfg.save_config(self.app.config,
+                                    getattr(self.app, "current_project", None))
+                    # Refresh FM rims if it's open so the new color shows immediately.
+                    fm_win = getattr(self.app, "_fm_win", None)
+                    if fm_win is not None:
+                        try:
+                            fm_win.refresh_all()
+                        except Exception:
+                            pass
+            btn.clicked.connect(_pick)
+            row.addWidget(QLabel(label)); row.addStretch(); row.addWidget(btn)
+            return row
+
+        for key, label in [
+            ("rim_video_open", _t("Video — unlocked / 動画（解除中）")),
+            ("rim_video_lock", _t("Video — locked / 動画（ロック中）")),
+            ("rim_pic_lock",   _t("Picture — locked / 画像（ロック中）")),
+        ]:
+            fl.addLayout(_rim_color_row(label, key))
+
         fl.addStretch()
         tabs.addTab(tab_fonts, _t("🖌 Appearance / 🖌 外観"))
 
