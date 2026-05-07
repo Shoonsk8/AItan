@@ -1161,6 +1161,38 @@ class _AttrsMixin:
         # Refresh the Filename Rules tab's value dropdowns so newly-added
         # tag-group entries (e.g. a new ModelImage option) appear without
         # the user having to close + reopen the Settings window.
+        # Two prerequisites that previously made this silently no-op:
+        #   1. The Filename Rules tab is built lazily — if the user
+        #      hasn't opened it in this Settings session, _reload_fn_rules
+        #      doesn't exist yet. So we force-build that tab first.
+        #   2. _reload_fn_rules reads the project from the Filename Rules
+        #      tab's own dropdown, which can differ from the Attributes
+        #      tab's selection. We sync the Filename tab's project to
+        #      the project we just saved to, so the reload reads the
+        #      file we just wrote.
+        try:
+            from aisearch_settings_attrs import _AttrsMixin   # for __mro__ lookup
+            # Force-build the Filename Rules tab (index 6 per _tab_labels_raw).
+            if hasattr(self, '_ensure_tab_built'):
+                self._ensure_tab_built(6)
+                # _ensure_tab_built defers to QTimer; force the deferred
+                # build to run synchronously so _reload_fn_rules is set
+                # before we reach for it.
+                if hasattr(self, '_do_build_tab') and 6 not in getattr(self, '_tabs_ready', set()):
+                    self._do_build_tab(6)
+        except Exception:
+            pass
+        # Sync the Filename Rules tab's project dropdown to whatever
+        # project the Attributes save just targeted, so the reload reads
+        # the same file we wrote.
+        _fn_proj_cb = getattr(self, '_fn_proj_cb', None)
+        if _fn_proj_cb is not None:
+            try:
+                _idx = _fn_proj_cb.findText(_proj_name)
+                if _idx >= 0 and _fn_proj_cb.currentIndex() != _idx:
+                    _fn_proj_cb.setCurrentIndex(_idx)
+            except Exception:
+                pass
         _reload_fn = getattr(self, '_reload_fn_rules', None)
         if _reload_fn:
             try:
