@@ -1127,6 +1127,16 @@ class FilePane(QWidget):
                 menu.addSeparator()
             # Open / Open with — only meaningful for files
             if os.path.isfile(path):
+                # Lock / Unlock toggle
+                import aisearch_attrs as _am
+                _attrs = getattr(self.app, "attrs_data", {}) or {}
+                _is_locked = not _am.is_editable(_attrs, path)
+                act_lock = QAction(
+                    "🔓 Unlock" if _is_locked else "🔒 Lock", self)
+                act_lock.triggered.connect(
+                    lambda _, p=path: self._toggle_lock(p))
+                menu.addAction(act_lock)
+                menu.addSeparator()
                 act_open_default = QAction("Open", self)
                 act_open_default.triggered.connect(
                     lambda _, p=path: self.fm._open_default(p))
@@ -1226,9 +1236,10 @@ class FilePane(QWidget):
                     renames, getattr(self.app, "current_project", None))
             except Exception:
                 pass
-            # Manual rename = "I confirmed this file" → lock it.
-            # Sets editable=False so the scanner auto-path skips this
-            # file on future Updates.
+            # Manual rename auto-locks the file (separate from the
+            # explicit Lock/Unlock toggle in the right-click menu, but
+            # the rename action itself flips editable→False without
+            # the user having to think about it).
             try:
                 attrs_data = getattr(self.app, "attrs_data", None)
                 if isinstance(attrs_data, dict):
@@ -1257,6 +1268,14 @@ class FilePane(QWidget):
             item.setText(0, old_name)
         finally:
             self.tree._editing_lock = False
+
+    def _toggle_lock(self, path):
+        """Right-click → Lock / Unlock toggle. Delegates to the main
+        app's _toggle_file_lock so attrs.json + main-table state stay
+        in sync; the main app already calls fm._fm_win.refresh_all()
+        which redraws our pane's rim."""
+        if hasattr(self.app, "_toggle_file_lock"):
+            self.app._toggle_file_lock(path)
 
     def _delete_selected(self):
         paths = self._selected_paths()

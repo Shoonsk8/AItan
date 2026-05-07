@@ -2568,6 +2568,33 @@ class AISearchApp(QMainWindow):
                    f"解除: {', '.join(msg_parts) or 'attrs のみ'}"),
                 5000)
 
+    def _toggle_file_lock(self, path):
+        """Flip entry["editable"] for a single file. Locked
+        (editable=False) → auto paths skip the file. Unlocked
+        (editable=True) → auto paths process it normally. Updates
+        attrs.json and refreshes the FM thumbnail rim."""
+        if not path:
+            return
+        proj = getattr(self, "current_project", None)
+        entry = self.attrs_data.setdefault(path, {})
+        was_locked = not attrs_mod.is_editable(self.attrs_data, path)
+        entry["editable"] = bool(was_locked)   # toggle
+        try:
+            attrs_mod.save(proj, self.attrs_data)
+        except Exception:
+            pass
+        # Refresh FM thumbnail rim if the FM is showing this file's folder.
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
+        new_state = "locked" if not was_locked else "unlocked"
+        ja = "ロック" if not was_locked else "ロック解除"
+        self.statusBar().showMessage(
+            _t(f"{os.path.basename(path)}: {new_state} / {ja}"), 3000)
+
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the parent folder
         of the currently-selected row AND highlight the file in the
@@ -5759,6 +5786,18 @@ class AISearchApp(QMainWindow):
         path = self.table.get_row_path(row) if row >= 0 else None
 
         if path and os.path.isfile(path):
+            # Lock / Unlock toggle — separate from rename. When locked
+            # (editable=False), all auto paths (scan worker, Apply
+            # Rules) skip this file. Manual UI actions still work.
+            _is_locked = not attrs_mod.is_editable(self.attrs_data, path)
+            act_lock = QAction(
+                _t("🔓 Unlock / 🔓 ロック解除") if _is_locked
+                else _t("🔒 Lock / 🔒 ロック"),
+                self)
+            act_lock.triggered.connect(
+                lambda _, p=path: self._toggle_file_lock(p))
+            menu.addAction(act_lock)
+            menu.addSeparator()
             act_open = QAction(_t("Open / 開く"), self)
             act_open.triggered.connect(lambda _, p=path: _fm.open_default(p))
             menu.addAction(act_open)
@@ -6486,10 +6525,9 @@ class AISearchApp(QMainWindow):
                     torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                 if old_path in self.attrs_data:
                     self.attrs_data[new_path] = self.attrs_data.pop(old_path)
-                # Manual rename = "I confirmed this file" → lock it.
-                # Sets editable=False so the scanner auto-path skips
-                # this file on future Updates. Done unconditionally
-                # whether or not the entry pre-existed.
+                # Manual rename auto-locks the file (separate from the
+                # explicit Lock/Unlock toggle, but the rename action
+                # itself flips editable→False without user thought).
                 self.attrs_data.setdefault(new_path, {})["editable"] = False
                 attrs_mod.save(self.current_project, self.attrs_data)
                 attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
