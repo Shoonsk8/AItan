@@ -6120,11 +6120,20 @@ class AISearchApp(QMainWindow):
             return
         self._left_key_busy = True
         try:
-            # In browse mode: left arrow exits browse and restores the previous search
+            # In browse mode: left arrow runs a search on the file the
+            # user is currently looking at. Was: ran self.query_path
+            # (the *previous* search query), which after browsing into
+            # a different folder could be a completely unrelated file —
+            # the user reported "wrong file on completely different
+            # folder, doesn't look like each other".
             if getattr(self, '_browse_dir', None):
+                row = self._current_row()
+                sel_path = self.table.get_row_path(row) if row >= 0 else None
                 self._exit_browse_mode()
-                if self.query_path and os.path.exists(self.query_path):
-                    self.run_search(self.query_path)
+                target = (sel_path if (sel_path and os.path.exists(sel_path))
+                          else self.query_path)
+                if target and os.path.exists(target):
+                    self.run_search(target)
                     self.table.scrollToTop()
                     self._select_row(0)
                 return
