@@ -277,7 +277,7 @@ class _AttrsMixin:
             "Animal": "動物", "PersonInhrt": "継承元", "Eyes": "目",
             "Hair": "髪", "FaceAngle": "顔の角度", "Expression": "表情",
             "Skin": "肌", "Bust": "バスト", "WaistHip": "ウエスト・ヒップ",
-            "PostureMotion": "姿勢・動作", "Clothing": "服装", "Tool": "道具",
+            "PostureMotion": "姿勢・動作", "Clothing / 服装": "服装", "Tool": "道具",
             "CameraShot": "カメラショット", "Background": "背景",
             "Orientation": "縦横比", "Resolution": "解像度",
             "FrameRate": "フレームレート", "Timestamp": "タイムスタンプ",
@@ -1158,5 +1158,14 @@ class _AttrsMixin:
 
         if hasattr(self.app, 'reload_tag_groups'):
             self.app.reload_tag_groups(_proj_name)
+        # Refresh the Filename Rules tab's value dropdowns so newly-added
+        # tag-group entries (e.g. a new ModelImage option) appear without
+        # the user having to close + reopen the Settings window.
+        _reload_fn = getattr(self, '_reload_fn_rules', None)
+        if _reload_fn:
+            try:
+                _reload_fn()
+            except Exception:
+                pass
         if hasattr(self, '_btn_attr_save'):
             self._flash_saved_btn(self._btn_attr_save)

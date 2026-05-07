@@ -705,6 +705,25 @@ class _FilenameMixin:
             """Clear and reload rule rows for the selected project."""
             _loaded = self._fn_proj_cb.currentText().strip() or "default"
             self._fn_editing_lbl.setText(f"Editing: {_loaded}")
+            # Re-read the project's attrs_tags_<PROJECT>.json so newly-added
+            # values (e.g. a new ModelImage entry) appear in the rule's
+            # value dropdown. Was: _proj_tg / _proj_sec_styles / _col_names
+            # were captured once at tab init; updates from the Attributes
+            # tab were invisible until the app restarted.
+            _tags_file_now = _am.tags_file_for_project(_fn_selected_proj())
+            try:
+                _new_tg = _am._load_tag_groups(_tags_file_now)
+                _proj_tg.clear()
+                _proj_tg.update(_new_tg)
+                import json as _json
+                with open(_tags_file_now, encoding="utf-8") as _f:
+                    _new_raw = _json.load(_f)
+                _proj_sec_styles.clear()
+                _proj_sec_styles.update(_new_raw.get("__section_styles__", {}))
+                _col_names.clear()
+                _col_names.update(_new_raw.get("__col_names__", {}))
+            except Exception:
+                pass
             # Clear existing rows
             for _, _, _, _, rw in list(self._fn_rows):
                 rw.setParent(None); rw.deleteLater()
