@@ -18,11 +18,19 @@ EXT_VID = ('.mp4', '.mkv', '.mov', '.avi', '.webm')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 try:
-    model = SentenceTransformer(MODEL_NAME).to(device)
+    model = SentenceTransformer(MODEL_NAME, device=device)
 except torch.OutOfMemoryError:
+    # SentenceTransformer's constructor pre-allocates on `device` —
+    # passing device="cpu" here is essential. The previous fallback
+    # called SentenceTransformer(MODEL_NAME) without a device arg,
+    # so it auto-detected cuda and OOM'd before we could .to("cpu").
     print(f"[aisearch] CUDA OOM loading model — falling back to CPU")
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
     device = "cpu"
-    model = SentenceTransformer(MODEL_NAME).to(device)
+    model = SentenceTransformer(MODEL_NAME, device=device)
 
 
 def load_db_logic(name):
