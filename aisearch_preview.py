@@ -4136,6 +4136,25 @@ class PreviewWindow(QWidget):
         path = self._attr_path
         if not path:
             return
+        # Refuse to save when the path is broken — the entry attached
+        # to a non-existent path is typically empty (or stale), and
+        # writing it back would propagate that emptiness to whatever
+        # file actually shares the basename. The user reported
+        # "rename based on no-data destroys codes encoded in filename"
+        # — this guard prevents that scenario.
+        if not os.path.exists(path):
+            try:
+                self.handler.app.statusBar().showMessage(
+                    _t(f"⚠ Save skipped — file not found at:\n{path} / "
+                       f"⚠ 保存中止：パス不在\n{path}"), 8000)
+                print(f"[save_attrs] SKIPPED — path missing: {path}")
+            except Exception:
+                pass
+            try:
+                self._update_bake_btn("idle")
+            except Exception:
+                pass
+            return
         self._update_bake_btn("pending")
         app = self.handler.app
         tags = []
@@ -4480,7 +4499,20 @@ class PreviewWindow(QWidget):
         the file. Pauses the watch-dir scanner so no stale closure writes
         back to the old path."""
         path = getattr(self, "_attr_path", None)
-        if not path or not os.path.exists(path):
+        if not path:
+            return
+        if not os.path.exists(path):
+            # Refuse to rename a non-existent path — would propagate
+            # an empty entry's codes onto whatever file shares the
+            # basename, destroying the existing rich filename. Surface
+            # the broken path so the user can investigate.
+            try:
+                self.handler.app.statusBar().showMessage(
+                    _t(f"⚠ Rename skipped — file not found at:\n{path} / "
+                       f"⚠ 改名中止：パス不在\n{path}"), 8000)
+                print(f"[rename] SKIPPED — path missing: {path}")
+            except Exception:
+                pass
             return
         app = self.handler.app
         # Suspend the auto-bake side effect of _save_attrs while renaming.
