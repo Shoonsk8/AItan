@@ -1640,7 +1640,17 @@ def read_raw_embedded_text(path: str) -> str:
             if os.path.exists(path):
                 break
         if not os.path.exists(path):
-            return "(file not found at this path — may have just been renamed)"
+            # Surface the attempted path + its basename so it's clear
+            # WHICH file the reader couldn't find. The earlier wording
+            # "may have just been renamed" alarmed the user when the
+            # actual file existed elsewhere on disk; showing the path
+            # makes it diagnosable instead of mysterious.
+            return ("(file not found at this path)\n"
+                    f"path tried: {path}\n"
+                    f"basename:   {os.path.basename(path)}\n"
+                    "(if the basename matches a file on disk in a "
+                    "different folder, the in-memory path index is "
+                    "stale — try Update DB)")
     ext = os.path.splitext(path)[1].lower()
     parts = []
     try:
@@ -1702,7 +1712,8 @@ def read_raw_embedded_text(path: str) -> str:
                         parts.append(f"[EXIF:{tag_name}]\n{v}")
     except FileNotFoundError:
         # File vanished mid-read — concurrent rename or bake swap.
-        return "(file not found at this path — may have just been renamed)"
+        return ("(file not found at this path)\n"
+                f"path tried: {path}")
     except Exception as e:
         parts.append(f"(error reading metadata: {e})")
     return "\n\n".join(parts)
