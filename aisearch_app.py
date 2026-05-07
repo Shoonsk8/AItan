@@ -3252,7 +3252,12 @@ class AISearchApp(QMainWindow):
                 _t("No path-scoped (/) rules to apply. / 適用する '/' ルールがありません。"))
             return
         changed_count = 0
+        skipped_locked = 0
         for p in list(self.data["paths"]):
+            # Lock guard: skip locked files entirely (auto path).
+            if not attrs_mod.is_editable(self.attrs_data, p):
+                skipped_locked += 1
+                continue
             try:
                 self.attrs_data, c = attrs_mod.apply_path_rules(
                     self.attrs_data, p, self.current_project, _path_rules=path_rules)
@@ -3261,8 +3266,12 @@ class AISearchApp(QMainWindow):
                 pass
         if changed_count:
             attrs_mod.save(self.current_project, self.attrs_data)
+        msg = f"Updated {changed_count} files"
+        if skipped_locked:
+            msg += f" ({skipped_locked} locked, skipped)"
         QMessageBox.information(self, _t("Apply Rules / ルール適用"),
-            _t(f"Updated {changed_count} files / {changed_count}件のファイルを更新しました"))
+            _t(f"{msg} / {changed_count}件更新"
+               + (f" / {skipped_locked} 件ロック中スキップ" if skipped_locked else "")))
 
 
 
@@ -5548,6 +5557,7 @@ class AISearchApp(QMainWindow):
         self._apply_rules_path_tag = path_tag_rules
         self._apply_rules_proj = proj
         self._apply_rules_renamed = 0
+        self._apply_rules_locked_skipped = 0
         try:
             self.btn_apply_rules.setText(_t("⏸ Stop / ⏸ 停止"))
         except Exception:
@@ -5581,6 +5591,12 @@ class AISearchApp(QMainWindow):
         for k in range(i, end):
             row, path = paths[k]
             if not os.path.exists(path):
+                continue
+            # Lock guard: Apply Rules is an auto path — locked files
+            # (editable=False, set after manual rename) are excluded
+            # entirely. Tracks count for the final status line.
+            if not attrs_mod.is_editable(self.attrs_data, path):
+                self._apply_rules_locked_skipped += 1
                 continue
             # 1. Apply detect rules to entry.
             if one_way:
@@ -5641,6 +5657,7 @@ class AISearchApp(QMainWindow):
         except Exception:
             pass
         renamed = getattr(self, "_apply_rules_renamed", 0)
+        skipped = getattr(self, "_apply_rules_locked_skipped", 0)
         total = len(getattr(self, "_apply_rules_paths", []))
         self._apply_rules_running = False
         try:
@@ -5648,8 +5665,10 @@ class AISearchApp(QMainWindow):
         except Exception:
             pass
         try:
-            self.statusBar().showMessage(
-                f"Apply Rules done: {renamed} of {total} files renamed.", 5000)
+            msg = f"Apply Rules done: {renamed} of {total} files renamed"
+            if skipped:
+                msg += f" ({skipped} locked, skipped)"
+            self.statusBar().showMessage(msg + ".", 5000)
         except Exception:
             pass
 
@@ -5668,13 +5687,17 @@ class AISearchApp(QMainWindow):
             self.statusBar().showMessage(
                 _t("No path rules to apply. / 適用するパス規則がありません。"), 3000)
             return
-        n_total = n_changed = 0
+        n_total = n_changed = n_locked = 0
         for root, _dirs, files in os.walk(d):
             for f in files:
                 if not f.lower().endswith(valid_exts):
                     continue
                 fp = os.path.join(root, f)
                 n_total += 1
+                # Lock guard: skip locked files entirely.
+                if not attrs_mod.is_editable(self.attrs_data, fp):
+                    n_locked += 1
+                    continue
                 self.attrs_data, ch = attrs_mod.apply_path_rules(
                     self.attrs_data, fp, proj, _path_rules=path_rules)
                 if ch:
@@ -5693,9 +5716,11 @@ class AISearchApp(QMainWindow):
             if cur:
                 try: pw._refresh_attrs_inner(cur)
                 except Exception: pass
+        suffix = f" ({n_locked} locked, skipped)" if n_locked else ""
         self.statusBar().showMessage(
-            _t(f"Path rules applied: {n_changed} of {n_total} files changed. / "
-               f"パス規則適用：{n_total}件中{n_changed}件更新。"), 5000)
+            _t(f"Path rules applied: {n_changed} of {n_total} files changed{suffix}. / "
+               f"パス規則適用：{n_total}件中{n_changed}件更新"
+               + (f"（{n_locked}件ロック中スキップ）" if n_locked else "") + "。"), 5000)
 
     def _exit_browse_mode(self):
         self._browse_dir = None
