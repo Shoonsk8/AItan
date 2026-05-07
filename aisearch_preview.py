@@ -2056,6 +2056,13 @@ class PreviewWindow(QWidget):
         # Lock/unlock all editable widgets based on editable state
         _locked = not bool(entry.get("editable", True))
         self._apply_protected_lock(_locked)
+        # Update the preview's media-pane rim — same color convention
+        # as the FM thumbnail rim so the lock state is visible at a
+        # glance whether the user is in FM or preview.
+        try:
+            self._update_preview_rim(path, _locked)
+        except Exception:
+            pass
 
 
 
@@ -4059,6 +4066,49 @@ class PreviewWindow(QWidget):
             self._protected_check.setStyleSheet(
                 "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
 
+    def _update_preview_rim(self, path, locked):
+        """Color the media-pane border by file kind + lock state, the
+        same convention used in the FM thumbnails:
+          - unlocked video → bright green
+          - locked   video → dark green
+          - unlocked pic   → no rim
+          - locked   pic   → dark red
+        Colors come from app config (Appearance → FM Thumbnail Rim
+        Colors), defaulting to the FM module's _RIM_DEFAULTS so the
+        FM and preview always show the same color for the same file."""
+        if not path:
+            return
+        cfg_obj = getattr(self.handler.app, "config", {}) or {}
+        try:
+            import aisearch_logic as _lg
+            ext = os.path.splitext(path)[1].lower()
+            is_video = ext in _lg.EXT_VID
+            try:
+                from aisearch_file_manager import _RIM_DEFAULTS as _RD
+            except Exception:
+                _RD = {"rim_video_open": "#00ff00",
+                       "rim_video_lock": "#1a6a1a",
+                       "rim_pic_lock":   "#a01a1a"}
+            color = None
+            if is_video and locked:
+                color = cfg_obj.get("rim_video_lock", _RD["rim_video_lock"])
+            elif is_video:
+                color = cfg_obj.get("rim_video_open", _RD["rim_video_open"])
+            elif locked:
+                color = cfg_obj.get("rim_pic_lock", _RD["rim_pic_lock"])
+            sa = getattr(self, "scroll_area", None)
+            if sa is None:
+                return
+            if color:
+                sa.setStyleSheet(
+                    f"QScrollArea {{ border: 4px solid {color}; "
+                    f"background: black; }}")
+            else:
+                # Unlocked picture — no rim, restore the original style.
+                sa.setStyleSheet("border: none; background: black;")
+        except Exception:
+            pass
+
     def _save_attrs(self):
         path = self._attr_path
         if not path:
@@ -4515,6 +4565,9 @@ class PreviewWindow(QWidget):
                     pc.blockSignals(False)
                     if hasattr(self, "_apply_protected_lock"):
                         self._apply_protected_lock(True)
+                # Update the media-pane rim too — same color the FM
+                # thumbnail will get on its next refresh.
+                self._update_preview_rim(path, True)
             except Exception:
                 pass
             # Embed the AItan block into the renamed file. We
@@ -4554,6 +4607,15 @@ class PreviewWindow(QWidget):
                 fm_win.refresh_all()
             except Exception:
                 pass
+        # Update the main table's row icon for this path too — same
+        # visual state in all three places (FM, preview border, table).
+        try:
+            for _r in range(app.table.rowCount()):
+                if app.table.get_row_path(_r) == path:
+                    app._refresh_row_rim(_r)
+                    break
+        except Exception:
+            pass
 
     def _bake_to_file(self, silent=False):
         """Embed all attrs (tags, prompt, seed, etc.) into the physical file as AItan{} block."""

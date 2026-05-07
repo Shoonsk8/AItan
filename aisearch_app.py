@@ -2590,6 +2590,14 @@ class AISearchApp(QMainWindow):
                 fm_win.refresh_all()
             except Exception:
                 pass
+        # Update the main table's row icon for this path too.
+        try:
+            for _r in range(self.table.rowCount()):
+                if self.table.get_row_path(_r) == path:
+                    self._refresh_row_rim(_r)
+                    break
+        except Exception:
+            pass
         new_state = "locked" if not was_locked else "unlocked"
         ja = "ロック" if not was_locked else "ロック解除"
         self.statusBar().showMessage(
@@ -4944,6 +4952,65 @@ class AISearchApp(QMainWindow):
         elif s >= 0.75: return QColor(sc[3])
         else:           return None
 
+    def _row_rim_color(self, full_path):
+        """Return the rim hex string for `full_path` (file kind + lock
+        state), or None for unlocked-picture (no rim). Same convention
+        as the FM thumbnail rim and the preview media border, sourced
+        from the same Appearance config keys."""
+        try:
+            ext = os.path.splitext(full_path)[1].lower()
+            is_video = ext in logic.EXT_VID
+            locked = not attrs_mod.is_editable(self.attrs_data, full_path)
+            try:
+                from aisearch_file_manager import _RIM_DEFAULTS as _RD
+            except Exception:
+                _RD = {"rim_video_open": "#00ff00",
+                       "rim_video_lock": "#1a6a1a",
+                       "rim_pic_lock":   "#a01a1a"}
+            cfg_obj = self.config or {}
+            if is_video and locked:
+                return cfg_obj.get("rim_video_lock", _RD["rim_video_lock"])
+            if is_video:
+                return cfg_obj.get("rim_video_open", _RD["rim_video_open"])
+            if locked:
+                return cfg_obj.get("rim_pic_lock", _RD["rim_pic_lock"])
+            return None
+        except Exception:
+            return None
+
+    def _row_rim_icon(self, full_path):
+        """Build a small colored-square QIcon for a row's Name cell,
+        or None if no rim should appear."""
+        col = self._row_rim_color(full_path)
+        if not col:
+            return None
+        px = QPixmap(12, 12)
+        px.fill(QColor(col))
+        return QIcon(px)
+
+    def _refresh_row_rim(self, row):
+        """Update a single row's Name-cell icon to reflect current
+        lock + kind. Use after a rename / lock toggle / dismantle."""
+        try:
+            it = self.table.item(row, 2)
+            if it is None:
+                return
+            full_path = self.table.get_row_path(row)
+            ic = self._row_rim_icon(full_path) if full_path else None
+            if ic is not None:
+                it.setIcon(ic)
+            else:
+                from PyQt6.QtGui import QIcon as _QI
+                it.setIcon(_QI())
+        except Exception:
+            pass
+
+    def _refresh_all_row_rims(self):
+        """Walk every row and update its Name-cell rim icon. Cheap;
+        called after bulk operations that change lock state."""
+        for r in range(self.table.rowCount()):
+            self._refresh_row_rim(r)
+
     def _append_row(self, score, size, name, masked_path, full_path):
         row = self.table.rowCount()
         self.table.insertRow(row)
@@ -4955,6 +5022,14 @@ class AISearchApp(QMainWindow):
             item = ItemCls(text)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, col, item)
+        # Apply the rim icon to the Name cell so the user sees lock +
+        # kind state at a glance in the table too.
+        try:
+            _rim_ic = self._row_rim_icon(full_path)
+            if _rim_ic is not None:
+                self.table.item(row, 2).setIcon(_rim_ic)
+        except Exception:
+            pass
         try:
             self.table.setItem(row, 4, DateItem(os.path.getmtime(full_path)))
         except Exception:
