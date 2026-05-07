@@ -878,6 +878,29 @@ class FilePane(QWidget):
         self._history_idx = len(self._history) - 1
         self._refresh()
 
+    def navigate_and_select(self, file_path):
+        """Navigate to the file's parent folder and highlight the file
+        in the tree. If the file's parent is already current, just
+        re-select. Skips the navigate (and history push) when no folder
+        change is needed so the user doesn't get a redundant Back step.
+        """
+        file_path = os.path.abspath(file_path)
+        parent = os.path.dirname(file_path)
+        if not os.path.isdir(parent):
+            return
+        if os.path.normpath(parent) != os.path.normpath(self._cur_dir or ""):
+            self.navigate(parent)
+        # Find the row whose UserRole matches the file path.
+        target_norm = os.path.normpath(file_path)
+        for i in range(self.tree.topLevelItemCount()):
+            it = self.tree.topLevelItem(i)
+            d = it.data(0, Qt.ItemDataRole.UserRole)
+            if d and os.path.normpath(d) == target_norm:
+                self.tree.setCurrentItem(it)
+                self.tree.scrollToItem(it)
+                self.tree.setFocus()
+                return
+
     def _go_back(self):
         if self._history_idx > 0:
             self._history_idx -= 1
@@ -1338,6 +1361,14 @@ class FileManagerWindow(QWidget):
         """Called by main app's right-arrow handler. Navigate the active
         pane (or the first pane if focus is elsewhere)."""
         self._active_pane().navigate(path)
+
+    def navigate_to_file(self, file_path):
+        """Open the FM at the file's parent folder AND select the file
+        in the tree. Used by the main app's right-click → File Manager
+        so the user can see exactly which folder owns the file."""
+        if not file_path:
+            return
+        self._active_pane().navigate_and_select(file_path)
 
     # ── Shortcut handlers — route to the active pane ────────────────────────
     def _rename_active(self):

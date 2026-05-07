@@ -2443,15 +2443,22 @@ class AISearchApp(QMainWindow):
             QMessageBox.critical(self, _t("New person / 新規人物"), f"{e}")
 
     def _open_fm_for_current_row(self):
-        """Right-click → File Manager: open the FM at the directory of
-        the currently-selected row. Falls back to query_path if nothing
-        is selected, or to the project's first base_dir."""
+        """Right-click → File Manager: open the FM at the parent folder
+        of the currently-selected row AND highlight the file in the
+        tree, so the user can see which folder owns the file. Falls
+        back to query_path / base_dirs / home when nothing is selected."""
         row = self._current_row()
         path = self.table.get_row_path(row) if row >= 0 else None
         if not path or not os.path.exists(path):
             path = self.query_path
         if path and os.path.exists(path):
-            self._open_file_manager(os.path.dirname(os.path.abspath(path)))
+            parent = os.path.dirname(os.path.abspath(path))
+            self._open_file_manager(parent)
+            # Now highlight the file inside the tree.
+            try:
+                self._fm_win.navigate_to_file(os.path.abspath(path))
+            except Exception:
+                pass
         elif self.base_dirs:
             self._open_file_manager(self.base_dirs[0])
         else:
