@@ -936,7 +936,33 @@ def load_faces_db(project):
 
 def save_faces_db(project, db):
     _faces_db_cache.pop(project, None)   # invalidate cache on write
-    with open(faces_db_path(project), "w", encoding="utf-8") as f:
+    p = faces_db_path(project)
+    # Safeguard: if we're about to write a much-smaller faces dict on
+    # top of a non-trivial existing one, snapshot the old file as a
+    # .wiped-<unix> backup first. Real shrinkage (user deleted N pids
+    # legitimately) still goes through — we just keep a recoverable
+    # copy. This wouldn't have prevented the original Clean up wipe
+    # from happening, but it would have left a backup the user could
+    # restore from instead of having to dig through versioned dirs.
+    try:
+        new_n = len((db or {}).get("faces", {}) or {})
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as _f:
+                _existing = json.load(_f)
+            old_n = len((_existing or {}).get("faces", {}) or {})
+            # Snapshot when wiping to (near-)empty from non-trivial,
+            # OR when losing more than half the persons in one save.
+            if (old_n >= 5 and new_n < max(2, old_n // 2)):
+                import time as _t
+                bak = f"{p}.wiped-{int(_t.time())}"
+                if not os.path.exists(bak):
+                    with open(bak, "w", encoding="utf-8") as _bf:
+                        json.dump(_existing, _bf, indent=2, ensure_ascii=False)
+                    print(f"[aisearch] faces DB shrank {old_n}->{new_n}; "
+                          f"snapshot saved to {bak}")
+    except Exception:
+        pass
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(db, f, indent=2, ensure_ascii=False)
 
 def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False):

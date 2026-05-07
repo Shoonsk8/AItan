@@ -1055,17 +1055,22 @@ class _PersonMixin:
                 continue
             if os.path.exists(fpath):
                 pid_has_attrs_file[_pid] = True
-        # Pid → source image path (face_card sources are stored in faces DB)
+        # Pid → source image path. The schema is faces[pid] = {
+        # "embeddings": [...], "source_path": "..." }; the previous
+        # version of this loop expected a list-of-dicts (an old, never-
+        # used schema), so isinstance(_entries, list) was always False,
+        # pid_src stayed empty, and every pid that didn't happen to
+        # have a path-existing attrs entry got flagged "invalid" and
+        # bulk-deleted. That's the wipe that nuked the user's faces DB
+        # from ~158 persons down to 3.
         faces_db = attrs_mod.load_faces_db(proj)
         pid_src = {}
-        for _pid, _entries in (faces_db.get("faces", {}) or {}).items():
-            # entries is a list of {emb, source_path} dicts
-            if isinstance(_entries, list):
-                for e in _entries:
-                    sp = e.get("source_path") if isinstance(e, dict) else None
-                    if sp:
-                        pid_src.setdefault(_pid, sp)
-                        break
+        for _pid, _data in (faces_db.get("faces", {}) or {}).items():
+            if not isinstance(_data, dict):
+                continue
+            sp = _data.get("source_path") or ""
+            if sp:
+                pid_src[_pid] = sp
         # Find invalid pids
         invalid = []
         for _pid in registry.keys():
