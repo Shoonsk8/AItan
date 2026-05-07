@@ -1205,9 +1205,18 @@ def dismantle_face_assignment(path, project, pid):
 
 def correct_person_id(path, project, correct_id, wrong_id=None):
     """Register face from path under correct_id.
-    If wrong_id is given, removes this face's contribution from that ID's samples."""
+
+    If wrong_id is given, fully dismantles this file's contribution to
+    wrong_id (drop closest sample, clear source_path if it pointed
+    here, delete the pid entirely if no samples remain) — same effect
+    as dismantle_face_assignment so a manual P change behaves like the
+    explicit "Dismantle" action followed by a register. User asked
+    for this so that a manual ID correction doesn't leave the rejected
+    face polluting the wrong pid's pool.
+    """
     try:
         import face_recognition
+        import numpy as _np
         img  = face_recognition.load_image_file(path)
         with _face_lock:
             encs = face_recognition.face_encodings(img)
@@ -1228,15 +1237,27 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
         except ValueError:
             pass
 
-        # Remove from wrong ID if specified
+        # Full dismantle of wrong_id's tie to this file:
+        # 1. Drop the sample most similar to this face from the pool.
+        # 2. Clear source_path if it pointed at THIS file.
+        # 3. Delete the pid entirely if the pool ends up empty — keeps
+        #    a phantom-id from haunting the matcher / persons grid.
         if wrong_id and wrong_id in faces:
-            samples = faces[wrong_id].get("embeddings", [])
+            fdata = faces[wrong_id]
+            samples = list(fdata.get("embeddings", []))
+            # Migrate legacy single-embedding entries into the pool
+            if not samples and fdata.get("embedding"):
+                samples = [fdata["embedding"]]
             if samples:
-                # Drop the sample most similar to enc
-                distances = face_recognition.face_distance(samples, encs[0])
-                worst_idx = int(distances.argmin())
+                distances = face_recognition.face_distance(_np.array(samples), encs[0])
+                worst_idx = int(_np.argmin(distances))
                 samples.pop(worst_idx)
-                faces[wrong_id]["embeddings"] = samples
+            fdata["embeddings"] = samples
+            fdata.pop("embedding", None)
+            if os.path.normpath(fdata.get("source_path", "")) == os.path.normpath(path):
+                fdata["source_path"] = ""
+            if not samples:
+                faces.pop(wrong_id, None)
 
         save_faces_db(project, db)
     except Exception:
