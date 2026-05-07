@@ -2787,8 +2787,31 @@ class PreviewWindow(QWidget):
         old_pid = entry.get("person_id", "")
         wrong   = old_pid if old_pid and old_pid != new_pid else None
 
-        def _fix():
-            attrs_mod.correct_person_id(path, app.current_project, new_pid, wrong_id=wrong)
+        def _fix(_p=path, _np=new_pid, _w=wrong, _app=app):
+            r = attrs_mod.correct_person_id(_p, _app.current_project, _np, wrong_id=_w)
+            # Report dismantle / register outcome back to the main
+            # window status bar so the user can see the operation
+            # actually ran (re-running face detection takes time).
+            try:
+                if r is None:
+                    _msg = f"P {_w or '?'}→{_np}: failed (could not extract face)"
+                else:
+                    _parts = [f"P {_w or '∅'}→{_np}: registered"]
+                    if r.get("samples_removed"):
+                        _parts.append(f"removed {r['samples_removed']} sample from {_w}")
+                    if r.get("source_path_cleared"):
+                        _parts.append(f"cleared {_w} rep pic")
+                    if r.get("pid_deleted"):
+                        _parts.append(f"deleted empty {_w}")
+                    _msg = " · ".join(_parts)
+                from PyQt6.QtCore import QMetaObject, Qt as _Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    _app.statusBar(), "showMessage",
+                    _Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, _msg), Q_ARG(int, 6000))
+                print(f"[correct-pid] {os.path.basename(_p)}: {_msg}")
+            except Exception:
+                pass
         threading.Thread(target=_fix, daemon=True).start()
 
         attrs_mod.set_file(app.attrs_data, path,

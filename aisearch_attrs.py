@@ -1242,6 +1242,9 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
         # 2. Clear source_path if it pointed at THIS file.
         # 3. Delete the pid entirely if the pool ends up empty — keeps
         #    a phantom-id from haunting the matcher / persons grid.
+        result = {"correct_id": correct_id, "wrong_id": wrong_id,
+                  "samples_removed": 0, "source_path_cleared": False,
+                  "pid_deleted": False}
         if wrong_id and wrong_id in faces:
             fdata = faces[wrong_id]
             samples = list(fdata.get("embeddings", []))
@@ -1252,16 +1255,20 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
                 distances = face_recognition.face_distance(_np.array(samples), encs[0])
                 worst_idx = int(_np.argmin(distances))
                 samples.pop(worst_idx)
+                result["samples_removed"] = 1
             fdata["embeddings"] = samples
             fdata.pop("embedding", None)
             if os.path.normpath(fdata.get("source_path", "")) == os.path.normpath(path):
                 fdata["source_path"] = ""
+                result["source_path_cleared"] = True
             if not samples:
                 faces.pop(wrong_id, None)
+                result["pid_deleted"] = True
 
         save_faces_db(project, db)
+        return result
     except Exception:
-        pass
+        return None
 
 
 def reassign_person_id(old_id, new_id, project, attrs_data):
