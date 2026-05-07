@@ -472,6 +472,17 @@ class _DbMixin:
                     if emb is None:
                         failed.append((p, "unreadable/corrupt")); continue
 
+                    # Lock guard: if the user has marked this file as
+                    # not-editable (confirmed face/CLIP), skip the auto
+                    # re-detection steps. The CLIP embedding above is
+                    # still needed for the search index. Manual UI
+                    # actions (Update Face button, P field pick,
+                    # dismantle, set BASE, etc.) bypass this lock —
+                    # only the scanner auto-path is gated.
+                    _locked = not attrs_mod.is_editable(attrs_data, p)
+                    if _locked:
+                        continue
+
                     # ── Step 2: CLIP auto-detect attributes (always-on for FIELD_DEFS fields) ─────
                     self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "attrs")))
                     try:

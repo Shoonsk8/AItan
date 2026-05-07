@@ -116,20 +116,43 @@ def app_choices(path):
     return out
 
 
-def _draw_video_rim(pixmap, width=3, color="#00ff00"):
-    """Stamp a green border around a thumbnail to mark it as a video.
-    Matches the rim style used on the main-window drop zone."""
+def _stamp_rim(pixmap, color, width=3):
+    """Stamp a colored border around the pixmap (mutates in place)."""
     p = QPainter(pixmap)
     pen = QPen(QColor(color))
     pen.setWidth(width)
     pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
     p.setPen(pen)
-    # Inset by half-width so the stroke lands inside the bounds
     half = width / 2
     p.drawRect(int(half), int(half),
                pixmap.width() - width, pixmap.height() - width)
     p.end()
     return pixmap
+
+
+# Rim color per (is_video, locked) state. User-overridable via
+# Appearance settings (config keys below) so the colors aren't
+# hard-baked. Defaults follow the project's color convention:
+#   unlocked video → bright green (default video marker)
+#   locked   video → dark   green (video marker + locked tint)
+#   unlocked pic   → no rim
+#   locked   pic   → dark   red   (locked-pic marker)
+_RIM_DEFAULTS = {
+    "rim_video_open": "#00ff00",
+    "rim_video_lock": "#1a6a1a",
+    "rim_pic_lock":   "#a01a1a",
+}
+
+
+def _rim_color_for(is_video, locked, cfg=None):
+    cfg = cfg or {}
+    if is_video and locked:
+        return cfg.get("rim_video_lock", _RIM_DEFAULTS["rim_video_lock"])
+    if is_video:
+        return cfg.get("rim_video_open", _RIM_DEFAULTS["rim_video_open"])
+    if locked:
+        return cfg.get("rim_pic_lock", _RIM_DEFAULTS["rim_pic_lock"])
+    return None   # unlocked picture — no rim
 
 
 def _make_thumb_pixmap(path, size):
@@ -164,8 +187,9 @@ def _make_thumb_pixmap(path, size):
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation)
-        if is_video:
-            _draw_video_rim(px)
+        # NOTE: rim is now stamped at icon-apply time (so lock-state
+        # changes can update the rim without invalidating the cache).
+        # The cached pixmap stays plain.
         return px
     except Exception:
         return None
@@ -569,10 +593,28 @@ class _FMTreeList(QTreeWidget):
             return
         item, _path = entry
         try:
-            item.setIcon(0, QIcon(pixmap))
+            item.setIcon(0, QIcon(self._rim_for(_path, pixmap)))
         except RuntimeError:
             # Item was deleted (e.g. tree was cleared mid-load)
             pass
+
+    def _rim_for(self, path, pixmap):
+        """Return a pixmap with the appropriate rim stamped on a copy
+        (cache stays plain). Rim color depends on file kind (video vs.
+        picture) and lock state (entry["editable"] in attrs_data).
+        Colors are user-overridable via Appearance config keys."""
+        import aisearch_attrs as _am
+        ext = os.path.splitext(path)[1].lower()
+        is_video = ext in logic.EXT_VID
+        attrs_data = getattr(self._fm.app, "attrs_data", {}) or {}
+        locked = not _am.is_editable(attrs_data, path)
+        cfg = getattr(self._fm.app, "config", {}) or {}
+        color = _rim_color_for(is_video, locked, cfg)
+        if not color:
+            return pixmap
+        out = pixmap.copy()
+        _stamp_rim(out, color)
+        return out
 
     def _make_folder_item(self, name, full):
         it = _FMItem([name, "", "", "Folder"], kind="dir")
@@ -617,7 +659,7 @@ class _FMTreeList(QTreeWidget):
         cache_key = f"{full}|{mtime}|{self._thumb_size}"
         cached = _THUMB_CACHE.get(cache_key)
         if cached is not None:
-            it.setIcon(0, QIcon(cached))
+            it.setIcon(0, QIcon(self._rim_for(full, cached)))
         else:
             self._items_by_key[cache_key] = (it, full)
         return it
