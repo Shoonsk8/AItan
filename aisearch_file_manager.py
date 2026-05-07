@@ -1062,11 +1062,31 @@ class FilePane(QWidget):
             msg = f"Move to trash:\n{paths[0]}"
         else:
             msg = f"Move {len(paths)} item(s) to trash?"
-        if QMessageBox.question(self, "Trash", msg,
-                                QMessageBox.StandardButton.Yes |
-                                QMessageBox.StandardButton.No
-                                ) != QMessageBox.StandardButton.Yes:
-            return
+        # Honor the global "Ask confirmation before moving to Trash"
+        # setting (Settings → Settings → Trash Options). Adds a
+        # "Don't show again" checkbox so the user can turn it off
+        # right from the dialog; toggling back on is via Settings.
+        if self.app.config.get("delete_confirm", True):
+            from PyQt6.QtWidgets import QCheckBox
+            box = QMessageBox(self)
+            box.setWindowTitle("Trash")
+            box.setText(msg)
+            box.setStandardButtons(QMessageBox.StandardButton.Yes
+                                   | QMessageBox.StandardButton.No)
+            box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            cb = QCheckBox("Don't show again (toggle in Settings → Trash)")
+            box.setCheckBox(cb)
+            ans = box.exec()
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+            if cb.isChecked():
+                self.app.config["delete_confirm"] = False
+                try:
+                    import aisearch_config as _cfg
+                    _cfg.save_config(self.app.config,
+                                     getattr(self.app, "current_project", None))
+                except Exception:
+                    pass
         import aisearch_front_page as _fp
         errors = []
         any_removed = False
