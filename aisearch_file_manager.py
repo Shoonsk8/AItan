@@ -664,6 +664,37 @@ class _FMTreeList(QTreeWidget):
             self._items_by_key[cache_key] = (it, full)
         return it
 
+    def refresh_all_rims(self):
+        """Walk the tree (including already-expanded children) and re-stamp
+        the rim on every file item's icon based on current attrs_data.
+        Cheaper than populate_root because we don't clear / rebuild —
+        just update icons in place. Used after a rename / lock toggle
+        so files in expanded subfolders get the new rim without
+        depending on a re-expand cycle."""
+        from PyQt6.QtCore import Qt as _Qt
+        def visit(it):
+            try:
+                data = it.data(0, _Qt.ItemDataRole.UserRole)
+                if data and data != ".." and data != self._PLACEHOLDER:
+                    if os.path.isfile(data):
+                        # Look up cached pixmap. If absent, the icon is
+                        # already either an emoji folder or queued for
+                        # async load — _on_thumb_ready will rim it then.
+                        try:
+                            mtime = os.path.getmtime(data)
+                        except OSError:
+                            mtime = 0
+                        cache_key = f"{data}|{mtime}|{self._thumb_size}"
+                        cached = _THUMB_CACHE.get(cache_key)
+                        if cached is not None:
+                            it.setIcon(0, QIcon(self._rim_for(data, cached)))
+            except RuntimeError:
+                return
+            for i in range(it.childCount()):
+                visit(it.child(i))
+        for i in range(self.topLevelItemCount()):
+            visit(self.topLevelItem(i))
+
     def _on_expand(self, item):
         # Lazy expansion: replace the placeholder child with the real list
         if item.childCount() == 1:
@@ -1473,6 +1504,17 @@ class FileManagerWindow(QWidget):
     def refresh_all(self):
         for p in self._panes:
             p._refresh()
+
+    def refresh_rims_only(self):
+        """Lighter than refresh_all — walk every pane's tree and update
+        rim icons in place. No tree clear, no expansion-state dance,
+        so files in expanded subfolders pick up the new rim immediately
+        instead of waiting for a lazy re-expand."""
+        for p in self._panes:
+            try:
+                p.tree.refresh_all_rims()
+            except Exception:
+                pass
 
     # ── External entry point used by AISearchApp ────────────────────────────
     def navigate(self, path):

@@ -2583,11 +2583,16 @@ class AISearchApp(QMainWindow):
             attrs_mod.save(proj, self.attrs_data)
         except Exception:
             pass
-        # Refresh FM thumbnail rim if the FM is showing this file's folder.
+        # Refresh FM thumbnail rims (every pane, every depth) without
+        # rebuilding the tree — files in expanded subfolders pick up
+        # the new rim immediately. Was: refresh_all() rebuilt the
+        # tree which deferred child rim updates to the lazy-expand
+        # callback, so the user saw the rim flip on the parent folder
+        # but not on already-expanded children.
         fm_win = getattr(self, "_fm_win", None)
         if fm_win is not None:
             try:
-                fm_win.refresh_all()
+                fm_win.refresh_rims_only()
             except Exception:
                 pass
         # Update the main table's row icon for this path too.

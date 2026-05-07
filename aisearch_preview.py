@@ -4598,13 +4598,14 @@ class PreviewWindow(QWidget):
         finally:
             app._watcher_paused = _was_paused
         self._update_rename_btn("ok")
-        # Refresh FM thumbnail rim if the FM is open — the rim reads
-        # editable from attrs_data at icon-apply time, but it only
-        # re-applies on a populate/refresh.
+        # Refresh FM thumbnail rims without rebuilding the tree — files
+        # in expanded subfolders pick up the new rim immediately. Was:
+        # refresh_all() rebuilt the tree, so already-expanded children
+        # only got the new rim after Qt's lazy re-expand fired.
         fm_win = getattr(app, "_fm_win", None)
         if fm_win is not None:
             try:
-                fm_win.refresh_all()
+                fm_win.refresh_rims_only()
             except Exception:
                 pass
         # Update the main table's row icon for this path too — same
