@@ -3,6 +3,23 @@ import json, os, sys, cv2, re, datetime, time as _time, threading as _threading
 # dlib (via face_recognition) is not thread-safe — serialize all face detection calls.
 _face_lock = _threading.Lock()
 
+
+def _face_encodings_with_fallback(img):
+    """face_recognition.face_encodings(img) but with an upsample-2
+    retry when the default HOG-1 finds nothing. Many small / off-
+    angle / AI-generated faces are missed by the default settings;
+    upsampling once typically catches them. Caller still owns the
+    _face_lock; this helper just adds the fallback."""
+    import face_recognition as _fr
+    encodings = _fr.face_encodings(img)
+    if encodings:
+        return encodings
+    # No faces at default settings — retry with upsample=2.
+    locations = _fr.face_locations(img, number_of_times_to_upsample=2)
+    if not locations:
+        return []
+    return _fr.face_encodings(img, known_face_locations=locations)
+
 _DIR      = os.path.dirname(os.path.abspath(__file__))
 _DATA_DIR = os.path.join(_DIR, "data")
 DATA_DIR  = _DATA_DIR   # exported for use by other modules
@@ -994,7 +1011,7 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
                 return None
         # dlib is not thread-safe — serialize all face encoding calls
         with _face_lock:
-            encodings = face_recognition.face_encodings(img)
+            encodings = _face_encodings_with_fallback(img)
         if not encodings:
             return None    # no face — background/object, no ID assigned
         enc = encodings[0]
@@ -1077,7 +1094,7 @@ def match_person_id(path, project, threshold=0.65):
             except (UnidentifiedImageError, OSError):
                 return None
         with _face_lock:
-            encodings = face_recognition.face_encodings(img)
+            encodings = _face_encodings_with_fallback(img)
         if not encodings:
             return None
         enc   = encodings[0]
@@ -1159,7 +1176,7 @@ def dismantle_face_assignment(path, project, pid):
             except (UnidentifiedImageError, OSError):
                 return None
         with _face_lock:
-            encs = face_recognition.face_encodings(img)
+            encs = _face_encodings_with_fallback(img)
         if not encs:
             return None
         enc = encs[0]
@@ -1219,7 +1236,7 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
         import numpy as _np
         img  = face_recognition.load_image_file(path)
         with _face_lock:
-            encs = face_recognition.face_encodings(img)
+            encs = _face_encodings_with_fallback(img)
         if not encs:
             return
         enc = encs[0].tolist()
@@ -3568,8 +3585,18 @@ def inspect_face_detection(path, project):
             img = cv2.cvtColor(_frame, cv2.COLOR_BGR2RGB)
         else:
             img = face_recognition.load_image_file(path)
+        # First pass: HOG model with default upsample (fast). Most faces
+        # land here. If nothing's found, retry with upsample=2 — that's
+        # where small / off-angle / AI-generated faces typically show up.
+        # User reported "face clearly exists" but num_faces=0; the
+        # default HOG setting misses small or unusual faces.
         with _face_lock:
             locations = face_recognition.face_locations(img)
+            if not locations:
+                # Upsample retry — doubles the search cost but finds
+                # faces below ~80 px that HOG-1 misses.
+                locations = face_recognition.face_locations(
+                    img, number_of_times_to_upsample=2)
             encodings = face_recognition.face_encodings(img, known_face_locations=locations)
         result["num_faces"] = len(encodings)
         if not encodings:
