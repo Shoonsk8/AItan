@@ -1636,9 +1636,21 @@ def read_raw_embedded_text(path: str) -> str:
             from PIL import Image, ExifTags
             with Image.open(path) as img:
                 info = img.info
-                # Text chunks / info dict
+                # Text chunks / info dict.
+                # Skip:
+                #   - Binary blobs PIL exposes as bytes (exif, icc, etc.)
+                #   - JPEG/PNG/WEBP encoding-internal flags that don't
+                #     carry meaningful metadata. progressive/progression
+                #     in particular is just "is this baseline or
+                #     progressive JPEG?" — leaks through to the user
+                #     and looks like data when it isn't.
                 _skip_binary = ("exif", "icc_profile", "dpi", "jfif", "jfif_version",
-                                "jfif_density", "jfif_unit", "adobe", "photoshop")
+                                "jfif_density", "jfif_unit", "adobe", "photoshop",
+                                "progressive", "progression",
+                                "interlace", "compression", "filter",
+                                "gamma", "transparency", "srgb",
+                                "background", "duration", "loop",
+                                "version", "ihdr", "chromaticity")
                 for k, v in info.items():
                     if k.lower() in _skip_binary or isinstance(v, (bytes, bytearray)):
                         continue
