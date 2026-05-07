@@ -674,16 +674,27 @@ class _FMTreeList(QTreeWidget):
         return super().eventFilter(obj, event)
 
     def _start_url_drag(self):
-        items = self.selectedItems()
-        if not items and self._press_item is not None:
-            items = [self._press_item]
+        # Always include the press item, even if Qt's late selection
+        # update dropped it out of selectedItems(). Union them so a
+        # multi-selection drag never silently loses one row.
+        items = list(self.selectedItems())
+        if self._press_item is not None and self._press_item not in items:
+            items.insert(0, self._press_item)
         if not items:
             return
         urls = []
+        seen = set()   # dedupe — the same path could appear via the
+                       # press item AND a duplicate selection entry
         for it in items:
             data = it.data(0, Qt.ItemDataRole.UserRole)
-            if data and data != ".." and data != self._PLACEHOLDER and os.path.exists(data):
-                urls.append(QUrl.fromLocalFile(data))
+            if not data or data == ".." or data == self._PLACEHOLDER:
+                continue
+            if not os.path.exists(data):
+                continue
+            if data in seen:
+                continue
+            seen.add(data)
+            urls.append(QUrl.fromLocalFile(data))
         if not urls:
             return
         mime = QMimeData()
@@ -1246,6 +1257,7 @@ class FileManagerWindow(QWidget):
         moved   = 0
         renames = {}            # old → new (for batched store flush)
         errors  = []
+        skipped = []            # already-at-target
         batch   = []
         for src in src_paths:
             if not os.path.exists(src):
@@ -1253,6 +1265,7 @@ class FileManagerWindow(QWidget):
                 continue
             dst = os.path.join(target_dir, os.path.basename(src))
             if os.path.normpath(src) == os.path.normpath(dst):
+                skipped.append(os.path.basename(src))
                 continue
             try:
                 shutil.move(src, dst)
@@ -1276,9 +1289,18 @@ class FileManagerWindow(QWidget):
                     self.app._push_undo(batch)
             except Exception:
                 pass
-        if errors:
-            QMessageBox.warning(self, "Move",
-                f"Moved {moved}; {len(errors)} error(s):\n" + "\n".join(errors[:10]))
+        # Surface anything that wasn't moved so the user isn't left
+        # wondering why a selection of N produced N - k moves.
+        if errors or skipped:
+            parts = [f"Moved {moved}"]
+            if skipped:
+                parts.append(f"{len(skipped)} already in target: "
+                             + ", ".join(skipped[:5])
+                             + ("…" if len(skipped) > 5 else ""))
+            if errors:
+                parts.append(f"{len(errors)} error(s):\n"
+                             + "\n".join(errors[:10]))
+            QMessageBox.warning(self, "Move", "\n".join(parts))
         # Mirror moves into the main window's table rows.
         self._update_main_table_paths(renames)
         self.refresh_all()
