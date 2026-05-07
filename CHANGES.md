@@ -2,6 +2,30 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-06 — v2.4.2
+
+### Person / face management
+- `aisearch_app.py:_assign_new_person` + `attr_viewer.FieldWidget` (key="P") — new ➕ button on the preview window's P attribute row. Allocates the next free 3-hex pid (skipping any used keys), seeds `faces[<pid>]` with the file's face encoding, tags the file. Use after Update Face shows a wrong match.
+- `aisearch_app.py:_set_base_face` — non-destructive. New BASE encoding is prepended to the existing pool (deduped, capped at 20) instead of wiping every prior embedding. Previous BASE survives as a sample. Confirmation dialog removed (no longer destructive).
+- `aisearch_app.py:_set_rep_pic / _set_base_face / _add_face_sample / _assign_new_person` — all now refresh the Settings → Persons tab card grid live (`_refresh_persons_tab_if_open`) so the icon flips to the new file immediately.
+- `aisearch_preview.py:_apply_detected_face` — always calls `correct_person_id`, including when the file had no prior pid. Manual confirmations now grow the sample pool, not just pid corrections.
+- `aisearch_preview.py:_assign_new_person_for_current` — also kicks the Rename button into yellow "pending" state after assigning a fresh pid.
+- `aisearch_app.py:_on_right_click` — main-table right-click adds: **Set as rep pic / Set as BASE face / Add this face to <pid> samples / Assign new person ID** (latter moved to ➕ on P attribute in v2.4.2).
+- `aisearch_preview.py:_auto_apply_face` — auto-detect now never overrides an already-set person_id. Manual Apply (button or ➕) is the only path that flips a stored pid. (Earlier confidence-gated override grabbed too many unrelated faces under the largest embedding pool.)
+- `aisearch_preview.py:_on_inspect` — face detection runs even when person_id is set; the FACE tile shows top matches even on already-tagged files. The skip-when-set guard is gone.
+- `aisearch_preview.py` (FACE display) — suppress the trailing name when it's just the numeric pid (e.g. P003 named "3" → "P003  0.608"). Real names ("Sophie") unaffected.
+
+### File Manager
+- `aisearch_file_manager.py:FilePane` — Back / Fwd / Up buttons enlarged to 70 px min with bold text + Unicode arrow + word ("◀ Back", "Fwd ▶", "▲ Up").
+
+### Apply Rules
+- `aisearch_app.py:_apply_rules_step / _apply_rules_tick` — also processes path-scoped `tag_group` rules via `attrs_mod.apply_path_rules`. Was: only `field` rules ran; rules like `Nastia/ → ModelImage_Table = a0` silently skipped.
+- `aisearch_attrs.py:apply_path_rules` — strips `_Table` suffix when looking up the section style, so `tag_group="ModelImage_Table"` correctly maps to the matrix section `ModelImage` and writes `entry["ModelImage"] = a0` instead of polluting `entry["tags"]`.
+
+### Right-click menu
+- `aisearch_front_page.py:create_context_menu` — removed Open Folder + Attributes (both obsolete; preview's attr panel and the new File Manager entry replace them).
+- `aisearch_app.py` — removed the now-orphan `edit_attrs / _build_attr_window / _attr_win_load / open_folder` (~165 lines).
+
 ## 2026-05-06 — v2.4.1
 
 Polish on top of v2.4.
