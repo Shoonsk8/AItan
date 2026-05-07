@@ -658,10 +658,13 @@ class _FMTreeList(QTreeWidget):
                 pos = event.position().toPoint()
                 self._press_pos = pos
                 self._press_item = self.itemAt(pos)
-                # Plain click on an already-selected item in a multi-selection:
-                # Qt would collapse to just that item right now, killing the
-                # drag. Defer the collapse until release so a drag of the
-                # full multi-selection still works.
+                # Plain click → collapse selection to the clicked row
+                # NOW (don't wait for release). Without this, an old
+                # multi-selection survives the click and the subsequent
+                # drag picks up all of it — the user reported this as
+                # "click + drag acts like shift+click". To drag a
+                # multi-selection, hold Ctrl or Shift while dragging,
+                # which Qt's default handler honors.
                 mods = event.modifiers()
                 modifierless = not (mods & (
                     Qt.KeyboardModifier.ControlModifier |
@@ -669,8 +672,11 @@ class _FMTreeList(QTreeWidget):
                 sel = self.selectedItems()
                 if (modifierless and self._press_item is not None
                         and self._press_item in sel and len(sel) > 1):
-                    self._suppress_collapse = True
-                    return True   # swallow the press from Qt's default
+                    # Force collapse to the clicked row before super() so
+                    # the about-to-start drag carries only this row.
+                    self.clearSelection()
+                    self._press_item.setSelected(True)
+                    self.setCurrentItem(self._press_item)
                 self._suppress_collapse = False
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
