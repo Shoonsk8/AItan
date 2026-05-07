@@ -4484,10 +4484,23 @@ class PreviewWindow(QWidget):
             if new_path != path:
                 _propagate_rename(path, new_path)
                 path = new_path
+            # Manual rename auto-locks the file (editable=False) so
+            # the scanner auto-path and Apply Rules skip it on future
+            # runs. Independent of the explicit Lock/Unlock toggle.
+            app.attrs_data.setdefault(path, {})["editable"] = False
             attrs_mod.save(app.current_project, app.attrs_data)
         finally:
             app._watcher_paused = _was_paused
         self._update_rename_btn("ok")
+        # Refresh FM thumbnail rim if the FM is open — the rim reads
+        # editable from attrs_data at icon-apply time, but it only
+        # re-applies on a populate/refresh.
+        fm_win = getattr(app, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
 
     def _bake_to_file(self, silent=False):
         """Embed all attrs (tags, prompt, seed, etc.) into the physical file as AItan{} block."""
