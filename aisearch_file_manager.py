@@ -709,18 +709,42 @@ class _FMTreeList(QTreeWidget):
         if not ev.mimeData().hasUrls():
             ev.ignore(); return
         target = None
-        item = self.itemAt(ev.position().toPoint())
+        pos = ev.position().toPoint()
+        item = self.itemAt(pos)
         if item is not None:
             data = item.data(0, Qt.ItemDataRole.UserRole)
             if data == "..":
                 target = os.path.dirname(self._fm._cur_dir)
+            elif data == self._PLACEHOLDER:
+                # Lazy-expand placeholder child — use the parent folder
+                _p = item.parent()
+                if _p is not None:
+                    pdata = _p.data(0, Qt.ItemDataRole.UserRole)
+                    if pdata and os.path.isdir(pdata):
+                        target = pdata
             elif data and os.path.isdir(data):
                 target = data
+            elif data and os.path.isfile(data):
+                # Dropped on a file row → its parent folder is the
+                # target. Without this branch the drop fell through to
+                # _cur_dir (one level up) when the user aimed at the
+                # row of a file inside an expanded folder.
+                target = os.path.dirname(data)
         if not target:
             target = self._fm._cur_dir
         srcs = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
         if not srcs or not os.path.isdir(target):
             ev.ignore(); return
+        # Don't move a folder into itself or one of its descendants.
+        for src in srcs:
+            try:
+                src_abs = os.path.abspath(src)
+                tgt_abs = os.path.abspath(target)
+                if (tgt_abs == src_abs
+                        or tgt_abs.startswith(src_abs + os.sep)):
+                    ev.ignore(); return
+            except Exception:
+                pass
         ev.acceptProposedAction()
         self._fm.move_files_into(srcs, target)
 
