@@ -2016,6 +2016,36 @@ class AISearchApp(QMainWindow):
                 self._refresh_attrs_indicator(r, path)  # restore yellow on name col if needed
 
     def closeEvent(self, event):
+        # If a DB scan is running, ask it to stop and give the worker
+        # a beat to release its CUDA tensors. Otherwise the daemon
+        # thread gets torn down mid-allocation and we've seen the GPU
+        # memory linger across the next launch (causing CUDA OOM at
+        # SentenceTransformer load). The worker checkpoints on stop,
+        # so progress isn't lost.
+        sw = getattr(self, "_settings_win", None)
+        if sw is not None and getattr(sw, "_is_scanning", False):
+            try:
+                sw._unified_stop()
+                # Pump the event loop briefly so the worker's stop
+                # check fires and CUDA tensors actually get freed.
+                from PyQt6.QtCore import QEventLoop, QTimer
+                loop = QTimer()
+                loop.setSingleShot(True)
+                loop.start(800)
+                while loop.isActive() and getattr(sw, "_is_scanning", False):
+                    QApplication.processEvents(
+                        QEventLoop.ProcessEventsFlag.AllEvents, 50)
+            except Exception:
+                pass
+        # Best-effort: drop any CUDA cache we still hold. Frees the
+        # 200–400 MiB of fragmented blocks PyTorch holds onto.
+        try:
+            import torch as _torch
+            if _torch.cuda.is_available():
+                _torch.cuda.empty_cache()
+        except Exception:
+            pass
+
         if self.preview_handler.window:
             self.preview_handler.window.close()
         g = self.geometry()
