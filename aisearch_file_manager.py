@@ -1236,6 +1236,15 @@ class FilePane(QWidget):
                     renames, getattr(self.app, "current_project", None))
             except Exception:
                 pass
+            # Auto-lock on rename — same gesture as the preview
+            # 🪪 Rename and the main-app rename. Sets editable=False
+            # so the scanner / Apply Rules skip this file going forward.
+            try:
+                attrs_data = getattr(self.app, "attrs_data", None)
+                if isinstance(attrs_data, dict):
+                    attrs_data.setdefault(new_path, {})["editable"] = False
+            except Exception:
+                pass
         elif os.path.isdir(new_path):
             renames = self.fm._sync_folder_rename(old_path, new_path)
         # Persist attrs.json + features.pt — without this the in-memory
