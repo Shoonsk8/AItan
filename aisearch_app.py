@@ -2016,18 +2016,35 @@ class AISearchApp(QMainWindow):
                 self._refresh_attrs_indicator(r, path)  # restore yellow on name col if needed
 
     def closeEvent(self, event):
-        # If a DB scan is running, ask it to stop and give the worker
-        # a beat to release its CUDA tensors. Otherwise the daemon
-        # thread gets torn down mid-allocation and we've seen the GPU
-        # memory linger across the next launch (causing CUDA OOM at
-        # SentenceTransformer load). The worker checkpoints on stop,
-        # so progress isn't lost.
+        # If a DB scan is running, ask before closing — progress is
+        # checkpointed on stop so the user can resume, but they should
+        # know what's about to happen. Was: silently cancelled the
+        # scan and exited. The dialogue also gives the user a chance
+        # to back out if they hit X by accident mid-update.
         sw = getattr(self, "_settings_win", None)
         if sw is not None and getattr(sw, "_is_scanning", False):
+            ans = QMessageBox.question(
+                self,
+                _t("Update Running / 更新中"),
+                _t("A database update is in progress.\n"
+                   "Closing will stop it (progress is saved — next "
+                   "Update resumes).\n\nClose anyway?\n\n"
+                   "データベース更新中です。\n"
+                   "閉じると停止します（進行状況は保存されます）。\n\n"
+                   "閉じますか？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
             try:
                 sw._unified_stop()
                 # Pump the event loop briefly so the worker's stop
-                # check fires and CUDA tensors actually get freed.
+                # check fires and CUDA tensors actually get freed
+                # before the daemon thread is torn down. Without this,
+                # PyTorch's allocator pool can leak across the next
+                # launch and trigger CUDA OOM on model load.
                 from PyQt6.QtCore import QEventLoop, QTimer
                 loop = QTimer()
                 loop.setSingleShot(True)
