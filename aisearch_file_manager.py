@@ -1044,6 +1044,10 @@ class FilePane(QWidget):
                 pass
         elif os.path.isdir(new_path):
             self.fm._sync_folder_rename(old_path, new_path)
+        # Persist attrs.json + features.pt — without this the in-memory
+        # path swap was lost on next launch and the file looked like
+        # it had no attributes (entry stuck under the old path key).
+        self.fm._save_app_data()
         self.fm.refresh_all()
 
     def _delete_selected(self):
