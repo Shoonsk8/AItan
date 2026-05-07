@@ -711,10 +711,14 @@ class _FilenameMixin:
             # were captured once at tab init; updates from the Attributes
             # tab were invisible until the app restarted.
             _tags_file_now = _am.tags_file_for_project(_fn_selected_proj())
+            print(f"[fn-reload] reading {_tags_file_now}")
             try:
                 _new_tg = _am._load_tag_groups(_tags_file_now)
                 _proj_tg.clear()
                 _proj_tg.update(_new_tg)
+                _mi = _proj_tg.get("ModelImage_Table") or _proj_tg.get("ModelImage")
+                print(f"[fn-reload] _proj_tg ModelImage entries: "
+                      f"{len(_mi) if _mi else 0}")
                 import json as _json
                 with open(_tags_file_now, encoding="utf-8") as _f:
                     _new_raw = _json.load(_f)
@@ -722,8 +726,8 @@ class _FilenameMixin:
                 _proj_sec_styles.update(_new_raw.get("__section_styles__", {}))
                 _col_names.clear()
                 _col_names.update(_new_raw.get("__col_names__", {}))
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"[fn-reload] error: {_e}")
             # Clear existing rows
             for _, _, _, _, rw in list(self._fn_rows):
                 rw.setParent(None); rw.deleteLater()
