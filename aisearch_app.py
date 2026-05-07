@@ -2611,16 +2611,22 @@ class AISearchApp(QMainWindow):
     def _open_fm_for_current_row(self):
         """Right-click → File Manager: open the FM at the parent folder
         of the currently-selected row AND highlight the file in the
-        tree, so the user can see which folder owns the file. Falls
-        back to query_path / base_dirs / home when nothing is selected."""
+        tree, so the user can see which folder owns the file.
+
+        ROW 0 BEHAVIOR: previously row 0 (the query file) was treated
+        specially via a query_path fallback — that diverged the
+        first-row behavior from every other row, and could land the
+        FM at a stale location when query_path no longer matched
+        what the user was actually clicking. Now ALL rows go through
+        the same path: read get_row_path(row), use that, period.
+        Only falls back to base_dirs / home when no row is selected
+        or the row has no associated path at all."""
         row = self._current_row()
         path = self.table.get_row_path(row) if row >= 0 else None
-        if not path or not os.path.exists(path):
-            path = self.query_path
         if path and os.path.exists(path):
             parent = os.path.dirname(os.path.abspath(path))
             self._open_file_manager(parent)
-            # Now highlight the file inside the tree.
+            # Highlight the file inside the tree so the user sees it.
             try:
                 self._fm_win.navigate_to_file(os.path.abspath(path))
             except Exception:
