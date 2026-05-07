@@ -4522,12 +4522,24 @@ class PreviewWindow(QWidget):
             # a phantom-file race when the path changes mid-thread),
             # so the renamed file has no embedded metadata yet. Bake
             # synchronously now against the NEW path. User reported
-            # the renamed file's raw metadata showed only basic JPEG
-            # flags ("[progressive] 1") with no AItan content, even
-            # though the filename had encoded fields.
+            # the renamed file's raw metadata showed only basic
+            # ffmpeg/ffprobe tags with no AItan content, even though
+            # the filename had encoded fields. Surface success / failure
+            # in the status bar instead of swallowing silently — if the
+            # bake fails we want to know.
+            _bake_msg = ""
             try:
                 _entry_for_bake = attrs_mod.get(app.attrs_data, path)
-                attrs_mod.embed_aitan_meta(path, _entry_for_bake)
+                _bake_ok = attrs_mod.embed_aitan_meta(
+                    path, _entry_for_bake, _raise=True)
+                _bake_msg = "AItan embedded" if _bake_ok else "AItan bake returned False"
+            except FileNotFoundError as _be:
+                _bake_msg = f"AItan bake failed — file missing: {_be}"
+            except Exception as _be:
+                _bake_msg = f"AItan bake failed: {type(_be).__name__}: {_be}"
+            try:
+                app.statusBar().showMessage(_bake_msg, 6000)
+                print(f"[rename-bake] {os.path.basename(path)}: {_bake_msg}")
             except Exception:
                 pass
         finally:
