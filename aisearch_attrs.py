@@ -3564,20 +3564,14 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     #   7 = waist up                     — bot not visible
     #   8 = mid-thigh up                 — both partially visible
     #   9+ = full body / wide            — both visible
-    # Per-field "out of frame / N/A" code. The user pointed out that
-    # CL=1 means "topless / bare skin / no garment" — a REAL category
-    # distinct from "0=not detected" — so forcing "0" or "1" for an
-    # invisible body part would corrupt the meaning. The user's CL
-    # tables (CL_Top, CL_TopColor, CL_Bot, CL_BotColor) all have an
-    # explicit `z` = "N/A" entry — use that. PM/B/WH don't have `z`
-    # defined yet, so they fall back to `0` (rendered as "—" by the
-    # combo widget). User can extend later by adding `z` rows to
-    # PM_Posture / PM_Motion / B / WH tables.
-    _NA_PER_FIELD = {"cl": "z"}
-    _NA_DEFAULT = "0"
+    # "Out of frame / N/A / not detected" all collapse to code "0"
+    # per user: '"0 — CLIP didn't detect (default fill)" this can be
+    # N/A'. The earlier per-field z-routing is gone — 0 carries the
+    # "no value" semantic universally; 1 stays as the explicit "real
+    # zero category" (topless, no bottom, bare skin) where defined.
+    _NA = "0"
     def _na_for(field):
-        return _NA_PER_FIELD.get(field, _NA_DEFAULT)
-    _NA = _NA_DEFAULT   # legacy var name used in the older blocks below
+        return _NA
     if (allowed_fields is None or "cl" in allowed_fields):
         cs_val = working.get("cs") or _get_working("cs")
         cl_val = working.get("cl") or _get_working("cl")
@@ -3585,21 +3579,20 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
             cs_shot = cs_val[-3]
             cl_chars = list(cl_val)
             cl_changed = False
-            cl_na = _na_for("cl")   # "z" — user has CL_Top/CL_Bot z=N/A defined
             # Bot not visible for shots 1-7
             if cs_shot in ("1", "2", "3", "4", "5", "6", "7"):
                 # Position 1 (bot type) and position 2 (bot color)
                 for _p in (1, 2):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != cl_na:
-                        cl_chars[idx] = cl_na
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
             # Top also not visible for shots 1-2
             if cs_shot in ("1", "2"):
                 for _p in (3, 4):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != cl_na:
-                        cl_chars[idx] = cl_na
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
             if cl_changed:
                 working["cl"] = "".join(cl_chars)
