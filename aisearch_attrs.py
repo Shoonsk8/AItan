@@ -3352,11 +3352,24 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     working = {}  # field → hex string being assembled
     detected_fields = set()  # fields where at least one digit was detected
 
+    # Per-field placeholder for "not yet filled" digits. Default is
+    # "0" (zero), but X (expression) uses literal "x" so unscored
+    # sub-digits read as "1x"/"2x" — clearly "family detected, detail
+    # not auto-filled" — instead of "10"/"20" which would lie about
+    # the detail being a real default category.
+    _field_fill = {"x": "x"}
+
     def _get_working(field):
         if field not in working:
             digits = field_digits_map.get(field, 2)
             cur = existing_entry.get(field, "") or ""
-            working[field] = cur.zfill(digits) if cur else "0" * digits
+            fill = _field_fill.get(field, "0")
+            if cur:
+                # Pad right with fill char so position 1 (rightmost)
+                # gets the placeholder if not already specified.
+                working[field] = cur.ljust(digits, fill)[:digits]
+            else:
+                working[field] = fill * digits
         return working[field]
 
     emb = image_emb
@@ -3376,11 +3389,15 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
         options         = spec["options"]
 
         current = _get_working(field)
-        cur_digit = current[-pos] if pos <= len(current) else "0"
+        _placeholder = _field_fill.get(field, "0")
+        cur_digit = current[-pos] if pos <= len(current) else _placeholder
 
-        # Skip if already set by user — don't overwrite manual corrections
+        # Skip if already set by user — don't overwrite manual corrections.
+        # Compare against the field's placeholder (e.g. "x" for X) so a
+        # half-filled field with placeholder digits in remaining positions
+        # still gets those positions re-detected.
         if zero_is_none or default_is_zero:
-            if cur_digit != "0":
+            if cur_digit != "0" and cur_digit != _placeholder:
                 continue
         else:
             if field in existing_entry and existing_entry[field]:
@@ -3627,12 +3644,21 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     result = {}
     for field, new_val in working.items():
         digits = field_digits_map.get(field, 2)
-        orig = (existing_entry.get(field, "") or "").zfill(digits) or "0" * digits
-        if new_val != orig and new_val != "0" * digits:
+        fill = _field_fill.get(field, "0")
+        orig_raw = existing_entry.get(field, "") or ""
+        orig = orig_raw.ljust(digits, fill)[:digits] if orig_raw else fill * digits
+        all_placeholder = fill * digits
+        if new_val != orig and new_val != all_placeholder:
             result[field] = new_val
         elif field in detected_fields and not existing_entry.get(field):
-            # First-time detection produced all-zero result (e.g. FA "00" = facing forward)
-            result[field] = new_val
+            # First-time detection produced all-placeholder result
+            # (e.g. FA "00" = facing forward, or X "xx" = not detected)
+            # Skip writing if all-placeholder — that means nothing was
+            # actually detected (would happen for X if every family
+            # prompt scored worse than its placeholder, but with the
+            # threshold removal that's no longer reachable).
+            if new_val != all_placeholder:
+                result[field] = new_val
     return result
 
 
