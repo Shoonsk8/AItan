@@ -307,6 +307,111 @@ class _ResizeHandle(QWidget):
         e.accept()
 
 
+class _GridPopupCombo(QComboBox):
+    """QComboBox that pops a 16x16 (or 4x4) grid of cells instead of
+    the default linear list. Used for matrix-style fields where the
+    option keys are 1- or 2-digit hex codes (e.g. X expression with
+    "00"-"FF", BG with "0"-"F"). Cells without a defined label render
+    as disabled placeholders so the geometry is preserved.
+
+    The combo's text + currentData behavior is unchanged — only the
+    popup display is overridden. So existing _on_select / _fill_combo
+    code keeps working; this is purely a UI layer."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._popup_widget = None
+
+    def showPopup(self):
+        # If the combo has 1- or 2-digit hex keys, show a grid.
+        # Otherwise fall back to the standard list popup.
+        keys = []
+        for i in range(self.count()):
+            data = self.itemData(i)
+            if data is None or data == "":
+                continue
+            keys.append(str(data))
+        if not keys:
+            super().showPopup()
+            return
+        is_2digit = all(len(k) == 2 for k in keys)
+        is_1digit = all(len(k) == 1 for k in keys) and not is_2digit
+        if not (is_2digit or is_1digit):
+            super().showPopup()
+            return
+
+        rows = cols = 16 if is_2digit else 4
+
+        # Build label lookup from current items
+        labels = {}
+        for i in range(self.count()):
+            data = self.itemData(i)
+            if data is not None and data != "":
+                labels[str(data)] = self.itemText(i)
+
+        # Lazy-build the popup widget
+        from PyQt6.QtWidgets import QFrame, QToolButton
+        if self._popup_widget is not None:
+            try:
+                self._popup_widget.close()
+                self._popup_widget.deleteLater()
+            except Exception:
+                pass
+        popup = QFrame(self, Qt.WindowType.Popup)
+        popup.setFrameShape(QFrame.Shape.Panel)
+        popup.setStyleSheet(
+            "QFrame { background:#222; border:1px solid #555; }")
+        gl = QGridLayout(popup)
+        gl.setContentsMargins(4, 4, 4, 4)
+        gl.setSpacing(2)
+
+        cur_data = self.currentData() or ""
+        for r in range(rows):
+            for c in range(cols):
+                if is_2digit:
+                    code = format(r, "x") + format(c, "x")
+                else:
+                    code = format(r * cols + c, "x")
+                lbl = labels.get(code, "")
+                btn = QToolButton(popup)
+                btn.setText(lbl[:14] if lbl else "")
+                btn.setToolTip(f"{code}  {lbl}" if lbl else code)
+                btn.setFixedSize(72, 28)
+                btn.setStyleSheet(
+                    "QToolButton { color:#ddd; background:#2a2a2a; "
+                    "border:1px solid #444; padding:1px 3px; "
+                    "font-size:9pt; }"
+                    "QToolButton:hover { background:#3a4a6a; }"
+                    "QToolButton:disabled { color:#555; background:#222; }"
+                )
+                if not lbl:
+                    btn.setEnabled(False)
+                if code == cur_data:
+                    btn.setStyleSheet(btn.styleSheet() +
+                        "QToolButton { border:2px solid #4a90e2; }")
+                btn.clicked.connect(
+                    lambda _, k=code: self._on_grid_pick(k, popup))
+                gl.addWidget(btn, r, c)
+
+        # Position the popup just below the combo
+        popup.adjustSize()
+        gp = self.mapToGlobal(QPoint(0, self.height()))
+        popup.move(gp)
+        popup.show()
+        self._popup_widget = popup
+
+    def _on_grid_pick(self, code, popup):
+        idx = self.findData(code)
+        if idx >= 0:
+            self.setCurrentIndex(idx)
+        try:
+            popup.close()
+            popup.deleteLater()
+        except Exception:
+            pass
+        self._popup_widget = None
+
+
 class FieldWidget(QGroupBox):
     moved            = pyqtSignal(str, int, int)
     resized          = pyqtSignal(str)
@@ -670,7 +775,14 @@ class FieldWidget(QGroupBox):
             vlay.addWidget(_hint)
 
         elif style == "matrix" or (options and style not in ("text",)):
-            self._cb = QComboBox()
+            # Matrix-style fields (X, A, ModelImage, ModelVideo, …) use
+            # the grid popup so users can scan a 16×16 (or 4×4) layout
+            # of code+label cells instead of a long flat dropdown.
+            # Other tag-list-with-options fields stay as plain combos.
+            if style == "matrix":
+                self._cb = _GridPopupCombo()
+            else:
+                self._cb = QComboBox()
             self._cb.setStyleSheet(_CB_SS)
             self._cb.setMinimumWidth(160)
             self._sort_lbl = QLabel(_lang_label("freq / 頻度"))
