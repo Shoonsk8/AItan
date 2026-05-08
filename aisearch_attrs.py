@@ -32,8 +32,15 @@ def _load_image_or_video_frame(path):
     _VID_EXT = (".mp4", ".mkv", ".mov", ".m4v", ".avi", ".webm", ".wmv")
     _ext = os.path.splitext(path)[1].lower()
     # Try the path that matches the extension first.
+    # Note: cannot use `a or b` here — the decode helpers return
+    # numpy arrays, and `bool(ndarray)` raises "The truth value of
+    # an array with more than one element is ambiguous" for any
+    # array that's not a scalar. Explicit None checks instead.
     if _ext in _VID_EXT:
-        return _decode_video_first_frame(path) or _try_image(path) or None
+        img = _decode_video_first_frame(path)
+        if img is not None:
+            return img
+        return _try_image(path)
     # Image-extension first; if PIL can't read it, try as video.
     img = _try_image(path)
     if img is not None:
