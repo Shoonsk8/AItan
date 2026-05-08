@@ -3134,10 +3134,17 @@ class PreviewWindow(QWidget):
                     _vs = "".join(_v)
                     if any(c != "0" for c in _vs) or _f in _detected_indices:
                         _updates[_f] = _vs
+                # Honor skip_fields on the WRITE side: right-click "Update" on a
+                # specific box passes the other fields in skip_fields so they
+                # stay protected. Without this filter, _entry.update(_updates)
+                # overwrites every CLIP field on every refresh.
+                if skip_fields:
+                    _updates = {k: v for k, v in _updates.items()
+                                if k.lower() not in skip_fields}
                 if _updates:
                     _entry = attrs_mod.get(app.attrs_data, path)
                     if overwrite:
-                        # Refresh mode: overwrite all CLIP fields
+                        # Refresh mode: overwrite the (already filtered) CLIP fields
                         _entry.update(_updates)
                     else:
                         # Normal mode: merge — keep existing non-zero digits, fill zeros

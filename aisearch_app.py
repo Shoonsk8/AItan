@@ -268,6 +268,10 @@ class FileTable(QTableWidget):
         self.left_key_callback  = None
         self.right_key_callback = None
         self.drop_callback      = None
+        # External drop onto a row → move the dropped files into that
+        # row's folder. Set by the main app; falls back to drop_callback
+        # (search-by-example) when the drop lands on empty space.
+        self.external_move_callback = None
         self._drag_src_row    = None
         self._drag_press_pos  = None
         self._drag_active     = False
@@ -407,13 +411,11 @@ class FileTable(QTableWidget):
                     event.acceptProposedAction(); return True
             elif t == event.Type.Drop:
                 if event.mimeData().hasUrls():
-                    # Internal drag (this same table → this same table) =
-                    # move to target row's directory. External drops (Nemo,
-                    # etc.) = treat as a search query.
+                    pos = event.position().toPoint()
+                    item = self.itemAt(pos)
+                    tgt_row = self.row(item) if item else -1
+                    # Internal drag (same table) → move to target row's dir.
                     if event.source() is self:
-                        pos = event.position().toPoint()
-                        item = self.itemAt(pos)
-                        tgt_row = self.row(item) if item else -1
                         sel_rows = sorted({idx.row() for idx in self.selectionModel().selectedRows()})
                         if tgt_row >= 0 and tgt_row not in sel_rows and self.move_callback:
                             self.move_callback(sel_rows, tgt_row)
@@ -421,6 +423,18 @@ class FileTable(QTableWidget):
                             return True
                         event.ignore()
                         return True
+                    # External drop (FM, Nemo…) onto a row → move the
+                    # dropped files into that row's folder. Same behavior
+                    # as internal drag, just path-based.
+                    if tgt_row >= 0 and self.external_move_callback:
+                        src_paths = [u.toLocalFile() for u in event.mimeData().urls()
+                                     if u.isLocalFile()]
+                        src_paths = [p for p in src_paths if p and os.path.exists(p)]
+                        if src_paths:
+                            self.external_move_callback(src_paths, tgt_row)
+                            event.acceptProposedAction()
+                            return True
+                    # Drop on empty area → search by example (existing behavior).
                     for url in event.mimeData().urls():
                         path = url.toLocalFile()
                         if os.path.exists(path) and self.drop_callback:
@@ -1088,6 +1102,7 @@ class AISearchApp(QMainWindow):
         # Results table
         self.table = FileTable()
         self.table.move_callback      = self._handle_drag_move
+        self.table.external_move_callback = self._handle_external_drop_move
         self.table.delete_callback    = self.delete_file
         self.table.rename_callback    = self.rename_file
         self.table.left_key_callback  = self.on_left_key_press
@@ -6335,10 +6350,18 @@ class AISearchApp(QMainWindow):
     # ── Move / rename / delete ───────────────────────────────────────────────
 
     def on_right_key_press(self):
+        import sys as _sys
         row = self._current_row()
-        if row < 0: return
+        print(f"[RIGHT] row={row} query_path={self.query_path!r} "
+              f"browse_dir={self._browse_dir!r}",
+              file=_sys.stderr, flush=True)
+        if row < 0:
+            print("[RIGHT] bail: no current row", file=_sys.stderr, flush=True)
+            return
         # In browse mode: right arrow re-enters browse on selected file's directory
         if self._browse_dir:
+            print("[RIGHT] bail: browse mode → re-enter browse",
+                  file=_sys.stderr, flush=True)
             self._enter_browse_mode()
             self._raise_preview()
             return
@@ -6346,16 +6369,24 @@ class AISearchApp(QMainWindow):
         # The File Manager window is opened from the right-click context
         # menu (Open File Manager…), not from the arrow key.
         if row == 0 and self.query_path:
+            print("[RIGHT] bail: row 0 selected → enter browse",
+                  file=_sys.stderr, flush=True)
             self._enter_browse_mode()
             self._raise_preview()
             return
-        if not self.query_path: return
+        if not self.query_path:
+            print("[RIGHT] bail: query_path is None",
+                  file=_sys.stderr, flush=True)
+            return
         # Top file's directory no longer exists (Nemo / external move took it
         # away). Without this guard the move resolves to a now-stale path —
         # in some shapes that lands at the project root. Halt, drop the
         # stale row 0, and promote row 1 as the new query so the next
         # right-press has a valid destination.
         if not os.path.isdir(os.path.dirname(os.path.abspath(self.query_path))):
+            print(f"[RIGHT] bail: query dir gone "
+                  f"({os.path.dirname(self.query_path)!r})",
+                  file=_sys.stderr, flush=True)
             if self.table.rowCount() >= 2:
                 next_path = self.table.get_row_path(1)
                 self.table.removeRow(0)
@@ -6367,6 +6398,9 @@ class AISearchApp(QMainWindow):
 
         sel_rows = self._selected_rows()
         rows_to_move = sorted([r for r in sel_rows if r != 0], reverse=True)  # high→low so removals don't shift
+        print(f"[RIGHT] sel_rows={sel_rows} rows_to_move={rows_to_move} "
+              f"target_dir={os.path.dirname(self.query_path)!r}",
+              file=_sys.stderr, flush=True)
         multi = len(rows_to_move) > 1
         any_moved = False
         last_row = row
@@ -6544,6 +6578,66 @@ class AISearchApp(QMainWindow):
         self._post_move_dup_cleanup()
         if db_changed and self.data:
             torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+
+    def _handle_external_drop_move(self, src_paths, target_row):
+        """External drop (file manager → results table row) = move each
+        dropped file to the target row's folder. Same conflict handling
+        and store-update dance as _handle_drag_move, just path-based;
+        src files don't need to live in self.data."""
+        target_path = self.table.get_row_path(target_row)
+        if not target_path:
+            return
+        target_dir = os.path.dirname(os.path.abspath(target_path))
+        mode       = self.config.get("move_conflict", "size_check")
+        db_changed = False
+        batch      = []
+
+        for src_path in src_paths:
+            src_path = os.path.abspath(src_path)
+            if not os.path.exists(src_path):
+                continue
+            if os.path.dirname(src_path) == target_dir:
+                continue
+            dest_path = os.path.join(target_dir, os.path.basename(src_path))
+            final_path, overwrite = front_page._resolve_with_size(
+                dest_path, src_path, mode, self)
+            if final_path is None:
+                continue
+            try:
+                shutil.move(src_path, final_path)
+            except Exception as e:
+                QMessageBox.critical(self, _t("Move Error / 移動エラー"), str(e))
+                continue
+
+            import aisearch_attrs as _am
+            _am.update_path_in_all_stores(src_path, final_path, self.current_project)
+            if self.data and "paths" in self.data:
+                if overwrite:
+                    front_page._remove_from_data(self.data, dest_path)
+                for i, p in enumerate(self.data["paths"]):
+                    if os.path.normpath(p) == os.path.normpath(src_path):
+                        self.data["paths"][i] = final_path
+                        db_changed = True
+                        break
+
+            batch.append({"type": "move", "old_path": src_path,
+                          "new_path": final_path})
+
+        if batch:
+            self._push_undo(batch)
+        if db_changed and self.data:
+            torch.save(
+                self.data,
+                os.path.join(attrs_mod.DATA_DIR,
+                             f"features_{self.current_project}.pt"))
+        # Mirror the move into the FM window if it's open so the source
+        # folder no longer shows the moved files.
+        fm = getattr(self, "_fm_win", None)
+        if fm is not None:
+            try:
+                fm.refresh_all()
+            except Exception:
+                pass
 
     def move_to_folder_manually(self):
         row = self._current_row()

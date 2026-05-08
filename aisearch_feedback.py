@@ -18,11 +18,17 @@ def load(project_name):
     d = logic.EMBEDDING_DIM
     return {"query_embs": torch.empty((0, d)), "result_embs": torch.empty((0, d))}
 
+def _as_row(t):
+    """Coerce an embedding to a (1, D) row tensor on CPU. Callers pass a
+    mix of shapes — sometimes (D,), sometimes (1, D) — and torch.cat
+    needs them to match the stored (N, D) layout."""
+    return t.detach().cpu().reshape(1, -1)
+
 def record(project_name, query_emb, result_emb):
     """Save a confirmed (query, result) pair."""
     data = load(project_name)
-    data["query_embs"]  = torch.cat([data["query_embs"],  query_emb.unsqueeze(0).cpu()])
-    data["result_embs"] = torch.cat([data["result_embs"], result_emb.unsqueeze(0).cpu()])
+    data["query_embs"]  = torch.cat([data["query_embs"],  _as_row(query_emb)])
+    data["result_embs"] = torch.cat([data["result_embs"], _as_row(result_emb)])
     torch.save(data, _path(project_name))
 
 def boost_scores(query_emb, candidate_embs, feedback):

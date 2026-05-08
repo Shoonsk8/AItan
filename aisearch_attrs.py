@@ -371,6 +371,9 @@ _DEFAULT_TAG_GROUPS = {
     ],
     # ── Hair  HC[length][style][color]  ──────────────────────────────────────
     # 1st digit (right) = color
+    # HC stored value reads LEFT→RIGHT as Color, Style, Length.
+    # Position numbering (used by CLIP_AUTO_DETECT and canvas _SUBPOS):
+    # pos 1 = rightmost = Length, pos 2 = middle = Style, pos 3 = leftmost = Color.
     "HC_Color": [
         ["0", "No hair"],            ["1", "Black"],          ["2", "Dark Brown"],
         ["3", "Light Brown"],        ["4", "Blonde"],         ["5", "Platinum Blonde"],
@@ -379,14 +382,22 @@ _DEFAULT_TAG_GROUPS = {
         ["c", "Yellow"],             ["d", "Green"],          ["e", "Rainbow"],
         ["f", "Neon"],
     ],
-    # 2nd digit (middle) = style
+    # middle digit = style (pos 2)
     "HC_Style": [
-        ["0", "(none)"],    ["1", "Straight"],  ["2", "Wavy"],
-        ["3", "Curly"],     ["4", "Voluminous"],["5", "Bob"],
-        ["6", "Ponytail"],  ["7", "Braid"],     ["8", "Tied"],
-        ["9", "Buzz"],
+        ["0", "(none)"],         ["1", "Straight"],       ["2", "Wavy"],
+        ["3", "Curly"],          ["4", "Voluminous"],     ["5", "Bob"],
+        ["6", "Ponytail"],       ["7", "Braid"],          ["8", "Tied"],
+        ["9", "Buzz"],           ["a", "Twintail"],       ["b", "High Bun"],
+        ["c", "Low Bun"],        ["d", "Half-up"],        ["e", "Pixie"],
+        ["f", "Hime Cut"],       ["g", "Side Ponytail"],  ["h", "Side Bun"],
+        ["i", "Updo"],           ["j", "Mohawk"],         ["k", "Side Swept"],
+        ["l", "Curtain Bangs"],  ["m", "Blunt Bangs"],    ["n", "Layered"],
+        ["o", "Mullet"],         ["p", "Afro"],           ["q", "Cornrows"],
+        ["r", "Dreadlocks"],     ["s", "Top Knot"],       ["t", "Space Buns"],
+        ["u", "Crown Braid"],    ["v", "French Braid"],   ["w", "Fishtail"],
+        ["x", "Crew Cut"],       ["y", "Undercut"],       ["z", "Spiky"],
     ],
-    # 3rd digit (left) = length
+    # rightmost digit = length (pos 1)
     "HC_Length": [
         ["0", "(none)"],      ["1", "Very Short"],  ["2", "Short"],
         ["3", "Medium"],      ["4", "Long"],        ["5", "Very Long"],
@@ -866,11 +877,15 @@ _PERSON_PAT = r'P(?!W)(A[0-9a-f]{3}|[0-9a-f]{3})'
 # PersonWith token pattern: PW + 3-hex (multi-token, like P)
 _PW_PAT = r'PW([0-9a-f]{3})'
 
-# Regex for the non-person coded fields (after all P tokens are stripped)
+# Regex for the non-person coded fields (after all P tokens are stripped).
+# Values are lowercase a-z + 0-9 (base-36), so per-position tag tables can
+# hold up to 36 entries. Field KEYS stay uppercase, so a lowercase letter
+# in a value never collides with another field's key. (Old hex-only data
+# remains valid since [0-9a-z] is a superset of [0-9a-f].)
 def _field_pat(letter, digits):
     if digits == 0:
         return rf'(?P<{letter.lower()}>{letter})?'      # flag: just the letter, no value
-    char_cls = "[0-9a-z]" if letter == "J" else "[0-9a-f]"   # J = base-36 timestamp
+    char_cls = "[0-9a-z]"
     return rf'(?:{letter}(?P<{letter.lower()}>{char_cls}{{{digits}}}))?'
 
 _FIELD_RE = re.compile(
@@ -928,7 +943,7 @@ def parse_coded_filename(stem):
                 if _bm:
                     _ok = True
             else:
-                _cls = "[0-9a-z]" if letter == "J" else "[0-9a-f]"
+                _cls = "[0-9a-z]"   # base-36 (lowercase + digits) for all coded fields
                 _fm = re.search(rf'(?<![A-Z]){letter}({_cls}{{{digits}}})', remainder)
                 result[lk] = _fm.group(1) if _fm else ""
                 if _fm:
@@ -2946,37 +2961,69 @@ def unique_path(path):
 
 CLIP_AUTO_DETECT = [
     # ── Hair color ────────────────────────────────────────────────────────────
-    {"field": "hc", "pos": 1, "zero_is_none": True,  "threshold": 0.20, "options": [
-        ("1", "a person with black hair"),
-        ("2", "a person with dark brown hair"),
-        ("3", "a person with light brown hair"),
-        ("4", "a person with blonde or golden hair"),
-        ("5", "a person with platinum blonde very light hair"),
-        ("6", "a person with red hair"),
-        ("7", "a person with pink hair"),
-        ("8", "a person with ginger or orange hair"),
-        ("9", "a person with gray or silver-gray hair"),
-        ("a", "a person with white hair"),
-        ("b", "a person with blue hair"),
-        ("c", "a person with yellow hair"),
-        ("d", "a person with green hair"),
-        ("e", "a person with rainbow or multi-colored hair"),
-        ("f", "a person with neon colored hair"),
+    # Prompts are deliberately discriminative on luminance and saturation:
+    # plain "black hair" vs "blonde hair" loses to mid-tones in shadowed
+    # regions of the image. Calling out "very dark" / "bright light" /
+    # "saturated" gives CLIP a sharper axis to score along.
+    # pos 3 = leftmost digit (canvas convention: Color, Style, Length).
+    {"field": "hc", "pos": 3, "zero_is_none": True,  "threshold": 0.20, "options": [
+        ("1", "a person with very dark jet black hair, no light tones, no highlights"),
+        ("2", "a person with dark brown brunette hair, deep cocoa or chocolate tone"),
+        ("3", "a person with light brown caramel hair, mid-tone warm brown"),
+        ("4", "a person with bright blonde hair, golden yellow light-colored hair"),
+        ("5", "a person with platinum white-blonde hair, very pale near-white hair"),
+        ("6", "a person with vivid red hair, deep crimson or burgundy hair"),
+        ("7", "a person with pink hair, saturated pink dye"),
+        ("8", "a person with ginger orange copper hair, fiery red-orange"),
+        ("9", "a person with gray or silver-gray hair, no color saturation"),
+        ("a", "a person with pure white hair, snow white not blonde"),
+        ("b", "a person with vivid blue hair, saturated blue dye"),
+        ("c", "a person with vivid pure yellow hair, saturated yellow not blonde"),
+        ("d", "a person with vivid green hair, saturated green dye"),
+        ("e", "a person with rainbow multi-colored hair, several distinct colors at once"),
+        ("f", "a person with neon glowing fluorescent hair color"),
     ]},
     # ── Hair style ────────────────────────────────────────────────────────────
     {"field": "hc", "pos": 2, "zero_is_none": True,  "threshold": 0.16, "options": [
         ("1", "a person with flat straight hair with no curl or wave"),
         ("2", "a person with gently wavy or slightly curled hair"),
         ("3", "a person with clearly curly or spiral ringlet hair texture"),
-        ("4", "a person with voluminous puffy or afro-style hair"),
+        ("4", "a person with voluminous puffy hair"),
         ("5", "a person with bob cut chin-length hair"),
-        ("6", "a person with hair tied back in a ponytail"),
-        ("7", "a person with braided or dreadlocked hair"),
-        ("8", "a person with hair tied up in a bun or topknot"),
+        ("6", "a person with hair tied back in a single ponytail at the back of the head"),
+        ("7", "a person with braided hair, classic three-strand braid"),
+        ("8", "a person with hair tied up in a generic bun or knot, position unspecified"),
         ("9", "a person with a buzzcut or head that is shaved bald"),
+        ("a", "a person with hair in two symmetric pigtails or twintails on each side of the head"),
+        ("b", "a person with hair tied in a high bun on top of the head"),
+        ("c", "a person with hair tied in a low bun at the nape of the neck"),
+        ("d", "a person with half-up half-down hairstyle, top tied while bottom flows free"),
+        ("e", "a person with a pixie cut, very short layered haircut"),
+        ("f", "a person with a hime cut, long straight hair with blunt straight bangs"),
+        ("g", "a person with hair in a side ponytail draped over one shoulder"),
+        ("h", "a person with hair tied in a side bun off to one side of the head"),
+        ("i", "a person with hair in an elaborate updo or formal styled hair"),
+        ("j", "a person with a mohawk, sides shaved with a strip of hair on top"),
+        ("k", "a person with hair side-swept across the forehead"),
+        ("l", "a person with curtain bangs framing the face"),
+        ("m", "a person with thick blunt straight-cut bangs across the forehead"),
+        ("n", "a person with a layered haircut showing visible cascading layers"),
+        ("o", "a person with a mullet hairstyle, short on top short on sides long in back"),
+        ("p", "a person with a large afro hairstyle"),
+        ("q", "a person with hair in cornrows, tight braids close to the scalp"),
+        ("r", "a person with dreadlocks, thick rope-like locked strands"),
+        ("s", "a person with a top knot, hair gathered in a knot high on top of the head"),
+        ("t", "a person with space buns, two small buns on either side high on the head"),
+        ("u", "a person with a crown braid encircling the top of the head"),
+        ("v", "a person with a French braid, single braid down the back of the head"),
+        ("w", "a person with a fishtail braid, intricately woven herringbone braid"),
+        ("x", "a person with a crew cut, very short military haircut"),
+        ("y", "a person with an undercut, sides closely shaved beneath longer top hair"),
+        ("z", "a person with spiky hair styled to stand up in spikes"),
     ]},
     # ── Hair length ───────────────────────────────────────────────────────────
-    {"field": "hc", "pos": 3, "zero_is_none": True,  "threshold": 0.16, "options": [
+    # pos 1 = rightmost digit.
+    {"field": "hc", "pos": 1, "zero_is_none": True,  "threshold": 0.16, "options": [
         ("1", "a person with a buzzcut shaved head with almost no hair visible"),
         ("2", "a person with very short hair above the ears not reaching the jaw"),
         ("3", "a person with hair ending at or just touching the shoulders"),
@@ -3549,10 +3596,7 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
 
     # CS shot type → CL visibility: if the camera shot is close-up
     # / portrait / waist-up, the bottom (pants/skirt) isn't visible
-    # so set it to the project's N/A code "z" — the user defined
-    # this in the tag table as the "out of frame / not applicable"
-    # slot. Code "0" would be "no detection" which doesn't carry
-    # the same meaning to a downstream reader.
+    # so set it to the N/A code "0".
     #
     # CS shot type codes (pos 3):
     #   1 = extreme close-up (eyes/lips) — neither top nor bot visible
@@ -3564,16 +3608,12 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     #   7 = waist up                     — bot not visible
     #   8 = mid-thigh up                 — both partially visible
     #   9+ = full body / wide            — both visible
-    # Per-field "out of frame / N/A" code. The user's CL tables —
-    # CL_Top, CL_TopColor, CL_Bot, CL_BotColor — all have an
-    # explicit "z = N/A" row defined and the four positions are
-    # independent (a face-only crop is "zzzz" — N/A on all four).
-    # PM/B/WH/BG/X tables don't have "z" defined yet, so those
-    # fall back to "0".
-    _NA_PER_FIELD = {"cl": "z"}
+    # "Out of frame / N/A / not detected" all collapse to code "0"
+    # per user: '"0 — CLIP didn't detect (default fill)" this can be
+    # N/A'. 0 carries the "no value" semantic universally; 1 stays
+    # as the explicit "real zero category" (topless, no bottom, bare
+    # skin) where defined.
     _NA = "0"
-    def _na_for(field):
-        return _NA_PER_FIELD.get(field, _NA)
     if (allowed_fields is None or "cl" in allowed_fields):
         cs_val = working.get("cs") or _get_working("cs")
         cl_val = working.get("cl") or _get_working("cl")
@@ -3581,37 +3621,36 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
             cs_shot = cs_val[-3]
             cl_chars = list(cl_val)
             cl_changed = False
-            cl_na = _na_for("cl")   # "z" per user's CL_* tables
             # Bot not visible for shots 1-7
             if cs_shot in ("1", "2", "3", "4", "5", "6", "7"):
                 for _p in (1, 2):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != cl_na:
-                        cl_chars[idx] = cl_na
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
-            # Top also not visible for shots 1-2 → "zzzz" full N/A
+            # Top also not visible for shots 1-2
             if cs_shot in ("1", "2"):
                 for _p in (3, 4):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != cl_na:
-                        cl_chars[idx] = cl_na
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
             if cl_changed:
                 working["cl"] = "".join(cl_chars)
                 detected_fields.add("cl")
 
-    # Same logic for PM (Posture/Motion): close-up shots can't see
-    # the body, so PM should be N/A.
+    # PM (Posture/Motion) cross-rule: only force N/A for very tight
+    # close-ups (CS 1-4) where neither shoulders nor torso are visible.
+    # At CS 5+ (bust shot and wider) the upper torso / arms ARE in
+    # frame, so CLIP can usefully read motion (still vs walking) and
+    # often posture (standing vs sitting/leaning) from shoulder line
+    # and arm angle. Forcing N/A there hid PM on every bust-shot image.
     if (allowed_fields is None or "pm" in allowed_fields):
         cs_val = working.get("cs") or _get_working("cs")
         pm_val = working.get("pm") or _get_working("pm")
         if cs_val and len(cs_val) >= 3 and pm_val:
             cs_shot = cs_val[-3]
-            # PM is most reliable when full body is visible (CS 8+).
-            # For CS 1-2 (face only), force both digits to N/A.
-            # For CS 3-6 (head + chest), still no body visible → N/A.
-            # CS 7 (waist up) shows torso/arms — keep PM detection.
-            if cs_shot in ("1", "2", "3", "4", "5", "6"):
+            if cs_shot in ("1", "2", "3", "4"):
                 pm_chars = list(pm_val)
                 pm_changed = False
                 for _p in range(1, len(pm_chars) + 1):
@@ -3661,8 +3700,25 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                     working["wh"] = "".join(wh_chars)
                     detected_fields.add("wh")
 
-    # Return only fields that actually changed from original
-    # For zero_is_none=False fields (FA/SK/BG), "0" is a valid detection — include even if all zeros
+    # Return only fields that actually changed from original. The
+    # all-placeholder check (e.g. "00") is conditional: for fields
+    # where every position has a meaningful zero — either zero_is_none
+    # is False (FA "00" = front+level, SK "0" = a valid skin code)
+    # OR default_is_zero is True (PM "00" = Standing+Still) — "all
+    # placeholder" IS a real detection result and should be written.
+    # For HC/X/etc. where "0" means "none / not detected" on at least
+    # one position, all-placeholder is rejected as before.
+    field_specs_by_field = {}
+    for _s in CLIP_AUTO_DETECT:
+        field_specs_by_field.setdefault(_s.get("field"), []).append(_s)
+    def _all_zero_is_meaningful(field):
+        specs = field_specs_by_field.get(field, [])
+        if not specs:
+            return False
+        return all(
+            (s.get("default_is_zero") or not s.get("zero_is_none", True))
+            for s in specs
+        )
     result = {}
     for field, new_val in working.items():
         digits = field_digits_map.get(field, 2)
@@ -3670,16 +3726,11 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
         orig_raw = existing_entry.get(field, "") or ""
         orig = orig_raw.ljust(digits, fill)[:digits] if orig_raw else fill * digits
         all_placeholder = fill * digits
-        if new_val != orig and new_val != all_placeholder:
+        zero_ok = _all_zero_is_meaningful(field)
+        if new_val != orig and (new_val != all_placeholder or zero_ok):
             result[field] = new_val
         elif field in detected_fields and not existing_entry.get(field):
-            # First-time detection produced all-placeholder result
-            # (e.g. FA "00" = facing forward, or X "xx" = not detected)
-            # Skip writing if all-placeholder — that means nothing was
-            # actually detected (would happen for X if every family
-            # prompt scored worse than its placeholder, but with the
-            # threshold removal that's no longer reachable).
-            if new_val != all_placeholder:
+            if new_val != all_placeholder or zero_ok:
                 result[field] = new_val
     return result
 
@@ -3724,6 +3775,7 @@ def inspect_clip_scores(image_emb):
             "pos": spec["pos"],
             "threshold": threshold,
             "zero_is_none": spec.get("zero_is_none", True),
+            "default_is_zero": spec.get("default_is_zero", False),
             "options": opts_sorted,
             "winner": winner,
         })

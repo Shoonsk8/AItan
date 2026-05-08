@@ -1,69 +1,69 @@
 [
   {
     "field": "hc",
-    "pos": 1,
+    "pos": 3,
     "zero_is_none": true,
     "threshold": 0.2,
     "options": [
       [
         "1",
-        "a person with black hair"
+        "a person with very dark jet black hair, no light tones, no highlights"
       ],
       [
         "2",
-        "a person with dark brown hair"
+        "a person with dark brown brunette hair, deep cocoa or chocolate tone"
       ],
       [
         "3",
-        "a person with light brown hair"
+        "a person with light brown caramel hair, mid-tone warm brown"
       ],
       [
         "4",
-        "a person with blonde or golden hair"
+        "a person with bright blonde hair, golden yellow light-colored hair"
       ],
       [
         "5",
-        "a person with platinum blonde very light hair"
+        "a person with platinum white-blonde hair, very pale near-white hair"
       ],
       [
         "6",
-        "a person with red hair"
+        "a person with vivid red hair, deep crimson or burgundy hair"
       ],
       [
         "7",
-        "a person with pink hair"
+        "a person with pink hair, saturated pink dye"
       ],
       [
         "8",
-        "a person with ginger or orange hair"
+        "a person with ginger orange copper hair, fiery red-orange"
       ],
       [
         "9",
-        "a person with gray or silver-gray hair"
+        "a person with gray or silver-gray hair, no color saturation"
       ],
       [
         "a",
-        "a person with white hair"
+        "a person with pure white hair, snow white not blonde"
       ],
       [
         "b",
-        "a person with blue hair"
+        "a person with vivid blue hair, saturated blue dye"
       ],
       [
         "c",
-        "a person with yellow hair"
+        "a person with vivid pure yellow hair, saturated yellow not blonde"
       ],
       [
         "d",
-        "a person with green hair"
+        "a person with vivid green hair, saturated green dye"
       ],
       [
         "e",
-        "a person with rainbow or multi-colored hair"
+        "a person with rainbow multi-colored hair, several distinct colors at once"
       ],
       [
         "f",
-        "a person with neon colored hair"
+        "a person with neon glowing fluorescent hair color"
       ]
     ]
   },
@@ -108,12 +108,116 @@
       [
         "9",
         "a person with buzz cut or very short shaved head"
+      ],
+      [
+        "a",
+        "a person with hair in two symmetric pigtails or twintails on each side of the head"
+      ],
+      [
+        "b",
+        "a person with hair tied in a high bun on top of the head"
+      ],
+      [
+        "c",
+        "a person with hair tied in a low bun at the nape of the neck"
+      ],
+      [
+        "d",
+        "a person with half-up half-down hairstyle, top tied while bottom flows free"
+      ],
+      [
+        "e",
+        "a person with a pixie cut, very short layered haircut"
+      ],
+      [
+        "f",
+        "a person with a hime cut, long straight hair with blunt straight bangs"
+      ],
+      [
+        "g",
+        "a person with hair in a side ponytail draped over one shoulder"
+      ],
+      [
+        "h",
+        "a person with hair tied in a side bun off to one side of the head"
+      ],
+      [
+        "i",
+        "a person with hair in an elaborate updo or formal styled hair"
+      ],
+      [
+        "j",
+        "a person with a mohawk, sides shaved with a strip of hair on top"
+      ],
+      [
+        "k",
+        "a person with hair side-swept across the forehead"
+      ],
+      [
+        "l",
+        "a person with curtain bangs framing the face"
+      ],
+      [
+        "m",
+        "a person with thick blunt straight-cut bangs across the forehead"
+      ],
+      [
+        "n",
+        "a person with a layered haircut showing visible cascading layers"
+      ],
+      [
+        "o",
+        "a person with a mullet hairstyle, short on top short on sides long in back"
+      ],
+      [
+        "p",
+        "a person with a large afro hairstyle"
+      ],
+      [
+        "q",
+        "a person with hair in cornrows, tight braids close to the scalp"
+      ],
+      [
+        "r",
+        "a person with dreadlocks, thick rope-like locked strands"
+      ],
+      [
+        "s",
+        "a person with a top knot, hair gathered in a knot high on top of the head"
+      ],
+      [
+        "t",
+        "a person with space buns, two small buns on either side high on the head"
+      ],
+      [
+        "u",
+        "a person with a crown braid encircling the top of the head"
+      ],
+      [
+        "v",
+        "a person with a French braid, single braid down the back of the head"
+      ],
+      [
+        "w",
+        "a person with a fishtail braid, intricately woven herringbone braid"
+      ],
+      [
+        "x",
+        "a person with a crew cut, very short military haircut"
+      ],
+      [
+        "y",
+        "a person with an undercut, sides closely shaved beneath longer top hair"
+      ],
+      [
+        "z",
+        "a person with spiky hair styled to stand up in spikes"
       ]
     ]
   },
   {
     "field": "hc",
-    "pos": 3,
+    "pos": 1,
     "zero_is_none": true,
     "threshold": 0.2,
     "options": [
@@ -414,41 +518,41 @@
   },
   {
     "field": "bg",
-    "pos": 3,
+    "pos": 2,
     "zero_is_none": false,
     "threshold": 0.2,
     "options": [
       [
         "0",
-        "solid pure black background no details"
+        "solid pure color background plain no details black white red green or chromakey"
       ],
       [
         "1",
-        "solid pure white background no details"
+        "indoor residential interior bedroom living room home gym personal space"
       ],
       [
         "2",
-        "bright green screen or chromakey green background"
+        "outdoor residential exterior of a house yard backyard garden swimming pool"
       ],
       [
         "3",
-        "indoor room or interior home setting"
+        "commercial indoor location store shop restaurant cafe office hospital school commercial gym"
       ],
       [
         "4",
-        "commercial indoor location restaurant office store cafe"
+        "nature outdoor wilderness beach ocean lake forest mountain field trees grass"
       ],
       [
         "5",
-        "outdoor urban street city buildings"
+        "urban city street buildings park public square outdoors"
       ],
       [
         "6",
-        "natural outdoor setting trees grass forest field beach water"
+        "outer space stars cosmos planets moon surface galaxy"
       ],
       [
-        "8",
-        "outer space stars cosmos planets"
+        "7",
+        "castle medieval fortress historic stone interior or exterior of a castle"
       ]
     ]
   },
@@ -520,43 +624,43 @@
     "options": [
       [
         "1",
-        "a person with brown eyes"
+        "a person with chocolate brown eyes warm dark iris"
       ],
       [
         "2",
-        "a person with blue eyes"
+        "a person with vivid blue eyes bright sky blue or ocean blue iris"
       ],
       [
         "3",
-        "a person with hazel green-brown eyes"
+        "a person with hazel eyes green-brown mixed iris"
       ],
       [
         "4",
-        "a person with amber or golden yellow eyes"
+        "a person with amber or golden yellow eyes warm honey iris"
       ],
       [
         "5",
-        "a person with gray eyes"
+        "a person with neutral gray ash eyes desaturated iris no blue or green tint"
       ],
       [
         "6",
-        "a person with green eyes"
+        "a person with vivid green eyes emerald or jade iris"
       ],
       [
         "7",
-        "a person with purple or violet eyes"
+        "a person with purple or violet eyes lavender iris"
       ],
       [
         "8",
-        "a person with red or pink eyes"
+        "a person with red or pink eyes albino iris"
       ],
       [
         "9",
-        "a person with silver metallic eyes"
+        "a person with silver metallic eyes shiny chrome iris"
       ],
       [
         "a",
-        "a person with very dark black eyes"
+        "a person with very dark almost black eyes deep dark iris"
       ]
     ]
   }

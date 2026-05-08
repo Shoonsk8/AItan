@@ -173,6 +173,24 @@ def init_db(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS group_colors (grp TEXT PRIMARY KEY, color TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS sizes (key TEXT PRIMARY KEY, w INTEGER, h INTEGER)")
     conn.execute("CREATE TABLE IF NOT EXISTS collapsed (key TEXT PRIMARY KEY, val INTEGER)")
+    # Per-field popup mode for matrix combos: "grid" | "freq" | "alpha".
+    # Plain combos store "freq" | "alpha" too. Right-click cycles, the
+    # selected mode is restored on next load.
+    conn.execute("CREATE TABLE IF NOT EXISTS popup_modes (key TEXT PRIMARY KEY, mode TEXT)")
+    conn.commit()
+
+
+def load_popup_modes(conn):
+    """Return {key: mode} where mode is 'grid' / 'freq' / 'alpha'."""
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS popup_modes (key TEXT PRIMARY KEY, mode TEXT)")
+        return {r[0]: r[1] for r in conn.execute("SELECT key, mode FROM popup_modes")}
+    except Exception:
+        return {}
+
+
+def save_popup_mode(conn, key, mode):
+    conn.execute("INSERT OR REPLACE INTO popup_modes VALUES (?,?)", (key, mode))
     conn.commit()
 
 def load_collapsed(conn):
@@ -323,6 +341,15 @@ class _GridPopupCombo(QComboBox):
         self._popup_widget = None
 
     def showPopup(self):
+        # The owning FieldWidget can flip _matrix_mode to "linear" via
+        # right-click — in that case fall back to the standard linear
+        # dropdown so freq/alpha sort remains useful.
+        owner = self.parent()
+        while owner is not None and not hasattr(owner, "_matrix_mode"):
+            owner = owner.parent()
+        if owner is not None and getattr(owner, "_matrix_mode", "grid") != "grid":
+            super().showPopup()
+            return
         # If the combo has 1- or 2-digit hex keys, show a grid.
         # Otherwise fall back to the standard list popup.
         keys = []
@@ -437,6 +464,12 @@ class FieldWidget(QGroupBox):
         self._resize_start_size = None
         self._resize_dir  = None
         self._sort_freq   = True
+        # Popup display mode for matrix-style fields. "grid" uses the
+        # 16×16 / 4×4 picker; "linear" falls back to a flat dropdown
+        # that respects _sort_freq. Right-click cycles grid → freq →
+        # alpha → grid. For non-matrix fields this flag is unused —
+        # they always render a linear popup.
+        self._matrix_mode = "grid"
         self._group       = group
         self._group_peers = group_peers or []
         self._bg_color    = color or "#2a2a2a"
@@ -785,7 +818,9 @@ class FieldWidget(QGroupBox):
                 self._cb = QComboBox()
             self._cb.setStyleSheet(_CB_SS)
             self._cb.setMinimumWidth(160)
-            self._sort_lbl = QLabel(_lang_label("freq / 頻度"))
+            # Sort/mode label. For matrix fields it cycles grid → freq →
+            # alpha; for plain combos it cycles freq → alpha.
+            self._sort_lbl = QLabel(self._sort_label_text())
             self._sort_lbl.setStyleSheet("color:#888;font-size:9pt;")
             self._fill_combo()
             self._cb.currentIndexChanged.connect(self._on_select)
@@ -882,15 +917,66 @@ class FieldWidget(QGroupBox):
                 cb.setCurrentIndex(idx)
         cb.blockSignals(False)
 
+    def _sort_label_text(self):
+        """Mode label shown next to the combo. Matrix fields cycle
+        grid → freq → alpha; plain combos cycle freq → alpha."""
+        if self.style == "matrix" and getattr(self, "_matrix_mode", "grid") == "grid":
+            return _lang_label("grid / 格子")
+        return (_lang_label("freq / 頻度") if self._sort_freq
+                else _lang_label("alpha / 順序"))
+
     def _toggle_sort(self):
-        self._sort_freq = not self._sort_freq
+        # Matrix-style fields cycle through three popup modes:
+        #   grid   → linear freq → linear alpha → grid …
+        # Plain fields just toggle freq ↔ alpha.
+        if self.style == "matrix":
+            mode = getattr(self, "_matrix_mode", "grid")
+            if mode == "grid":
+                self._matrix_mode = "linear"
+                self._sort_freq = True
+            elif self._sort_freq:
+                self._sort_freq = False
+            else:
+                self._matrix_mode = "grid"
+                self._sort_freq = True
+        else:
+            self._sort_freq = not self._sort_freq
+        # Persist the new mode so it survives a restart.
+        try:
+            save_popup_mode(self.conn, self.key, self._popup_mode_token())
+        except Exception:
+            pass
         # Update the label only if it exists (main-combo style); sub-
         # combo coded fields don't have one.
         if hasattr(self, "_sort_lbl") and self._sort_lbl is not None:
-            self._sort_lbl.setText(_lang_label("freq / 頻度") if self._sort_freq else _lang_label("alpha / 順序"))
+            self._sort_lbl.setText(self._sort_label_text())
             self._sort_lbl.setStyleSheet(
                 "color:#888;font-size:9pt;" if self._sort_freq
                 else "color:#8ab;font-size:9pt;font-style:italic;")
+
+    def _popup_mode_token(self):
+        """One-word serialization of (matrix_mode, sort_freq) for the
+        popup_modes table. 'grid' implies the matrix grid popup; 'freq'
+        or 'alpha' means linear popup with that sort order."""
+        if self.style == "matrix" and getattr(self, "_matrix_mode", "grid") == "grid":
+            return "grid"
+        return "freq" if self._sort_freq else "alpha"
+
+    def apply_popup_mode_token(self, token):
+        """Restore a saved popup mode token onto this widget."""
+        if token == "grid":
+            if self.style == "matrix":
+                self._matrix_mode = "grid"
+            self._sort_freq = True
+        elif token == "alpha":
+            if self.style == "matrix":
+                self._matrix_mode = "linear"
+            self._sort_freq = False
+        elif token == "freq":
+            if self.style == "matrix":
+                self._matrix_mode = "linear"
+            self._sort_freq = True
+        # any unknown token: leave defaults alone
         if self.options:
             self._fill_combo(preserve=True)
         # Refill all coded-field sub-combos for this widget. One toggle
@@ -1501,7 +1587,7 @@ class FieldWidget(QGroupBox):
             if cv:
                 my_conns = [r for r in cv._connections if r[1] == self.key or r[3] == self.key]
                 all_conns = cv._connections
-                if dot_key:
+                if my_conns:
                     act_disc_this = menu.addAction(_lang_label("Disconnect this dot / このドットを切断"))
                     act_disc_box  = menu.addAction(_lang_label("Disconnect all on this box / このボックスのすべてを切断"))
                 if all_conns:
@@ -2028,6 +2114,9 @@ class AttrViewerWidget(QWidget):
         sec_groups   = cfg.get("__section_groups__", {})
         col_names    = cfg.get("__col_names__", {})
         parent_names = cfg.get("__parent_names__", {})
+        # Per-field popup mode (grid / freq / alpha) — restored after each
+        # widget is created so the right-click cycle survives a restart.
+        popup_modes = load_popup_modes(self.conn)
 
         # Auto-fill for universal built-ins (FIELD_DEFS):
         #  1. Append any that aren't in saved order (unless explicitly deleted)
@@ -2135,6 +2224,21 @@ class AttrViewerWidget(QWidget):
             except Exception:
                 pass
             w._conditions = list(cfg.get("__conditions__", {}).get(key, []))
+            # Restore saved popup mode (grid / freq / alpha) and refresh
+            # the label + combo ordering to match.
+            _saved_mode = popup_modes.get(key)
+            if _saved_mode and hasattr(w, "apply_popup_mode_token"):
+                w.apply_popup_mode_token(_saved_mode)
+                if hasattr(w, "_sort_lbl") and w._sort_lbl is not None:
+                    w._sort_lbl.setText(w._sort_label_text())
+                    w._sort_lbl.setStyleSheet(
+                        "color:#888;font-size:9pt;" if w._sort_freq
+                        else "color:#8ab;font-size:9pt;font-style:italic;")
+                if w.options:
+                    try:
+                        w._fill_combo(preserve=True)
+                    except Exception:
+                        pass
             px, py = positions.get(key, (x, y))
             px = max(0, min(px, 4000))   # clamp in case of corrupted saved position
             py = max(0, min(py, 4000))
@@ -2510,6 +2614,24 @@ class AttrViewerWidget(QWidget):
         anchor to their parents when re-shown)."""
         if not self.widgets:
             return
+        # Confirm before nuking connections — users were losing wires they
+        # had spent time building because Auto Grid sits next to Layout in
+        # the footer and the two buttons read as similar "arrange / save"
+        # actions.
+        if self._connections:
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                self,
+                _lang_label("Auto Grid / 自動グリッド"),
+                _lang_label(
+                    f"Auto Grid will remove all {len(self._connections)} "
+                    f"connection(s) before rearranging tiles. Continue?\n"
+                    f"自動グリッドは、タイルを再配置する前にすべての"
+                    f"接続（{len(self._connections)} 件）を削除します。続行しますか？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self._push_undo()
         # 1. Drop all connections
         for row in list(self._connections):

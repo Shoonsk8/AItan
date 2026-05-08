@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QMessageBox, QInputDialog, QMenu, QStackedWidget,
                               QTableWidget, QTableWidgetItem, QHeaderView,
                               QAbstractItemView, QTreeWidget, QTreeWidgetItem,
-                              QSplitter)
+                              QSplitter, QDialog, QCheckBox, QGridLayout)
 from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
                          QColor, QPen, QShortcut, QKeySequence, QAction, QDrag)
@@ -26,10 +26,19 @@ VERSION = "2.4.3"
 
 _VALID_EXTS = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
 
-# Persist across navigations so revisits are instant. Key: (path, mtime, size).
-# Values are QPixmap (cheap to wrap in QIcon at use time). Bounded.
+# Persist across navigations so revisits are instant. Key: "{path}|{mtime}".
+# Values are QPixmap decoded at _DECODE_SIZE — a single high-res master that
+# Qt scales smoothly inside the icon view, so Ctrl+Wheel resize doesn't have
+# to re-decode anything (or even re-key the cache).
 _THUMB_CACHE: dict = {}
 _THUMB_CACHE_MAX = 500
+_DECODE_SIZE = 128   # source pixmap size. Big enough for sharp display
+                     # at the default 32-px tree thumb plus moderate
+                     # Ctrl+Wheel zoom; small enough that decoding a
+                     # child folder's worth of images / video first
+                     # frames doesn't backlog the loader. Beyond 128 px
+                     # zoom the icon scales bilinearly (some softness)
+                     # — same trade-off Nemo makes.
 
 
 # ── Open / Open with… (module-level so other UIs can use them) ────────────
@@ -256,6 +265,7 @@ class _FMIconList(QListWidget):
     def _install_viewport_filter(self):
         self._fm_press_pos = None
         self._fm_press_item = None
+        self._fm_pending_collapse = False
         self.viewport().installEventFilter(self)
 
     def eventFilter(self, obj, event):
@@ -266,9 +276,25 @@ class _FMIconList(QListWidget):
                     pos = event.position().toPoint()
                     self._fm_press_pos = pos
                     self._fm_press_item = self.itemAt(pos)
+                    self._fm_pending_collapse = False
+                    # Nemo-style: clicking an already-selected item in a
+                    # multi-selection preserves the selection on press so
+                    # the user can start a drag carrying ALL selected
+                    # items. If no drag fires by the release, collapse
+                    # to the clicked item then.
+                    mods = event.modifiers()
+                    modifierless = not (mods & (
+                        Qt.KeyboardModifier.ControlModifier |
+                        Qt.KeyboardModifier.ShiftModifier))
+                    sel = self.selectedItems()
+                    if (modifierless and self._fm_press_item is not None
+                            and self._fm_press_item in sel and len(sel) > 1):
+                        self._fm_pending_collapse = True
+                        return True   # consume; Qt's default would deselect
                 else:
                     self._fm_press_pos = None
                     self._fm_press_item = None
+                    self._fm_pending_collapse = False
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._fm_press_pos is not None
@@ -276,11 +302,27 @@ class _FMIconList(QListWidget):
                     cur = event.position().toPoint()
                     if (cur - self._fm_press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                         self._fm_press_pos = None
+                        self._fm_pending_collapse = False  # drag wins
                         item = self._fm_press_item
                         self._fm_press_item = None
                         self._start_url_drag(seed_item=item)
                         return True
             elif t == event.Type.MouseButtonRelease:
+                if (self._fm_pending_collapse
+                        and self._fm_press_item is not None):
+                    # Plain click without drag → collapse selection now.
+                    # Consume the release too so Qt's release handler
+                    # doesn't see a release without a matching press
+                    # (which can leave the selection model in a state
+                    # where the next click range-selects).
+                    self.clearSelection()
+                    self._fm_press_item.setSelected(True)
+                    self.setCurrentItem(self._fm_press_item)
+                    self._fm_pending_collapse = False
+                    self._fm_press_pos = None
+                    self._fm_press_item = None
+                    return True
+                self._fm_pending_collapse = False
                 self._fm_press_pos = None
                 self._fm_press_item = None
         return super().eventFilter(obj, event)
@@ -299,11 +341,13 @@ class _FMIconList(QListWidget):
             items = [seed_item] + [i for i in items if i is not seed_item]
         if not items:
             return
-        urls = []
+        paths = []
         for it in items:
             data = it.data(Qt.ItemDataRole.UserRole)
             if data and data != ".." and os.path.exists(data):
-                urls.append(QUrl.fromLocalFile(data))
+                paths.append(data)
+        paths = _prune_descendants(paths)
+        urls = [QUrl.fromLocalFile(p) for p in paths]
         if not urls:
             return
         mime = QMimeData()
@@ -353,12 +397,15 @@ class _FMIconList(QListWidget):
         if not srcs or not os.path.isdir(target):
             ev.ignore(); return
         ev.acceptProposedAction()
+        mode = ("copy"
+                if ev.modifiers() & Qt.KeyboardModifier.ControlModifier
+                else "move")
         try:
-            self._fm.move_files_into(srcs, target)
+            self._fm.move_files_into(srcs, target, mode=mode)
         except Exception as e:
             import traceback
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Drop Error", f"Failed to move files:\n{e}\n{traceback.format_exc()}")
+            QMessageBox.critical(self, "Drop Error", f"Failed to {mode} files:\n{e}\n{traceback.format_exc()}")
 
 
 class _FMItem(QTreeWidgetItem):
@@ -457,7 +504,8 @@ class _FMTreeList(QTreeWidget):
         # cache_key → QTreeWidgetItem for async-loaded thumbnails
         self._items_by_key = {}
         self._thumb_loader = None
-        self._suppress_collapse = False
+        self._pending_collapse = False  # Nemo-style: collapse multi-select
+                                        # only on release if no drag fired
         self._thumb_size = self._TREE_THUMB_SIZE   # mutable via Ctrl+Wheel
 
     # ── Population ───────────────────────────────────────────────────────────
@@ -494,13 +542,19 @@ class _FMTreeList(QTreeWidget):
                 queue.append(it.child(i))
 
     def populate_root(self, dir_path):
-        # Cancel any prior loader and wait for it to exit before
-        # dropping the reference (Qt aborts if a QThread is destroyed
-        # while still running).
+        # Cancel any prior loader without blocking the UI. Hold a ref in
+        # _retired_loaders until its `finished` signal lands, so Qt
+        # doesn't abort on QThread destruction.
         if self._thumb_loader is not None:
-            self._thumb_loader.cancel()
-            if self._thumb_loader.isRunning():
-                self._thumb_loader.wait(2000)
+            if not hasattr(self, "_retired_loaders"):
+                self._retired_loaders = []
+            old = self._thumb_loader
+            old.cancel()
+            self._retired_loaders.append(old)
+            old.finished.connect(
+                lambda _ldr=old: (
+                    self._retired_loaders.remove(_ldr)
+                    if _ldr in self._retired_loaders else None))
             self._thumb_loader = None
         # Snapshot expansion before we wipe the tree, so a
         # repopulate (e.g. Ctrl+Wheel resize) doesn't collapse folders
@@ -542,26 +596,29 @@ class _FMTreeList(QTreeWidget):
 
     def _kick_thumb_loader(self):
         """Start (or restart) the async thumbnail loader for any items
-        still missing icons. Cancels any running loader, waits for it
-        to actually exit (otherwise Qt aborts with 'terminate called
-        without an active exception' when the old QThread is dropped
-        while still running), then starts a fresh one — _items_by_key
-        only contains UNloaded items, so no work is duplicated."""
+        still missing icons. The old loader is cancelled and kept alive
+        in `_retired_loaders` until its `finished` signal fires — this
+        avoids the 2-second main-thread wait that previously blocked
+        mouse / drag events whenever you changed folder or expanded a
+        subfolder. Old emits past cancel are guarded inside
+        _ThumbLoader.run(); duplicates are harmless because
+        _on_thumb_ready pops from _items_by_key on first hit."""
         pending = [(k, p) for k, (it, p) in self._items_by_key.items()]
         if not pending:
             return
+        if not hasattr(self, "_retired_loaders"):
+            self._retired_loaders = []
         if self._thumb_loader is not None:
-            self._thumb_loader.cancel()
-            # Wait for the run loop to actually return before we drop
-            # the reference. Cancel only sets a flag — the thread may
-            # be mid-decode. Bound the wait so a slow video decode
-            # can't freeze us forever.
-            if not self._thumb_loader.wait(2000):
-                # Thread didn't exit in 2 s — leave it alone, Python
-                # will deal with it. This shouldn't happen in practice
-                # since the cancel flag is checked between every file.
-                pass
-        self._thumb_loader = _ThumbLoader(pending, self._thumb_size, self)
+            old = self._thumb_loader
+            old.cancel()
+            self._retired_loaders.append(old)
+            # Drop our hard ref once the thread actually finishes; that's
+            # what keeps Qt from aborting on QThread destruction.
+            old.finished.connect(
+                lambda _ldr=old: (
+                    self._retired_loaders.remove(_ldr)
+                    if _ldr in self._retired_loaders else None))
+        self._thumb_loader = _ThumbLoader(pending, _DECODE_SIZE, self)
         self._thumb_loader.thumb_ready.connect(self._on_thumb_ready)
         self._thumb_loader.start()
 
@@ -577,9 +634,12 @@ class _FMTreeList(QTreeWidget):
             new_size = max(self._MIN_TREE_THUMB, min(self._MAX_TREE_THUMB, new_size))
             if new_size != self._thumb_size:
                 self._thumb_size = new_size
+                # Cached pixmaps are decoded at _DECODE_SIZE and the cache
+                # key no longer includes thumb_size, so resizing the icon
+                # view is the only work needed per wheel tick — Qt scales
+                # the existing pixmaps smoothly. No tree rebuild, no
+                # decode, no cache miss.
                 self.setIconSize(QSize(new_size, new_size))
-                # Re-render: tree items keyed by old size are stale — repopulate
-                self._fm._refresh()
             ev.accept()
             return
         super().wheelEvent(ev)
@@ -656,7 +716,7 @@ class _FMTreeList(QTreeWidget):
         it.setData(0, Qt.ItemDataRole.UserRole, full)
         it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
         # Thumbnail icon — cached if available, otherwise queued
-        cache_key = f"{full}|{mtime}|{self._thumb_size}"
+        cache_key = f"{full}|{mtime}"
         cached = _THUMB_CACHE.get(cache_key)
         if cached is not None:
             it.setIcon(0, QIcon(self._rim_for(full, cached)))
@@ -684,7 +744,7 @@ class _FMTreeList(QTreeWidget):
                             mtime = os.path.getmtime(data)
                         except OSError:
                             mtime = 0
-                        cache_key = f"{data}|{mtime}|{self._thumb_size}"
+                        cache_key = f"{data}|{mtime}"
                         cached = _THUMB_CACHE.get(cache_key)
                         if cached is not None:
                             it.setIcon(0, QIcon(self._rim_for(data, cached)))
@@ -731,13 +791,13 @@ class _FMTreeList(QTreeWidget):
                 pos = event.position().toPoint()
                 self._press_pos = pos
                 self._press_item = self.itemAt(pos)
-                # Plain click → collapse selection to the clicked row
-                # NOW (don't wait for release). Without this, an old
-                # multi-selection survives the click and the subsequent
-                # drag picks up all of it — the user reported this as
-                # "click + drag acts like shift+click". To drag a
-                # multi-selection, hold Ctrl or Shift while dragging,
-                # which Qt's default handler honors.
+                self._pending_collapse = False
+                # Nemo-style: if user clicks an already-selected row in
+                # a multi-selection without modifiers, preserve the
+                # selection on PRESS so a drag carries all rows. If no
+                # drag fires, collapse to the clicked row on RELEASE.
+                # Without this, Qt's default would deselect siblings on
+                # press and the drag would only carry one row.
                 mods = event.modifiers()
                 modifierless = not (mods & (
                     Qt.KeyboardModifier.ControlModifier |
@@ -745,12 +805,13 @@ class _FMTreeList(QTreeWidget):
                 sel = self.selectedItems()
                 if (modifierless and self._press_item is not None
                         and self._press_item in sel and len(sel) > 1):
-                    # Force collapse to the clicked row before super() so
-                    # the about-to-start drag carries only this row.
-                    self.clearSelection()
-                    self._press_item.setSelected(True)
-                    self.setCurrentItem(self._press_item)
-                self._suppress_collapse = False
+                    # Skip if click is on the expand-arrow / indent area
+                    # so folder expansion still works for multi-selected
+                    # folders. visualItemRect.left() = start of content.
+                    item_rect = self.visualItemRect(self._press_item)
+                    if pos.x() >= item_rect.left():
+                        self._pending_collapse = True
+                        return True   # consume — Qt would deselect siblings
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._press_pos is not None
@@ -758,15 +819,26 @@ class _FMTreeList(QTreeWidget):
                     cur = event.position().toPoint()
                     if (cur - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                         self._press_pos = None
-                        self._suppress_collapse = False
+                        self._pending_collapse = False  # drag wins
                         self._start_url_drag()
                         return True
             elif t == event.Type.MouseButtonRelease:
-                # Nemo-style: a plain click on an already-selected item
-                # in a multi-selection does NOT collapse on release.
-                # Was: we'd clearSelection + reselect just the clicked
-                # one, which deselected everything the user had picked.
-                self._suppress_collapse = False
+                if (self._pending_collapse
+                        and self._press_item is not None):
+                    # Plain click without drag → collapse selection to
+                    # the clicked row (Nemo / Windows Explorer style).
+                    # Consume the release too so Qt's release handler
+                    # doesn't see a release without a matching press —
+                    # otherwise the selection model can be left in a
+                    # state where the next click acts as a range select.
+                    self.clearSelection()
+                    self._press_item.setSelected(True)
+                    self.setCurrentItem(self._press_item)
+                    self._pending_collapse = False
+                    self._press_pos = None
+                    self._press_item = None
+                    return True
+                self._pending_collapse = False
                 self._press_pos = None
                 self._press_item = None
         return super().eventFilter(obj, event)
@@ -780,7 +852,7 @@ class _FMTreeList(QTreeWidget):
             items.insert(0, self._press_item)
         if not items:
             return
-        urls = []
+        paths = []
         seen = set()   # dedupe — the same path could appear via the
                        # press item AND a duplicate selection entry
         for it in items:
@@ -792,7 +864,12 @@ class _FMTreeList(QTreeWidget):
             if data in seen:
                 continue
             seen.add(data)
-            urls.append(QUrl.fromLocalFile(data))
+            paths.append(data)
+        # Drop descendants of selected folders so an expanded folder
+        # plus its visible children moves as one item, not as folder +
+        # loose files (which would extract the children at the target).
+        paths = _prune_descendants(paths)
+        urls = [QUrl.fromLocalFile(p) for p in paths]
         if not urls:
             return
         mime = QMimeData()
@@ -889,7 +966,10 @@ class _FMTreeList(QTreeWidget):
             except Exception:
                 pass
         ev.acceptProposedAction()
-        self._fm.move_files_into(srcs, target)
+        mode = ("copy"
+                if ev.modifiers() & Qt.KeyboardModifier.ControlModifier
+                else "move")
+        self._fm.move_files_into(srcs, target, mode=mode)
 
     def _on_double_click(self, item, col):
         target = item.data(0, Qt.ItemDataRole.UserRole)
@@ -985,10 +1065,10 @@ class FilePane(QWidget):
     def _folder_icon(self):
         return self.fm._folder_icon()
 
-    def move_files_into(self, src_paths, target_dir):
+    def move_files_into(self, src_paths, target_dir, mode="move"):
         # Delegate the heavy lifting to FM (touches app data + disk
         # stores), then refresh both panes if dual-pane is active.
-        self.fm.move_files_into(src_paths, target_dir)
+        self.fm.move_files_into(src_paths, target_dir, mode=mode)
 
     # ── Navigation ──────────────────────────────────────────────────────────
     def navigate(self, path):
@@ -1251,10 +1331,16 @@ class FilePane(QWidget):
             self._revert_item_name(item, old_name)
             return
         # Update the item's stored path (UserRole) so future renames
-        # work from the new path.
+        # work from the new path. Also setText explicitly — Qt's inline
+        # editor is supposed to commit the new text before itemChanged
+        # fires, but in some environments/timing the cell still shows
+        # the old name; setting it again is safe (editing_lock blocks
+        # the recursive _on_item_changed) and guarantees the display
+        # reflects what's actually on disk.
         self.tree._editing_lock = True
         try:
             item.setData(0, Qt.ItemDataRole.UserRole, new_path)
+            item.setText(0, new_name)
         finally:
             self.tree._editing_lock = False
         renames = {}
@@ -1424,6 +1510,125 @@ class FilePane(QWidget):
         self.tree.setFocus()
 
 
+def _prune_descendants(paths):
+    """Drop any path that lives under another path in the same selection.
+    A folder move carries its children implicitly — including those
+    children separately would lift them out of the folder at the target.
+    Used by both drag-start sites (icon list + tree list)."""
+    norm_pairs = [(os.path.normpath(os.path.abspath(p)), p) for p in paths]
+    norm_set   = {n for n, _ in norm_pairs}
+    keep = []
+    for n, orig in norm_pairs:
+        # walk parents — if any parent is also in the selection, skip
+        parent = os.path.dirname(n)
+        skipped = False
+        while parent and parent != os.path.dirname(parent):
+            if parent in norm_set:
+                skipped = True
+                break
+            parent = os.path.dirname(parent)
+        if not skipped:
+            keep.append(orig)
+    return keep
+
+
+def _suggest_unique_name(target_dir, name):
+    """Nemo-style auto-rename suggestion: ``name (1).ext`` then ``(2)``…"""
+    stem, ext = os.path.splitext(name)
+    i = 1
+    while True:
+        candidate = f"{stem} ({i}){ext}"
+        if not os.path.exists(os.path.join(target_dir, candidate)):
+            return candidate
+        i += 1
+
+
+def _fmt_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def _fmt_mtime(path):
+    try:
+        return time.strftime("%Y-%m-%d %H:%M",
+                             time.localtime(os.path.getmtime(path)))
+    except Exception:
+        return "?"
+
+
+class _ConflictDialog(QDialog):
+    """Nemo-style file-conflict prompt: Skip / Replace / Rename, with
+    optional 'Apply to all' that the caller honors for remaining items."""
+
+    SKIP, REPLACE, RENAME = "skip", "replace", "rename"
+
+    def __init__(self, parent, src, dst, remaining=0):
+        super().__init__(parent)
+        self.setWindowTitle("Replace?")
+        self.choice = self.SKIP
+        self.new_name = os.path.basename(dst)
+        self.apply_to_all = False
+
+        target_dir = os.path.dirname(dst)
+        name = os.path.basename(dst)
+
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel(
+            f"A file with the same name already exists in\n\"{target_dir}\""))
+
+        grid = QGridLayout()
+        grid.addWidget(QLabel("<b>Existing file</b>"), 0, 1)
+        grid.addWidget(QLabel("<b>New file</b>"),      0, 2)
+        try:
+            old_size = _fmt_size(os.path.getsize(dst))
+        except Exception:
+            old_size = "?"
+        try:
+            new_size = _fmt_size(os.path.getsize(src))
+        except Exception:
+            new_size = "?"
+        grid.addWidget(QLabel("Size:"),     1, 0)
+        grid.addWidget(QLabel(old_size),    1, 1)
+        grid.addWidget(QLabel(new_size),    1, 2)
+        grid.addWidget(QLabel("Modified:"), 2, 0)
+        grid.addWidget(QLabel(_fmt_mtime(dst)), 2, 1)
+        grid.addWidget(QLabel(_fmt_mtime(src)), 2, 2)
+        v.addLayout(grid)
+
+        v.addWidget(QLabel("New filename:"))
+        self.name_edit = QLineEdit(_suggest_unique_name(target_dir, name))
+        v.addWidget(self.name_edit)
+
+        if remaining > 0:
+            self.apply_cb = QCheckBox(
+                f"Apply this action to the remaining {remaining} conflict(s)")
+            v.addWidget(self.apply_cb)
+        else:
+            self.apply_cb = None
+
+        btns = QHBoxLayout()
+        btn_skip    = QPushButton("Skip")
+        btn_replace = QPushButton("Replace")
+        btn_rename  = QPushButton("Rename")
+        btn_skip.clicked.connect(lambda: self._done(self.SKIP))
+        btn_replace.clicked.connect(lambda: self._done(self.REPLACE))
+        btn_rename.clicked.connect(lambda: self._done(self.RENAME))
+        btns.addStretch(1)
+        btns.addWidget(btn_skip)
+        btns.addWidget(btn_replace)
+        btns.addWidget(btn_rename)
+        v.addLayout(btns)
+
+    def _done(self, choice):
+        self.choice = choice
+        self.new_name = self.name_edit.text().strip() or self.new_name
+        if self.apply_cb is not None:
+            self.apply_to_all = self.apply_cb.isChecked()
+        self.accept()
+
+
 class FileManagerWindow(QWidget):
     """Top-level FM window. Holds 1 (single) or 2 (dual) FilePanes in
     a horizontal QSplitter. Toggle button switches between modes."""
@@ -1564,26 +1769,86 @@ class FileManagerWindow(QWidget):
     def config(self):
         return self.app.config if hasattr(self, 'app') and hasattr(self.app, 'config') else {}
 
-    def move_files_into(self, src_paths, target_dir):
-        moved   = 0
-        renames = {}            # old → new (for batched store flush)
+    def move_files_into(self, src_paths, target_dir, mode="move"):
+        is_copy = (mode == "copy")
+        moved   = 0           # also reused for "copied" count when is_copy
+        renames = {}            # old → new (move only — for batched store flush)
+        copies  = {}            # old → new (copy only)
         errors  = []
-        skipped = []            # already-at-target
+        skipped = []            # already-at-target or user chose Skip
         batch   = []
+        # Persisted "Apply to all" decision: SKIP / REPLACE / RENAME
+        sticky_choice = None
+        # Pre-count conflicts so the "Apply to all (N remaining)" label is
+        # accurate from the first prompt. Same-folder cases never prompt:
+        # in move mode they're skipped silently; in copy mode they auto-
+        # rename (the whole point of Ctrl+drop).
+        def _is_conflict(s):
+            if not os.path.exists(s):
+                return False
+            d = os.path.join(target_dir, os.path.basename(s))
+            same_folder = os.path.normpath(s) == os.path.normpath(d)
+            if same_folder:
+                return False
+            return os.path.exists(d)
+        pending_conflicts = sum(1 for s in src_paths if _is_conflict(s))
         for src in src_paths:
             if not os.path.exists(src):
                 errors.append(f"Missing: {os.path.basename(src)}")
                 continue
             dst = os.path.join(target_dir, os.path.basename(src))
             if os.path.normpath(src) == os.path.normpath(dst):
-                skipped.append(os.path.basename(src))
-                continue
+                if is_copy:
+                    # Ctrl+drop in same folder → duplicate with auto-name
+                    dst = os.path.join(
+                        target_dir,
+                        _suggest_unique_name(target_dir,
+                                             os.path.basename(src)))
+                else:
+                    skipped.append(os.path.basename(src))
+                    continue
+            if os.path.exists(dst):
+                pending_conflicts -= 1
+                if sticky_choice == _ConflictDialog.SKIP:
+                    skipped.append(os.path.basename(src))
+                    continue
+                if sticky_choice == _ConflictDialog.RENAME:
+                    dst = os.path.join(
+                        target_dir,
+                        _suggest_unique_name(target_dir, os.path.basename(src)))
+                elif sticky_choice == _ConflictDialog.REPLACE:
+                    pass  # fall through, shutil.{move,copy2} will overwrite
+                else:
+                    dlg = _ConflictDialog(self, src, dst,
+                                          remaining=pending_conflicts)
+                    dlg.exec()
+                    if dlg.apply_to_all:
+                        sticky_choice = dlg.choice
+                    if dlg.choice == _ConflictDialog.SKIP:
+                        skipped.append(os.path.basename(src))
+                        continue
+                    if dlg.choice == _ConflictDialog.RENAME:
+                        new_name = dlg.new_name
+                        # Guard: still conflicts? bump until unique so we
+                        # don't silently overwrite when the user typed an
+                        # existing name.
+                        if os.path.exists(os.path.join(target_dir, new_name)):
+                            new_name = _suggest_unique_name(target_dir, new_name)
+                        dst = os.path.join(target_dir, new_name)
+                    # Replace: dst stays as-is, shutil overwrites.
             try:
-                shutil.move(src, dst)
-                self._sync_in_memory(src, dst)
-                renames[src] = dst
-                batch.append({"type": "move", "old_path": src, "new_path": dst})
-                moved += 1
+                if is_copy:
+                    shutil.copy2(src, dst)
+                    self._copy_in_memory(src, dst)
+                    copies[src] = dst
+                    moved += 1
+                else:
+                    shutil.move(src, dst)
+                    self._sync_in_memory(src, dst)
+                    renames[src] = dst
+                    batch.append({"type": "move", "old_path": src,
+                                  "new_path": dst})
+                    moved += 1
             except Exception as e:
                 errors.append(f"{os.path.basename(src)}: {e}")
         # Flush the on-disk stores ONCE (faces DB + features.pt) instead of
@@ -1600,10 +1865,22 @@ class FileManagerWindow(QWidget):
                     self.app._push_undo(batch)
             except Exception:
                 pass
-        # Surface anything that wasn't moved so the user isn't left
-        # wondering why a selection of N produced N - k moves.
+        if copies:
+            # Copies don't rename anything in the embedding stores, but the
+            # new entries' attrs need to land on disk so the duplicates
+            # come back tagged on next launch.
+            try:
+                import aisearch_attrs as _am
+                if getattr(self.app, "current_project", None):
+                    _am.save(self.app.current_project, self.app.attrs_data)
+            except Exception:
+                pass
+        # Surface anything that wasn't processed so the user isn't left
+        # wondering why a selection of N produced N - k results.
+        verb_past  = "Copied" if is_copy else "Moved"
+        title      = "Copy"   if is_copy else "Move"
         if errors or skipped:
-            parts = [f"Moved {moved}"]
+            parts = [f"{verb_past} {moved}"]
             if skipped:
                 parts.append(f"{len(skipped)} already in target: "
                              + ", ".join(skipped[:5])
@@ -1611,8 +1888,9 @@ class FileManagerWindow(QWidget):
             if errors:
                 parts.append(f"{len(errors)} error(s):\n"
                              + "\n".join(errors[:10]))
-            QMessageBox.warning(self, "Move", "\n".join(parts))
-        # Mirror moves into the main window's table rows.
+            QMessageBox.warning(self, title, "\n".join(parts))
+        # Mirror moves into the main window's table rows. Copies don't
+        # rename anything, so this is a no-op for is_copy.
         self._update_main_table_paths(renames)
         self.refresh_all()
 
@@ -1633,6 +1911,25 @@ class FileManagerWindow(QWidget):
         try:
             if old_path in app.attrs_data:
                 app.attrs_data[new_path] = app.attrs_data.pop(old_path)
+        except Exception:
+            pass
+
+    def _copy_in_memory(self, src_path, dst_path):
+        """Ctrl+drop duplicate: original stays put, dst is a fresh entry
+        that inherits the source's attrs (tags, person_id, note…) so the
+        copy comes back tagged."""
+        import copy as _copy
+        app = self.app
+        try:
+            paths = app.data["paths"] if app.data and "paths" in app.data else None
+            if paths is not None and dst_path not in paths:
+                paths.append(dst_path)
+        except Exception:
+            pass
+        try:
+            if src_path in app.attrs_data:
+                app.attrs_data[dst_path] = _copy.deepcopy(
+                    app.attrs_data[src_path])
         except Exception:
             pass
 
@@ -1676,24 +1973,46 @@ class FileManagerWindow(QWidget):
     def _update_main_table_paths(self, renames):
         """Walk the main app's table and rewrite any row whose path is
         in `renames` to its new path. Without this, the main window
-        keeps showing the old filename / dirname after an FM rename."""
+        keeps showing the old filename / dirname after an FM rename.
+        Also rewrites query_path when the query (top file in search
+        mode) is one of the renames — otherwise right-arrow keeps
+        moving siblings into the OLD folder."""
+        import sys as _sys
+        print(f"[FM→MAIN] _update_main_table_paths renames={list(renames.items())[:3]}"
+              f"{'...' if len(renames) > 3 else ''}",
+              file=_sys.stderr, flush=True)
         if not renames:
             return
         try:
-            table = getattr(self.app, "table", None)
-            if table is None or not hasattr(table, "set_row_path"):
-                return
             norm = {os.path.normpath(os.path.abspath(k)): v
                     for k, v in renames.items()}
-            for row in range(table.rowCount()):
-                rp = table.get_row_path(row)
-                if not rp:
-                    continue
-                k = os.path.normpath(os.path.abspath(rp))
+            table = getattr(self.app, "table", None)
+            if table is not None and hasattr(table, "set_row_path"):
+                for row in range(table.rowCount()):
+                    rp = table.get_row_path(row)
+                    if not rp:
+                        continue
+                    k = os.path.normpath(os.path.abspath(rp))
+                    if k in norm:
+                        table.set_row_path(row, norm[k])
+            # Right-arrow uses query_path's dirname as the move target.
+            # If the query was just renamed/moved, update it so the next
+            # right-press targets the new folder.
+            qp = getattr(self.app, "query_path", None)
+            print(f"[FM→MAIN]   query_path before={qp!r}",
+                  file=_sys.stderr, flush=True)
+            if qp:
+                k = os.path.normpath(os.path.abspath(qp))
                 if k in norm:
-                    table.set_row_path(row, norm[k])
-        except Exception:
-            pass
+                    self.app.query_path = norm[k]
+                    print(f"[FM→MAIN]   query_path UPDATED to={norm[k]!r}",
+                          file=_sys.stderr, flush=True)
+                else:
+                    print(f"[FM→MAIN]   query_path NOT in renames (looked up: {k!r})",
+                          file=_sys.stderr, flush=True)
+        except Exception as _e:
+            print(f"[FM→MAIN]   exception: {_e!r}",
+                  file=_sys.stderr, flush=True)
 
     def _sync_folder_rename(self, old_dir, new_dir):
         """When a directory is renamed, remap any tracked file paths that
