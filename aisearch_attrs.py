@@ -3493,7 +3493,11 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     #   7 = waist up                     — bot not visible
     #   8 = mid-thigh up                 — both partially visible
     #   9+ = full body / wide            — both visible
-    _NA = "z"   # user-defined N/A code in the tag table
+    # _NA = "0" — fallback / not-detected code. The UI renders this
+    # as "—" by default. Was briefly switched to "z" (user's
+    # explicit N/A label) but that only works if every body-related
+    # tag table has "z" defined. "0" is the safe universal default.
+    _NA = "0"
     if (allowed_fields is None or "cl" in allowed_fields):
         cs_val = working.get("cs") or _get_working("cs")
         cl_val = working.get("cl") or _get_working("cl")
