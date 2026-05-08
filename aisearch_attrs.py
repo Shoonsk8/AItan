@@ -3352,20 +3352,27 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                 detected_fields.add(field)
                 continue
 
-        # Score image against all option texts
+        # Score image against all option texts.
         text_embs = cache[i]
         scores    = _stutil.cos_sim(emb, text_embs)[0]
         best_idx  = int(scores.argmax())
         best_score = float(scores[best_idx])
-
         best_code = options[best_idx][0]
-        if best_score < threshold:
-            # For default_is_zero fields (e.g. PM posture standing), store "0" even below threshold
-            if not (default_is_zero and best_code == "0"):
-                continue
 
+        # Threshold removed: AI-generated images produce flatter
+        # CLIP score distributions (the image is canonically a person
+        # AND a forest AND a tank top all at once, so all 15 hair-
+        # color prompts score moderately and the best peaks at
+        # ~0.19 instead of ~0.28). The old `if best_score < 0.20:
+        # continue` left those at 0 — i.e. "no hair" — which gave
+        # nonsense like "very long hair AND no hair simultaneously".
+        # We now always take the argmax and only skip when:
+        #   - best is the explicit "0/none" option AND zero_is_none
+        #     (genuine "I couldn't detect" answer), OR
+        #   - none of the above for default_is_zero fields, where
+        #     "0" is itself a meaningful answer (e.g. PM=0 standing).
         if zero_is_none and not default_is_zero and best_code == "0":
-            continue   # classified as "none" — leave unset
+            continue   # genuinely classified as "none" — leave unset
 
         # Write the detected digit into the working hex string
         val = list(current)
