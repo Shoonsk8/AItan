@@ -33,6 +33,7 @@ FIELD_DEFS = {
     # CL (Clothing) is user-customizable (renders yellow) — its columns live in
     # __col_defs__ inside attrs_tags.json so users can edit the sub-tables.
     "X":  ("matrix",[("Expression",   "expression",      None)]),
+    "BG": ("matrix",[("Background",   "background",      None)]),
     "Watermark":       ("radio",   []),
     "P":               ("id",      []),
     "J":               ("id",      []),
