@@ -2,6 +2,60 @@
 
 Most recent entries at the top. Each entry: file:line — what changed.
 
+## 2026-05-07 — v2.4.3
+
+### Lock system (per-file editable flag)
+- `aisearch_settings_db.py:_worker` — scan worker auto-path skips files with `editable=False`. CLIP embedding still computed (search needs it); CLIP attrs / face / metadata / auto-rename are bypassed.
+- `aisearch_app.py:_apply_rules_tick`, `apply_path_rules_to_all`, `_apply_path_rules_to_browse_dir` — all three Apply Rules paths skip locked files; status bar surfaces locked-skipped count.
+- `aisearch_app.py:_toggle_file_lock` — explicit Lock / Unlock right-click toggle in main app and FM, separate from rename. Refreshes FM rim + main-table icon.
+- `aisearch_preview.py:_on_manual_rename` — auto-locks the file (`editable=False`) on a successful rename, bakes AItan{} block into the new file, syncs the Protected button, refreshes FM rim and main-table icon.
+- `aisearch_preview.py` — fixed the auto-adopt thread silently re-setting `editable=True` on locked files (`get("editable", False)` matched both "absent" and "locked"; now `if "editable" not in entry`). Same fix in the live-merge step (`if "editable" in _live: skip`).
+
+### Visual indicator (rim)
+- `aisearch_file_manager.py` — FM thumbnail rim color encodes (kind × lock): unlocked video → bright green, locked video → dark green, locked picture → dark red, unlocked picture → no rim. Cache stores plain pixmap; rim stamped on-the-fly so lock changes don't invalidate the cache.
+- `aisearch_file_manager.py:refresh_rims_only / refresh_all_rims` — lightweight in-place rim refresh that walks expanded subfolders. Replaces full `populate_root` for lock-state changes so child folders update immediately.
+- `aisearch_preview.py:_update_preview_rim` — preview window's media-pane border picks up the same colors.
+- `aisearch_app.py:_row_rim_color / _row_rim_icon / _refresh_row_rim` — main-app table's Name cell shows a 12×12 colored square icon with the same convention.
+- `aisearch_settings_appearance.py` — three new color pickers (Video unlocked / Video locked / Picture locked) under "FM Thumbnail Rim Colors" in Appearance tab.
+
+### Faces DB integrity
+- `aisearch_settings_person.py:_cleanup_invalid_persons` — fixed the schema mismatch that wiped ~150 persons (loop expected `faces[pid]` to be a list-of-dicts; the actual schema is dict-with-embeddings-list). The bad branch was always-False so every pid without a path-existing attrs entry got bulk-deleted.
+- `aisearch_attrs.py:save_faces_db` — new safeguard. If the new dict shrinks by more than half (or wipes to near-empty from non-trivial), snapshots the existing file to `faces_<project>.json.wiped-<unix>` first.
+- `aisearch_attrs.py:dismantle_face_assignment` — new function. Drops the closest sample to a file's face from a pid's pool, clears `source_path` if it pointed here, deletes the pid entirely if pool empty. Right-click → "🚮 Dismantle face data from {pid}" surfaces it on rows with a non-zero person_id.
+- `aisearch_attrs.py:correct_person_id` — manual P-field changes now do the full dismantle on the wrong pid (not just sample drop), matching dismantle behavior.
+- `aisearch_attrs.py:_face_encodings_with_fallback` — when default HOG-1 finds nothing, retry with `upsample=2`. Catches small / off-angle / AI-generated faces.
+- `aisearch_attrs.py:_load_image_or_video_frame` — auto-detect image vs video by content (PIL first, fall back to cv2 / vice versa). Handles files with mismatched extensions.
+
+### Critical bug fix: extension-mismatch corruption
+- `aisearch_attrs.py:_embed_aitan_image` — when PIL couldn't classify a file as a known image format, the embed used to fall through to `_embed_aitan_video`. ffmpeg can read JPEGs and re-mux them as MP4, then `shutil.move(tmp.mp4, original_path.jpg)` overwrote the .jpg with MP4 content. Audit found 92 .jpg-actually-MP4 files in the user's project (plus 145 other ext mismatches). Refusal now: bails out instead of running the video bake on image-extension paths.
+- `fix_extension_mismatch.py` — new audit tool. Walks a directory, reads first 32 bytes of each file with a target extension, renames to the magic-bytes-correct extension. Dry run by default; `--apply` to actually rename. Conservative — only renames when magic unambiguously identifies a single different format.
+
+### CPU fallback
+- `aisearch_logic.py` — CUDA OOM fallback fixed. The fallback path used to call `SentenceTransformer(MODEL_NAME)` without `device="cpu"`; the constructor auto-detects cuda.is_available() and pre-allocates on GPU at construction time, so the fallback hit OOM a second time and the app couldn't launch. Now passes `device=` explicitly + `torch.cuda.empty_cache()` between attempts.
+
+### Close-while-update
+- `aisearch_app.py:closeEvent` — confirmation dialog if a scan is running (Yes triggers `_unified_stop`, No cancels close). Daemon thread is left to die with the process; `torch.cuda.empty_cache()` runs synchronously before close. Also explicitly closes the FM window (was a separate top-level QWidget that didn't auto-close with the main window).
+
+### File Manager
+- `aisearch_file_manager.py:_handle_inline_rename` — F2 inline rename in the FM tree replaces the popup QInputDialog; commits via `itemChanged`, reverts to the old name on validation failure.
+- `aisearch_file_manager.py:_delete_selected` — surgical row removal post-trash (no full tree rebuild), focus + selection move to the next sibling, status bar reports skipped (already-at-target) and errored counts.
+- `aisearch_file_manager.py:_FMTreeList._start_url_drag` — multi-select drag includes `press_item` even if Qt's late selection update dropped it from `selectedItems()`, dedupes paths, surfaces "(N already in target)" on partial moves.
+- `aisearch_file_manager.py` — drag near top/bottom edge auto-scrolls the tree (28 px band, ~25 fps QTimer).
+- `aisearch_file_manager.py:FileManagerWindow` — Ctrl+Z routes to `app._undo_last`; refresh_all on FM after main-app Apply Rules so renamed files appear immediately.
+
+### Filename Rules
+- `aisearch_settings_filename.py:_tag_options_for` — project-specific tag groups now win over the global default (was: bundled-default short-circuited the chain, hiding user-added entries like ModelImage's Instagram). The actual root cause of the user's "ModelImage doesn't show new entries" complaint after three wrong fixes.
+- `aisearch_settings_filename.py:_reload_fn_rules` — re-reads `attrs_tags_<PROJECT>.json` in place, mutating `_proj_tg`/`_proj_sec_styles`/`_col_names`. Closures inside row-build functions see fresh data on next row.
+- `aisearch_settings_attrs.py:_save_attr_groups` — force-builds the Filename Rules tab synchronously (it's lazy-built; without this `_reload_fn_rules` didn't exist yet) and syncs `_fn_proj_cb` to the saved project.
+
+### Search behavior
+- `aisearch_app.py:on_left_key_press` — in browse mode, Left arrow now searches on the highlighted row's path (was: ran `self.query_path`, the *previous* search query — produced unrelated results after browsing into a different folder).
+- `aisearch_app.py:_open_fm_for_current_row` — every row, including row 0, opens the FM at `dirname(get_row_path(row))` and highlights the file. The query_path fallback that diverged row 0's behavior is gone.
+
+### Metadata view
+- `aisearch_attrs.py:read_raw_embedded_text` — tolerant of transient FileNotFound during a concurrent rename / bake swap (3×80 ms grace re-check), shows the attempted path in the error message instead of "may have just been renamed", filters PIL encoding-internal flags from the raw text view (`progressive`, `progression`, `interlace`, etc. — not real metadata).
+- `aisearch_preview.py:_save_attrs / _on_manual_rename` — refuse to save / rename when the file isn't at the path (the entry attached to a stale path is empty; writing it back would propagate emptiness to whatever file actually shares the basename, destroying the encoded codes).
+
 ## 2026-05-06 — v2.4.2
 
 ### Person / face management
