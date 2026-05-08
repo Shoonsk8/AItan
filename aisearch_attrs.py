@@ -1087,12 +1087,27 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
                 best_dist, best_id = dist, fid
 
         if best_dist < threshold:
-            # Known person — add this embedding as a new sample (up to 20 kept)
-            _add_embedding(faces[best_id], enc.tolist())
-            # Repair source_path if it no longer exists on disk
+            # Known person — DO NOT auto-add this embedding to the
+            # winning pid's pool. Auto-add was creating a "rich get
+            # richer" loop: the wrong pid would fill its 20-sample
+            # cap with auto-added matches, so even after the user
+            # corrected, the next auto-detect would re-add the same
+            # face back to the wrong pid. The user reported "I keep
+            # fixing P013→P001 every time, does it really learn?"
+            # — it didn't, because each correction's single-sample
+            # removal was undone by the next scan's auto-add.
+            #
+            # Now the pool only grows via explicit user actions:
+            #   - correct_person_id (manual P-field change)
+            #   - _add_face_sample (right-click "Add this face")
+            #   - _set_base_face / _assign_new_person
+            # The detector reads from the pool but never writes to it.
+            #
+            # Repair source_path if it no longer exists on disk —
+            # cheap, no learning effect.
             if not os.path.exists(faces[best_id].get("source_path", "")):
                 faces[best_id]["source_path"] = path
-            save_faces_db(project, db)
+                save_faces_db(project, db)
             return best_id
 
         # New person — 000 is reserved for "no human", start from 001
@@ -1283,30 +1298,52 @@ def correct_person_id(path, project, correct_id, wrong_id=None):
         # Full dismantle of wrong_id's tie to this file:
         # 1. Drop the sample most similar to this face from the pool.
         # 2. Clear source_path if it pointed at THIS file.
-        # 3. Delete the pid entirely if the pool ends up empty — keeps
-        #    a phantom-id from haunting the matcher / persons grid.
+        # 3. Delete the pid entirely if the pool ends up empty.
+        # 4. Print the similarity scores of the removed sample so the
+        #    user can see what was removed — they asked for visibility
+        #    into deletions: "if it shows which one is deleted ... maybe ok".
         result = {"correct_id": correct_id, "wrong_id": wrong_id,
                   "samples_removed": 0, "source_path_cleared": False,
-                  "pid_deleted": False}
+                  "pid_deleted": False,
+                  "wrong_id_size_before": 0, "wrong_id_size_after": 0,
+                  "removed_similarity": None}
         if wrong_id and wrong_id in faces:
             fdata = faces[wrong_id]
             samples = list(fdata.get("embeddings", []))
             # Migrate legacy single-embedding entries into the pool
             if not samples and fdata.get("embedding"):
                 samples = [fdata["embedding"]]
+            result["wrong_id_size_before"] = len(samples)
             if samples:
                 distances = face_recognition.face_distance(_np.array(samples), encs[0])
                 worst_idx = int(_np.argmin(distances))
+                worst_dist = float(distances[worst_idx])
+                worst_sim = round(1.0 - worst_dist, 3)
                 samples.pop(worst_idx)
                 result["samples_removed"] = 1
+                result["removed_similarity"] = worst_sim
             fdata["embeddings"] = samples
             fdata.pop("embedding", None)
+            result["wrong_id_size_after"] = len(samples)
             if os.path.normpath(fdata.get("source_path", "")) == os.path.normpath(path):
                 fdata["source_path"] = ""
                 result["source_path_cleared"] = True
             if not samples:
                 faces.pop(wrong_id, None)
                 result["pid_deleted"] = True
+            print(f"[correct-pid] {os.path.basename(path)}: "
+                  f"P{wrong_id} pool {result['wrong_id_size_before']}→"
+                  f"{result['wrong_id_size_after']} "
+                  f"(removed sample @ similarity={result['removed_similarity']})"
+                  + (f", pid deleted" if result['pid_deleted'] else "")
+                  + (f", rep pic cleared" if result['source_path_cleared'] else ""))
+        # Report add to correct_id too
+        try:
+            new_count = len(faces.get(correct_id, {}).get("embeddings", []))
+            print(f"[correct-pid] {os.path.basename(path)}: "
+                  f"P{correct_id} pool now {new_count} samples (added 1)")
+        except Exception:
+            pass
 
         save_faces_db(project, db)
         return result
