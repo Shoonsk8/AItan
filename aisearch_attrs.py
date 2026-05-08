@@ -3055,16 +3055,16 @@ CLIP_AUTO_DETECT = [
     ]},
     # ── Eye color ─────────────────────────────────────────────────────────────
     {"field": "e", "pos": 1, "zero_is_none": True,  "threshold": 0.18, "options": [
-        ("1", "a person with brown eyes"),
-        ("2", "a person with blue eyes"),
-        ("3", "a person with hazel green-brown eyes"),
-        ("4", "a person with amber or golden yellow eyes"),
-        ("5", "a person with gray eyes"),
-        ("6", "a person with green eyes"),
-        ("7", "a person with purple or violet eyes"),
-        ("8", "a person with red or pink eyes"),
-        ("9", "a person with silver metallic eyes"),
-        ("a", "a person with very dark black eyes"),
+        ("1", "a person with chocolate brown eyes warm dark iris"),
+        ("2", "a person with vivid blue eyes bright sky blue or ocean blue iris"),
+        ("3", "a person with hazel eyes green-brown mixed iris"),
+        ("4", "a person with amber or golden yellow eyes warm honey iris"),
+        ("5", "a person with neutral gray ash eyes desaturated iris no blue or green tint"),
+        ("6", "a person with vivid green eyes emerald or jade iris"),
+        ("7", "a person with purple or violet eyes lavender iris"),
+        ("8", "a person with red or pink eyes albino iris"),
+        ("9", "a person with silver metallic eyes shiny chrome iris"),
+        ("a", "a person with very dark almost black eyes deep dark iris"),
     ]},
     # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
     {"field": "cl", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
