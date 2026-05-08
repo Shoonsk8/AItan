@@ -3064,24 +3064,32 @@ CLIP_AUTO_DETECT = [
         ("6", "dark nighttime or very low-light scene"),
     ]},
     # ── Background major ─────────────────────────────────────────────────────
-    # BG is a 2-digit field (was 3 historically). pos=2 targets the
-    # leftmost digit (major scene category) per the user's
-    # Background_Table layout: row 0 = solid, row 1 = indoor,
-    # row 2 = outdoor, etc. Was pos=3 here, which on a 2-digit
-    # working string raised IndexError on val[-3] assignment —
-    # the exception escaped the per-field loop, the partial
-    # working dict was discarded by the scan worker's try/except,
-    # and EVERY CLIP detection for that file silently failed.
-    # Confirmed bug.
+    # BG is a 2-digit field. pos=2 = leftmost digit (major scene
+    # category). Codes MUST match the user's Background_Table
+    # row-major layout — otherwise detecting "indoor" wrote 3
+    # (the user's "Commercial" row), detecting "nature" wrote 6
+    # (Space row), etc. The previous spec used CLIP-internal
+    # codes 0-8 that drifted from the user's category numbering,
+    # which is why "BG always wrong" — confirmed bug.
+    #
+    # Codes here mirror the user's row prefixes:
+    #   0 = Solid   (00 Solid, 01 Black, 02 White, 03 Green, 04 Red)
+    #   1 = Indoor  (10 Indoor, 11 Bedroom, 12 Living Room, …)
+    #   2 = Outdoor (20 Outdoor, 21 Outside of house, 22 Pool)
+    #   3 = Commercial (30 Commercial, 31 Store, 32 Restaurant, …)
+    #   4 = Nature  (40 Nature, 41 Beach, 42 Ocean, …)
+    #   5 = City    (50 City, 51 Street, 52 Park)
+    #   6 = Space   (60 Space, 61 Stars, 62 Moon)
+    #   7 = Castle
     {"field": "bg", "pos": 2, "zero_is_none": False, "threshold": 0.20, "options": [
-        ("0", "solid pure black background no details"),
-        ("1", "solid pure white background no details"),
-        ("2", "bright green screen or chromakey green background"),
-        ("3", "indoor room or interior home setting"),
-        ("4", "commercial indoor location restaurant office store cafe"),
-        ("5", "outdoor urban street city buildings"),
-        ("6", "natural outdoor setting trees grass forest field beach water"),
-        ("8", "outer space stars cosmos planets"),
+        ("0", "solid pure color background plain no details black white red green or chromakey"),
+        ("1", "indoor residential interior bedroom living room home gym personal space"),
+        ("2", "outdoor residential exterior of a house yard backyard garden swimming pool"),
+        ("3", "commercial indoor location store shop restaurant cafe office hospital school commercial gym"),
+        ("4", "nature outdoor wilderness beach ocean lake forest mountain field trees grass"),
+        ("5", "urban city street buildings park public square outdoors"),
+        ("6", "outer space stars cosmos planets moon surface galaxy"),
+        ("7", "castle medieval fortress historic stone interior or exterior of a castle"),
     ]},
     # ── Expression family (first digit — AI detects x0 baseline of each family) ─
     {"field": "x", "pos": 2, "zero_is_none": True,  "threshold": 0.18, "options": [
