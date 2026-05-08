@@ -3064,7 +3064,16 @@ CLIP_AUTO_DETECT = [
         ("6", "dark nighttime or very low-light scene"),
     ]},
     # ── Background major ─────────────────────────────────────────────────────
-    {"field": "bg", "pos": 3, "zero_is_none": False, "threshold": 0.20, "options": [
+    # BG is a 2-digit field (was 3 historically). pos=2 targets the
+    # leftmost digit (major scene category) per the user's
+    # Background_Table layout: row 0 = solid, row 1 = indoor,
+    # row 2 = outdoor, etc. Was pos=3 here, which on a 2-digit
+    # working string raised IndexError on val[-3] assignment —
+    # the exception escaped the per-field loop, the partial
+    # working dict was discarded by the scan worker's try/except,
+    # and EVERY CLIP detection for that file silently failed.
+    # Confirmed bug.
+    {"field": "bg", "pos": 2, "zero_is_none": False, "threshold": 0.20, "options": [
         ("0", "solid pure black background no details"),
         ("1", "solid pure white background no details"),
         ("2", "bright green screen or chromakey green background"),
