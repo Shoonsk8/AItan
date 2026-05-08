@@ -8,7 +8,7 @@ import aisearch_attrs as _attrs_mod
 from attr_viewer import _lang_label as _t
 
 # Ver 1.65 - Enhanced Rename/Delete sync and UI masking
-VERSION = "2.4.4"
+VERSION = "2.4.5"
 
 
 def get_thumbnail_pixmap(path, size=(350, 350)):

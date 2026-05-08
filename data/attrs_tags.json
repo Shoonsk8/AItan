@@ -193,6 +193,110 @@
     [
       "9",
       "Buzz / 坊主"
+    ],
+    [
+      "a",
+      "Twintail / ツインテール"
+    ],
+    [
+      "b",
+      "High Bun / 高めお団子"
+    ],
+    [
+      "c",
+      "Low Bun / 低めお団子"
+    ],
+    [
+      "d",
+      "Half-up / ハーフアップ"
+    ],
+    [
+      "e",
+      "Pixie / ピクシー"
+    ],
+    [
+      "f",
+      "Hime Cut / 姫カット"
+    ],
+    [
+      "g",
+      "Side Ponytail / サイドポニー"
+    ],
+    [
+      "h",
+      "Side Bun / サイドお団子"
+    ],
+    [
+      "i",
+      "Updo / アップヘア"
+    ],
+    [
+      "j",
+      "Mohawk / モヒカン"
+    ],
+    [
+      "k",
+      "Side Swept / 横流し"
+    ],
+    [
+      "l",
+      "Curtain Bangs / カーテンバング"
+    ],
+    [
+      "m",
+      "Blunt Bangs / パッツン前髪"
+    ],
+    [
+      "n",
+      "Layered / レイヤード"
+    ],
+    [
+      "o",
+      "Mullet / マレット"
+    ],
+    [
+      "p",
+      "Afro / アフロ"
+    ],
+    [
+      "q",
+      "Cornrows / コーンロウ"
+    ],
+    [
+      "r",
+      "Dreadlocks / ドレッドヘア"
+    ],
+    [
+      "s",
+      "Top Knot / トップノット"
+    ],
+    [
+      "t",
+      "Space Buns / スペースバンズ"
+    ],
+    [
+      "u",
+      "Crown Braid / クラウン編み"
+    ],
+    [
+      "v",
+      "French Braid / フレンチブレイド"
+    ],
+    [
+      "w",
+      "Fishtail / フィッシュテール"
+    ],
+    [
+      "x",
+      "Crew Cut / クルーカット"
+    ],
+    [
+      "y",
+      "Undercut / アンダーカット"
+    ],
+    [
+      "z",
+      "Spiky / スパイキー"
     ]
   ],
   "HC_Length": [
@@ -939,6 +1043,136 @@
       "Moan 喘ぎ声"
     ]
   ],
+  "BG_Table": [
+    [
+      "00",
+      "Solid BG / 単色背景"
+    ],
+    [
+      "01",
+      "Black BG / 黒背景"
+    ],
+    [
+      "02",
+      "White BG / 白背景"
+    ],
+    [
+      "03",
+      "Green BG / 緑背景"
+    ],
+    [
+      "04",
+      "Red BG / 赤背景"
+    ],
+    [
+      "10",
+      "Indoor / 屋内"
+    ],
+    [
+      "11",
+      "Bedroom / 寝室"
+    ],
+    [
+      "12",
+      "Living Room / リビング"
+    ],
+    [
+      "13",
+      "GymRoom"
+    ],
+    [
+      "20",
+      "Outdoor / 屋外"
+    ],
+    [
+      "21",
+      "Outside of House / 家の外"
+    ],
+    [
+      "22",
+      "Swimming pool / プール"
+    ],
+    [
+      "30",
+      "Commercial / 商業施設"
+    ],
+    [
+      "31",
+      "Store / Shop / 店舗"
+    ],
+    [
+      "32",
+      "Restaurant / Cafe / 飲食店"
+    ],
+    [
+      "33",
+      "Office / オフィス"
+    ],
+    [
+      "34",
+      "Hospital / 病院"
+    ],
+    [
+      "35",
+      "School / 学校"
+    ],
+    [
+      "36",
+      "Commercial Gym"
+    ],
+    [
+      "40",
+      "Nature / 自然"
+    ],
+    [
+      "41",
+      "Beach / 浜辺"
+    ],
+    [
+      "42",
+      "Ocean / 海"
+    ],
+    [
+      "43",
+      "Lake / 湖"
+    ],
+    [
+      "44",
+      "Forest / 森"
+    ],
+    [
+      "45",
+      "Mountain / 山"
+    ],
+    [
+      "50",
+      "City / 街"
+    ],
+    [
+      "51",
+      "Street / 通り"
+    ],
+    [
+      "52",
+      "Park / 公園"
+    ],
+    [
+      "60",
+      "Space / 宇宙"
+    ],
+    [
+      "61",
+      "Stars / 星"
+    ],
+    [
+      "62",
+      "Moon Surface / 月面"
+    ],
+    [
+      "70",
+      "Castle / 城"
+    ]
+  ],
   "A_Table": [
     [
       "00",
@@ -952,265 +1186,265 @@
   "CL_TopColor": [
     [
       "0",
-      "Unknown"
+      "Unknown / 不明"
     ],
     [
       "1",
-      "None / Skin"
+      "None / Skin / なし・肌"
     ],
     [
       "2",
-      "Black"
+      "Black / 黒"
     ],
     [
       "3",
-      "White"
+      "White / 白"
     ],
     [
       "4",
-      "Red"
+      "Red / 赤"
     ],
     [
       "5",
-      "Blue"
+      "Blue / 青"
     ],
     [
       "6",
-      "Green"
+      "Green / 緑"
     ],
     [
       "7",
-      "Yellow"
+      "Yellow / 黄"
     ],
     [
       "8",
-      "Pink"
+      "Pink / ピンク"
     ],
     [
       "9",
-      "Purple"
+      "Purple / 紫"
     ],
     [
       "a",
-      "Orange"
+      "Orange / オレンジ"
     ],
     [
       "b",
-      "Brown"
+      "Brown / 茶"
     ],
     [
       "c",
-      "Gray"
+      "Gray / 灰"
     ],
     [
       "d",
-      "Beige"
+      "Beige / ベージュ"
     ],
     [
       "e",
-      "Multi"
+      "Multi / 柄・多色"
     ],
     [
       "f",
-      "Custom"
+      "Custom / カスタム"
     ]
   ],
   "CL_Top": [
     [
       "0",
-      "Unknown"
+      "Unknown / 不明"
     ],
     [
       "1",
-      "None / Topless"
+      "None / Topless / トップレス"
     ],
     [
       "2",
-      "T-shirt"
+      "T-shirt / Tシャツ"
     ],
     [
       "3",
-      "Blouse / Shirt"
+      "Blouse / Shirt / ブラウス・シャツ"
     ],
     [
       "4",
-      "Sweater / Knit"
+      "Sweater / Knit / セーター・ニット"
     ],
     [
       "5",
-      "Tank / Crop"
+      "Tank / Crop / タンクトップ・クロップ"
     ],
     [
       "6",
-      "Hoodie"
+      "Hoodie / パーカー"
     ],
     [
       "7",
-      "Jacket"
+      "Jacket / ジャケット"
     ],
     [
       "8",
-      "Coat"
+      "Coat / コート"
     ],
     [
       "9",
-      "Dress (upper)"
+      "Dress (upper) / ドレス（上部）"
     ],
     [
       "a",
-      "Lingerie / Bra"
+      "Lingerie / Bra / ブラジャー"
     ],
     [
       "b",
-      "Swimsuit Top"
+      "Swimsuit Top / 水着トップ"
     ],
     [
       "c",
-      "Kimono"
+      "Kimono / 着物"
     ],
     [
       "d",
-      "School Uniform"
+      "School Uniform / 制服"
     ],
     [
       "e",
-      "Costume"
+      "Costume / コスチューム"
     ],
     [
       "f",
-      "Custom"
+      "Custom / カスタム"
     ]
   ],
   "CL_BotColor": [
     [
       "0",
-      "Unknown"
+      "Unknown / 不明"
     ],
     [
       "1",
-      "None / Skin"
+      "None / Skin / なし・肌"
     ],
     [
       "2",
-      "Black"
+      "Black / 黒"
     ],
     [
       "3",
-      "White"
+      "White / 白"
     ],
     [
       "4",
-      "Red"
+      "Red / 赤"
     ],
     [
       "5",
-      "Blue"
+      "Blue / 青"
     ],
     [
       "6",
-      "Green"
+      "Green / 緑"
     ],
     [
       "7",
-      "Yellow"
+      "Yellow / 黄"
     ],
     [
       "8",
-      "Pink"
+      "Pink / ピンク"
     ],
     [
       "9",
-      "Purple"
+      "Purple / 紫"
     ],
     [
       "a",
-      "Orange"
+      "Orange / オレンジ"
     ],
     [
       "b",
-      "Brown"
+      "Brown / 茶"
     ],
     [
       "c",
-      "Gray"
+      "Gray / 灰"
     ],
     [
       "d",
-      "Beige"
+      "Beige / ベージュ"
     ],
     [
       "e",
-      "Multi"
+      "Multi / 柄・多色"
     ],
     [
       "f",
-      "Custom"
+      "Custom / カスタム"
     ]
   ],
   "CL_Bot": [
     [
       "0",
-      "Unknown"
+      "Unknown / 不明"
     ],
     [
       "1",
-      "None / Bare"
+      "None / Bare / なし"
     ],
     [
       "2",
-      "Jeans"
+      "Jeans / ジーンズ"
     ],
     [
       "3",
-      "Trousers"
+      "Trousers / ズボン"
     ],
     [
       "4",
-      "Shorts"
+      "Shorts / ショートパンツ"
     ],
     [
       "5",
-      "Skirt (Mini)"
+      "Skirt (Mini) / ミニスカート"
     ],
     [
       "6",
-      "Skirt (Long)"
+      "Skirt (Long) / ロングスカート"
     ],
     [
       "7",
-      "Leggings"
+      "Leggings / レギンス"
     ],
     [
       "8",
-      "Sweatpants"
+      "Sweatpants / スウェットパンツ"
     ],
     [
       "9",
-      "Dress (full)"
+      "Dress (full) / ドレス"
     ],
     [
       "a",
-      "Panties"
+      "Panties / パンティ"
     ],
     [
       "b",
-      "Bikini Bottom"
+      "Bikini Bottom / ビキニボトム"
     ],
     [
       "c",
-      "Hakama / Kimono"
+      "Hakama / Kimono / 袴・着物"
     ],
     [
       "d",
-      "School Skirt"
+      "School Skirt / 制服スカート"
     ],
     [
       "e",
-      "Stockings"
+      "Stockings / ストッキング"
     ],
     [
       "f",
-      "Custom"
+      "Custom / カスタム"
     ]
   ],
   "B_Shape": [
@@ -1359,130 +1593,16 @@
       "Sword / 刀"
     ],
     [
-      "20",
-      "Magnifier"
-    ]
-  ],
-  "Background_Table": [
-    [
-      "00",
-      "Solid BG / 単色背景"
+      "f0",
+      "Dildo / ディルド"
     ],
     [
-      "01",
-      "Black BG / 黒背景"
+      "f1",
+      "Black Dildo / 黒ディルド"
     ],
     [
-      "02",
-      "White BG / 白背景"
-    ],
-    [
-      "03",
-      "Green BG / 緑背景"
-    ],
-    [
-      "10",
-      "Indoor / 屋内"
-    ],
-    [
-      "11",
-      "Bedroom / 寝室"
-    ],
-    [
-      "12",
-      "Living Room / リビング"
-    ],
-    [
-      "13",
-      "GymRoom"
-    ],
-    [
-      "20",
-      "Outdoor / 屋外"
-    ],
-    [
-      "21",
-      "Outside of House / 家の外"
-    ],
-    [
-      "22",
-      "Swimming pool / プール"
-    ],
-    [
-      "30",
-      "Commercial / 商業施設"
-    ],
-    [
-      "31",
-      "Store / Shop / 店舗"
-    ],
-    [
-      "32",
-      "Restaurant / Cafe / 飲食店"
-    ],
-    [
-      "33",
-      "Office / オフィス"
-    ],
-    [
-      "34",
-      "Hospital / 病院"
-    ],
-    [
-      "35",
-      "School / 学校"
-    ],
-    [
-      "36",
-      "Commercial Gym"
-    ],
-    [
-      "40",
-      "Nature / 自然"
-    ],
-    [
-      "41",
-      "Beach / 浜辺"
-    ],
-    [
-      "42",
-      "Ocean / 海"
-    ],
-    [
-      "43",
-      "Lake / 湖"
-    ],
-    [
-      "44",
-      "Forest / 森"
-    ],
-    [
-      "45",
-      "Mountain / 山"
-    ],
-    [
-      "50",
-      "City / 街"
-    ],
-    [
-      "51",
-      "Street / 通り"
-    ],
-    [
-      "52",
-      "Park / 公園"
-    ],
-    [
-      "60",
-      "Space / 宇宙"
-    ],
-    [
-      "61",
-      "Stars / 星"
-    ],
-    [
-      "62",
-      "Moon Surface / 月面"
+      "f2",
+      "Purple Dildo / 紫ディルド"
     ]
   ],
   "ModelImage_Table": [
@@ -1535,6 +1655,10 @@
       "FLUX Dev"
     ],
     [
+      "0c",
+      "GPT Image 2"
+    ],
+    [
       "10",
       "Gemini"
     ],
@@ -1549,6 +1673,10 @@
     [
       "20",
       "Screen Shot"
+    ],
+    [
+      "21",
+      "Instagram"
     ],
     [
       "80",
@@ -1614,7 +1742,7 @@
     ],
     [
       "17",
-      "Google Veo 3.1 Fast"
+      "Google Veo 3.1"
     ],
     [
       "90",
@@ -1800,7 +1928,7 @@
     "WH",
     "PM",
     "CLIP_PM",
-    "Background",
+    "BG",
     "CS",
     "CLIP_BG",
     "CLIP_CS",
@@ -1843,7 +1971,7 @@
     "WH": "2dig",
     "PM": "2dig",
     "CLIP_PM": "text",
-    "Background": "matrix",
+    "BG": "matrix",
     "CS": "3dig",
     "CLIP_BG": "text",
     "CLIP_CS": "text",
@@ -1888,7 +2016,7 @@
       "CLIP_PM"
     ],
     "Sight": [
-      "Background",
+      "BG",
       "CS",
       "CLIP_BG",
       "CLIP_CS",
@@ -1941,10 +2069,10 @@
       "FaceAngle_vertical"
     ],
     "CL": [
-      "Top Color",
-      "Top Type",
-      "Bottom Color",
-      "Bottom Type"
+      "Top Color / トップ色",
+      "Top Type / トップ種別",
+      "Bottom Color / ボトム色",
+      "Bottom Type / ボトム種別"
     ],
     "Tool": [
       "Tool"
@@ -1961,7 +2089,7 @@
       "PostureMotion_motion",
       "PostureMotion_posture"
     ],
-    "Background": [
+    "BG": [
       "Background"
     ],
     "CS": [

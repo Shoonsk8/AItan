@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.4.4"
+VERSION = "2.4.5"
 
 
 def _read_embedded_meta(path):
@@ -1727,7 +1727,7 @@ class PreviewWindow(QWidget):
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
                 # (for matrix fields like X, Background). Read X_Table /
-                # Background_Table from the project's tags file directly,
+                # BG_Table from the project's tags file directly,
                 # because attrs_mod.TAG_GROUPS can still be the default config
                 # for this process (not project-specific).
                 _tags_set_check = set(_entry.get("tags", []))
@@ -1742,12 +1742,12 @@ class PreviewWindow(QWidget):
                     pass
                 _x_opts_check = {r[0] for r in _proj_cfg.get("X_Table", [])
                                  if isinstance(r, (list, tuple)) and r}
-                _bg_opts_check = {r[0] for r in _proj_cfg.get("Background_Table", [])
+                _bg_opts_check = {r[0] for r in _proj_cfg.get("BG_Table", [])
                                   if isinstance(r, (list, tuple)) and r}
                 if not _x_opts_check:
                     _x_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
                 if not _bg_opts_check:
-                    _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
+                    _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("BG_Table", [])}
                 def _field_filled(f):
                     # Fully filled = every CLIP position for this field has a
                     # non-zero digit (or the position allows zero). If any
@@ -3683,8 +3683,15 @@ class PreviewWindow(QWidget):
         _dbg.raise_()
 
     def _update_clip_for_field(self, key: str):
-        """Right-click → Update: re-detect CLIP for just `key`, reveal its debug tile."""
-        _ALL = {"hc", "fa", "sk", "pm", "e", "cs", "bg", "x"}
+        """Right-click → Update: re-detect CLIP for just `key`, reveal its debug tile.
+
+        _ALL must match the set of fields in CLIP_AUTO_DETECT (lowercase).
+        A missing field means: (a) Update on that field is a no-op, AND
+        (b) Update on any OTHER field doesn't protect this one — it
+        runs through detection and silently gets overwritten. Tested
+        in tests/test_clip_threshold.py."""
+        from aisearch_attrs import CLIP_AUTO_DETECT
+        _ALL = {s["field"] for s in CLIP_AUTO_DETECT}
         _target = key.lower()
         _skip = set()
         if _target == "p" or _target == "pw":

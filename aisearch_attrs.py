@@ -842,7 +842,7 @@ _DEFAULT_CODED_FIELDS = [
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
     ("BG",  "Background",    2),   # 16×16 matrix — 2-digit hex (00-ff). Was 3
                                    # historically; reduced to match the actual
-                                   # Background_Table (e.g. Ocean=42).
+                                   # BG_Table (e.g. Ocean=42).
     ("O",   "Orientation",   2),   # f1=15:1  73=21:9  09=16:9  32=3:2  43=4:3  11=1:1  34=3:4  23=2:3  90=9:16
     ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
     ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
@@ -1661,7 +1661,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
-_AITAN_VERSION = "2.4.4"  # stamped into every AItan{} block as "ver"
+_AITAN_VERSION = "2.4.5"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""
@@ -3112,7 +3112,7 @@ CLIP_AUTO_DETECT = [
     ]},
     # ── Background major ─────────────────────────────────────────────────────
     # BG is a 2-digit field. pos=2 = leftmost digit (major scene
-    # category). Codes MUST match the user's Background_Table
+    # category). Codes MUST match the user's BG_Table
     # row-major layout — otherwise detecting "indoor" wrote 3
     # (the user's "Commercial" row), detecting "nature" wrote 6
     # (Space row), etc. The previous spec used CLIP-internal
@@ -3759,16 +3759,21 @@ def inspect_clip_scores(image_emb):
         opts = [(code, label, float(scores[j]))
                 for j, (code, label) in enumerate(spec["options"])]
         opts_sorted = sorted(opts, key=lambda x: x[2], reverse=True)
-        best_score = opts_sorted[0][2] if opts_sorted else 0.0
         threshold = spec.get("threshold", 0.20)
         _top_code = opts_sorted[0][0] if opts_sorted else None
-        if best_score >= threshold:
-            winner = _top_code
-        elif spec.get("default_is_zero", False) and _top_code == "0":
-            winner = "0"  # store default even below threshold
-        else:
-            winner = None
-        if spec.get("zero_is_none", True) and not spec.get("default_is_zero", False) and winner == "0":
+        # Threshold gate REMOVED to match auto_detect_clip_attrs. AI-
+        # generated images produce flat CLIP score distributions where
+        # the best peak sits 0.15-0.18, well under the historical 0.20
+        # threshold. Without this change the inspector / Update button
+        # said "below threshold" and wrote nothing, while the bake path
+        # silently wrote argmax — the two diverged on every refresh.
+        # We still suppress an explicit "0/none" winner for fields where
+        # zero means "couldn't detect" (HC, X), so the bake skip-rule
+        # stays consistent.
+        winner = _top_code
+        if (spec.get("zero_is_none", True)
+                and not spec.get("default_is_zero", False)
+                and winner == "0"):
             winner = None
         results.append({
             "field": spec["field"].upper(),
@@ -4781,7 +4786,7 @@ def apply_tag_sync_rules(attrs_data, path, project):
     entry_tags = set(entry.get("tags", []))
     # Matrix groups (Background, ModelImage, ModelVideo, X, Animal, ...) store
     # their value at entry[section_name], not in entry["tags"]. The rule's
-    # tag_group key may use the legacy "_Table" suffix (e.g. Background_Table)
+    # tag_group key may use the legacy "_Table" suffix (e.g. BG_Table)
     # while the matrix section name is just "Background" — strip the suffix
     # and check both.
     try:

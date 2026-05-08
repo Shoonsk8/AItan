@@ -54,8 +54,10 @@ def _build_coded_labels():
 _CODED_LABELS = _build_coded_labels()
 
 # Maps section key (as used in attrs_tags) → lowercase CODED_FIELDS letter.
-# Most map 1:1 (e.g. "E"→"e", "SK"→"sk"), but "H"→"hc" because the section
-# key was shortened while the CODED_FIELDS letter is "HC".
+# Pure 1:1 mapping — section names in attrs_tags MUST match the CODED_FIELDS
+# letter exactly (e.g. "BG" not "Background"). Earlier versions had alias
+# shims for human-label sections; those got renamed in the project files
+# (see tools/rename_background_to_bg.py), so the shim is gone.
 def _build_section_to_field_key():
     try:
         import aisearch_attrs as _am
@@ -63,13 +65,7 @@ def _build_section_to_field_key():
         for letter, _, digits in _am.CODED_FIELDS:
             if digits == 0:
                 continue
-            lk = letter.lower()
-            _map[letter] = lk          # exact: "HC" → "hc"
-            _map[letter[0]] = lk       # first-char: "H" → "hc" (overwritten if conflict)
-        # Exact matches beat first-char: re-insert exact keys last
-        for letter, _, digits in _am.CODED_FIELDS:
-            if digits > 0:
-                _map[letter] = letter.lower()
+            _map[letter] = letter.lower()
         return _map
     except Exception:
         return {}
@@ -392,6 +388,14 @@ class _GridPopupCombo(QComboBox):
         gl.setContentsMargins(4, 4, 4, 4)
         gl.setSpacing(2)
 
+        # Cell width — wider for 2-digit grids (X expression, etc.)
+        # so 16-column rows show longer labels without ugly truncation.
+        cell_w = 110 if is_2digit else 84
+        cell_h = 28
+        # Truncate label to whatever the cell width can hold at the
+        # current font (font-size:9pt → ~6 px/char average).
+        max_chars = max(8, (cell_w - 8) // 6)
+
         cur_data = self.currentData() or ""
         for r in range(rows):
             for c in range(cols):
@@ -401,9 +405,9 @@ class _GridPopupCombo(QComboBox):
                     code = format(r * cols + c, "x")
                 lbl = labels.get(code, "")
                 btn = QToolButton(popup)
-                btn.setText(lbl[:14] if lbl else "")
+                btn.setText(lbl[:max_chars] if lbl else "")
                 btn.setToolTip(f"{code}  {lbl}" if lbl else code)
-                btn.setFixedSize(72, 28)
+                btn.setFixedSize(cell_w, cell_h)
                 btn.setStyleSheet(
                     "QToolButton { color:#ddd; background:#2a2a2a; "
                     "border:1px solid #444; padding:1px 3px; "
@@ -491,6 +495,24 @@ class FieldWidget(QGroupBox):
         vlay = QVBoxLayout(self)
         vlay.setContentsMargins(4, 4, 4, 2)
         vlay.setSpacing(2)
+
+        # Floating "≡" button at top-right corner — left-click opens the
+        # same menu as right-click (Show / Update / Disconnect / Color /
+        # Hide-for / Hide-when). Title click is preserved for collapse,
+        # so users get menu access without losing the toggle gesture.
+        from PyQt6.QtWidgets import QToolButton
+        self._menu_btn = QToolButton(self)
+        self._menu_btn.setText("≡")
+        self._menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._menu_btn.setStyleSheet(
+            "QToolButton{background:#3a3a3a;color:#ddd;border:1px solid #555;"
+            "border-radius:3px;font-size:11pt;padding:0 4px;}"
+            "QToolButton:hover{background:#4a4a4a;color:#fff;}")
+        self._menu_btn.setFixedSize(20, 16)
+        self._menu_btn.setToolTip(_lang_label("Field menu / フィールドメニュー"))
+        self._menu_btn.clicked.connect(self._on_menu_btn_click)
+        # Position is set in resizeEvent so it tracks the top-right
+        # corner of the widget regardless of size changes.
 
         if style == "text":
             placeholder = (text_meta or {}).get("placeholder", "") if isinstance(text_meta, dict) else ""
@@ -873,8 +895,15 @@ class FieldWidget(QGroupBox):
 
     def _fill_combo(self, preserve=False):
         cur = self._cb.currentData() if preserve else None
-        items = sorted(self.options, key=lambda kv: (-get_usage(kv[0]), kv[1])
-                       if self._sort_freq else (kv[1],))
+        # Alpha sort uses the language-stripped DISPLAY label (case-
+        # insensitive), not the raw "EN / JP" string — otherwise the
+        # English half always dominated the sort even in Japanese mode.
+        # Freq sort still ties on the raw label so the order is stable.
+        items = sorted(
+            self.options,
+            key=(lambda kv: (-get_usage(kv[0]), _lang_label(kv[1]).casefold()))
+                if self._sort_freq
+                else (lambda kv: _lang_label(kv[1]).casefold()))
         self._cb.blockSignals(True)
         self._cb.clear()
         # ALWAYS add "—" (no selection, empty data) at the top so an unset
@@ -907,8 +936,11 @@ class FieldWidget(QGroupBox):
         cb.blockSignals(True)
         cb.clear()
         cb.addItem("—", "")
-        items = sorted(opts, key=lambda kv: (-get_usage(kv[0]), kv[1])
-                       if self._sort_freq else (kv[1],))
+        items = sorted(
+            opts,
+            key=(lambda kv: (-get_usage(kv[0]), _lang_label(kv[1]).casefold()))
+                if self._sort_freq
+                else (lambda kv: _lang_label(kv[1]).casefold()))
         for k, lbl in items:
             cb.addItem(_lang_label(lbl), k)
         if cur:
@@ -1287,11 +1319,11 @@ class FieldWidget(QGroupBox):
             return ("coded", field_key, val)
         elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "4dig", "id", "radio")):
             cb = getattr(self, "_cb", None)
-            # Matrix selections write to entry[widget_key] (e.g. entry["ModelVideo"])
-            # NOT to entry["tags"] — tags namespace is shared across widgets so
-            # matrix codes (e.g. "05") were colliding between ModelVideo /
-            # ModelImage / X. Per-field storage avoids the ambiguity.
-            return ("matrix_field", self.key, cb.currentData() or "" if cb else "")
+            # Matrix selections write to entry[field_key]. self.key is
+            # already the canonical CLIP/storage key (BG, X, …) because
+            # the project tag file uses the same names everywhere.
+            field_key = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
+            return ("matrix_field", field_key, cb.currentData() or "" if cb else "")
         elif self.style == "id" and self.key == "P":
             _pe = getattr(self, "_pid_edit", None)
             return ("text", "person_id", _pe.text().strip() if _pe else "")
@@ -1532,10 +1564,20 @@ class FieldWidget(QGroupBox):
         connected child tiles re-snap when Qt's layout auto-resizes us
         (e.g. when a text box grows to fit longer detection output)."""
         super().resizeEvent(e)
+        # Pin the floating menu button to the top-right corner.
+        btn = getattr(self, "_menu_btn", None)
+        if btn is not None:
+            btn.move(self.width() - btn.width() - 4, 2)
+            btn.raise_()
         try:
             self.resized.emit(self.key)
         except Exception:
             pass
+
+    def _on_menu_btn_click(self):
+        """Left-click on the ≡ button opens the field menu just below it."""
+        btn = self._menu_btn
+        self._open_field_menu(btn.mapToGlobal(QPoint(0, btn.height())))
 
     def moveEvent(self, e):
         """Emit moved on every position change — catches programmatic .move()
@@ -1550,6 +1592,12 @@ class FieldWidget(QGroupBox):
             pass
 
     def contextMenuEvent(self, e):
+        self._open_field_menu(e.globalPos())
+
+    def _open_field_menu(self, global_pos):
+        """Build and exec the per-widget menu at `global_pos`. Called from
+        both right-click (contextMenuEvent) and left-click on the title
+        bar — users asked for left-click access to Show / Update."""
         # Clear any stuck drag/resize state
         self._resize_pos = self._resize_start_size = self._resize_dir = self._drag_pos = None
 
@@ -1612,7 +1660,7 @@ class FieldWidget(QGroupBox):
         if menu.isEmpty():
             return
 
-        chosen = menu.exec(e.globalPos())
+        chosen = menu.exec(global_pos)
         if chosen is None:
             return   # user dismissed menu without selecting
         if chosen == act_show:

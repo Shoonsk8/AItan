@@ -101,3 +101,21 @@ def test_hc_length_at_pos_1():
     assert any(w in length_prompts for w in
                ("buzzcut", "shoulder", "waist", "bald", "long", "short")), \
         "HC pos 1 prompts don't look like length prompts."
+
+
+def test_no_human_label_aliases_left_in_section_map():
+    """The alias shims (Background → bg, Hair → hc, …) were a workaround
+    for renamed sections in attrs_tags_*.json. After running
+    tools/rename_background_to_bg.py the project files use the canonical
+    short keys, and the shims must NOT come back — they hide future
+    drift instead of failing loudly. _SECTION_KEY_TO_FIELD should only
+    map CODED_FIELDS letters (with a few known exceptions) to their
+    lowercase form."""
+    from attr_viewer import _SECTION_KEY_TO_FIELD
+    forbidden = ["Background", "Hair", "FaceAngle", "Skin", "Eyes",
+                 "CameraShot", "Expression", "Clothing", "PostureMotion"]
+    for k in forbidden:
+        assert k not in _SECTION_KEY_TO_FIELD, (
+            f"Human-label alias {k!r} is back in _SECTION_KEY_TO_FIELD. "
+            f"That hides BG↔Background-style drift instead of fixing it. "
+            f"Rename the section in attrs_tags_*.json instead.")
