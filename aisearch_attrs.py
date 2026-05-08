@@ -3478,8 +3478,10 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
 
     # CS shot type → CL visibility: if the camera shot is close-up
     # / portrait / waist-up, the bottom (pants/skirt) isn't visible
-    # so leave it at 0 (the user labels 0 as N/A for "out of frame").
-    # The user said "upper body only should have N/A for pants/skirt".
+    # so set it to the project's N/A code "z" — the user defined
+    # this in the tag table as the "out of frame / not applicable"
+    # slot. Code "0" would be "no detection" which doesn't carry
+    # the same meaning to a downstream reader.
     #
     # CS shot type codes (pos 3):
     #   1 = extreme close-up (eyes/lips) — neither top nor bot visible
@@ -3491,6 +3493,7 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     #   7 = waist up                     — bot not visible
     #   8 = mid-thigh up                 — both partially visible
     #   9+ = full body / wide            — both visible
+    _NA = "z"   # user-defined N/A code in the tag table
     if (allowed_fields is None or "cl" in allowed_fields):
         cs_val = working.get("cs") or _get_working("cs")
         cl_val = working.get("cl") or _get_working("cl")
@@ -3503,19 +3506,80 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                 # Position 1 (bot type) and position 2 (bot color)
                 for _p in (1, 2):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != "0":
-                        cl_chars[idx] = "0"
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
             # Top also not visible for shots 1-2
             if cs_shot in ("1", "2"):
                 for _p in (3, 4):
                     idx = -_p
-                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != "0":
-                        cl_chars[idx] = "0"
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != _NA:
+                        cl_chars[idx] = _NA
                         cl_changed = True
             if cl_changed:
                 working["cl"] = "".join(cl_chars)
                 detected_fields.add("cl")
+
+    # Same logic for PM (Posture/Motion): close-up shots can't see
+    # the body, so PM should be N/A.
+    if (allowed_fields is None or "pm" in allowed_fields):
+        cs_val = working.get("cs") or _get_working("cs")
+        pm_val = working.get("pm") or _get_working("pm")
+        if cs_val and len(cs_val) >= 3 and pm_val:
+            cs_shot = cs_val[-3]
+            # PM is most reliable when full body is visible (CS 8+).
+            # For CS 1-2 (face only), force both digits to N/A.
+            # For CS 3-6 (head + chest), still no body visible → N/A.
+            # CS 7 (waist up) shows torso/arms — keep PM detection.
+            if cs_shot in ("1", "2", "3", "4", "5", "6"):
+                pm_chars = list(pm_val)
+                pm_changed = False
+                for _p in range(1, len(pm_chars) + 1):
+                    idx = -_p
+                    if pm_chars[idx] != _NA:
+                        pm_chars[idx] = _NA
+                        pm_changed = True
+                if pm_changed:
+                    working["pm"] = "".join(pm_chars)
+                    detected_fields.add("pm")
+
+    # And for B (Bust) and WH (Waist/Hip): N/A for shots that don't
+    # show that body region. Bust visible from CS 5 (bust shot) up;
+    # waist/hip visible from CS 7 (waist up) up.
+    if (allowed_fields is None or "b" in allowed_fields):
+        cs_val = working.get("cs") or _get_working("cs")
+        b_val = working.get("b") or _get_working("b")
+        if cs_val and len(cs_val) >= 3 and b_val:
+            cs_shot = cs_val[-3]
+            if cs_shot in ("1", "2", "3", "4"):
+                # Bust not visible
+                b_chars = list(b_val)
+                b_changed = False
+                for _p in range(1, len(b_chars) + 1):
+                    idx = -_p
+                    if b_chars[idx] != _NA:
+                        b_chars[idx] = _NA
+                        b_changed = True
+                if b_changed:
+                    working["b"] = "".join(b_chars)
+                    detected_fields.add("b")
+    if (allowed_fields is None or "wh" in allowed_fields):
+        cs_val = working.get("cs") or _get_working("cs")
+        wh_val = working.get("wh") or _get_working("wh")
+        if cs_val and len(cs_val) >= 3 and wh_val:
+            cs_shot = cs_val[-3]
+            if cs_shot in ("1", "2", "3", "4", "5", "6"):
+                # Waist/hip not visible
+                wh_chars = list(wh_val)
+                wh_changed = False
+                for _p in range(1, len(wh_chars) + 1):
+                    idx = -_p
+                    if wh_chars[idx] != _NA:
+                        wh_chars[idx] = _NA
+                        wh_changed = True
+                if wh_changed:
+                    working["wh"] = "".join(wh_chars)
+                    detected_fields.add("wh")
 
     # Return only fields that actually changed from original
     # For zero_is_none=False fields (FA/SK/BG), "0" is a valid detection — include even if all zeros
