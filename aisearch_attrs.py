@@ -3476,6 +3476,47 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                     _force_subdigits("cl", 3,
                         [(1, _spec_idx_by_fp[("cl", 1)], {"1"})])
 
+    # CS shot type → CL visibility: if the camera shot is close-up
+    # / portrait / waist-up, the bottom (pants/skirt) isn't visible
+    # so leave it at 0 (the user labels 0 as N/A for "out of frame").
+    # The user said "upper body only should have N/A for pants/skirt".
+    #
+    # CS shot type codes (pos 3):
+    #   1 = extreme close-up (eyes/lips) — neither top nor bot visible
+    #   2 = close-up of face only        — neither visible
+    #   3 = face + tiny shoulders        — bot not visible
+    #   4 = face + shoulders             — bot not visible
+    #   5 = bust shot                    — bot not visible
+    #   6 = head to upper chest          — bot not visible
+    #   7 = waist up                     — bot not visible
+    #   8 = mid-thigh up                 — both partially visible
+    #   9+ = full body / wide            — both visible
+    if (allowed_fields is None or "cl" in allowed_fields):
+        cs_val = working.get("cs") or _get_working("cs")
+        cl_val = working.get("cl") or _get_working("cl")
+        if cs_val and len(cs_val) >= 3 and cl_val:
+            cs_shot = cs_val[-3]
+            cl_chars = list(cl_val)
+            cl_changed = False
+            # Bot not visible for shots 1-7
+            if cs_shot in ("1", "2", "3", "4", "5", "6", "7"):
+                # Position 1 (bot type) and position 2 (bot color)
+                for _p in (1, 2):
+                    idx = -_p
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != "0":
+                        cl_chars[idx] = "0"
+                        cl_changed = True
+            # Top also not visible for shots 1-2
+            if cs_shot in ("1", "2"):
+                for _p in (3, 4):
+                    idx = -_p
+                    if abs(idx) <= len(cl_chars) and cl_chars[idx] != "0":
+                        cl_chars[idx] = "0"
+                        cl_changed = True
+            if cl_changed:
+                working["cl"] = "".join(cl_chars)
+                detected_fields.add("cl")
+
     # Return only fields that actually changed from original
     # For zero_is_none=False fields (FA/SK/BG), "0" is a valid detection — include even if all zeros
     result = {}
