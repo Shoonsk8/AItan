@@ -17,20 +17,28 @@ EXT_IMG = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
 EXT_VID = ('.mp4', '.mkv', '.mov', '.avi', '.webm')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-try:
-    model = SentenceTransformer(MODEL_NAME, device=device)
-except torch.OutOfMemoryError:
-    # SentenceTransformer's constructor pre-allocates on `device` —
-    # passing device="cpu" here is essential. The previous fallback
-    # called SentenceTransformer(MODEL_NAME) without a device arg,
-    # so it auto-detected cuda and OOM'd before we could .to("cpu").
-    print(f"[aisearch] CUDA OOM loading model — falling back to CPU")
+# AISEARCH_SKIP_MODEL=1 — short-lived subprocesses (e.g. face_worker)
+# that don't need CLIP can skip the 15-25s model load. `model` stays
+# None; any code path that touches it will raise, which is the right
+# signal that the caller leaked a non-face dependency into a face-only
+# context.
+if os.environ.get("AISEARCH_SKIP_MODEL") == "1":
+    model = None
+else:
     try:
-        torch.cuda.empty_cache()
-    except Exception:
-        pass
-    device = "cpu"
-    model = SentenceTransformer(MODEL_NAME, device=device)
+        model = SentenceTransformer(MODEL_NAME, device=device)
+    except torch.OutOfMemoryError:
+        # SentenceTransformer's constructor pre-allocates on `device` —
+        # passing device="cpu" here is essential. The previous fallback
+        # called SentenceTransformer(MODEL_NAME) without a device arg,
+        # so it auto-detected cuda and OOM'd before we could .to("cpu").
+        print(f"[aisearch] CUDA OOM loading model — falling back to CPU")
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        device = "cpu"
+        model = SentenceTransformer(MODEL_NAME, device=device)
 
 
 def load_db_logic(name):

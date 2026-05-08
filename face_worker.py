@@ -14,6 +14,11 @@ import sys, json, argparse, os
 _DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _DIR)
 
+# Face detection only needs face_recognition / dlib — not CLIP. Skip
+# the CLIP model load to drop worker startup from ~20s to ~1-2s and
+# stop "worker timeout (30s)" errors caused entirely by import time.
+os.environ.setdefault("AISEARCH_SKIP_MODEL", "1")
+
 
 def main():
     ap = argparse.ArgumentParser()

@@ -3910,16 +3910,18 @@ def inspect_clip_scores_subprocess(path, timeout=None):
         return out.get("specs") or []
 
 
-def inspect_face_detection_subprocess(path, project, timeout=30):
+def inspect_face_detection_subprocess(path, project, timeout=120):
     """Run inspect_face_detection in a worker subprocess.
     Isolates dlib/face_recognition leaks — each call gets a fresh process
     whose memory the OS fully reclaims on exit. The leak that was crashing
     the main app at high RSS no longer compounds across calls.
 
-    Slower than the in-process version (~300ms process spawn + import) but
-    bounded — fine for the auto-inspect debounced path which only fires
-    when the user pauses on a file. AISEARCH_INPROC_FACE=1 forces the
-    in-process call (fallback for debugging).
+    The 120s budget accounts for `import aisearch_attrs` inside the
+    worker — that transitively loads the CLIP model (15-25s on CPU
+    fallback) before any face work begins. Without the headroom the
+    user saw "worker timeout (30s)" on routine inspections.
+
+    AISEARCH_INPROC_FACE=1 forces the in-process call (debugging).
     """
     if os.environ.get("AISEARCH_INPROC_FACE"):
         return inspect_face_detection(path, project)
