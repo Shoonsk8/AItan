@@ -3373,6 +3373,95 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
         working[field] = "".join(val)
         detected_fields.add(field)
 
+    # ── Cross-field consistency pass ──────────────────────────────────────
+    # The independent per-position scoring produces nonsense like
+    # "very long hair AND no hair" because each digit's threshold is
+    # checked in isolation. If one HC digit firmly classified the image
+    # as having hair (length is anything but 0/bald), force the other
+    # two HC digits to pick their best NON-ZERO option even when the
+    # raw scores didn't clear the threshold. Same for CL top/bottom:
+    # if the bottom type was detected, the top isn't really "absent",
+    # CLIP just didn't peak above the threshold.
+    def _force_subdigits(field, leader_pos, dependent_specs):
+        """If the digit at `leader_pos` for `field` is non-zero AND
+        not in `bald_codes`, run dependent_specs (list of (pos, spec_idx))
+        with no threshold, pick best non-zero, write to working[field]."""
+        cur = working.get(field) or _get_working(field)
+        if not cur:
+            return
+        digits = field_digits_map.get(field, len(cur))
+        idx_in_str = -leader_pos
+        if abs(idx_in_str) > len(cur):
+            return
+        leader_digit = cur[idx_in_str]
+        if leader_digit == "0":
+            return  # no leader detected, nothing to force
+        for dep_pos, dep_spec_idx, bad_codes in dependent_specs:
+            cur2 = working.get(field) or _get_working(field)
+            if abs(-dep_pos) > len(cur2):
+                continue
+            dep_digit = cur2[-dep_pos]
+            if dep_digit != "0":
+                continue   # already detected, leave alone
+            spec = CLIP_AUTO_DETECT[dep_spec_idx]
+            if spec.get("field") != field or spec.get("pos") != dep_pos:
+                continue
+            text_embs = cache[dep_spec_idx]
+            scores = _stutil.cos_sim(emb, text_embs)[0]
+            # Pick best non-zero, non-"bad" (e.g. "topless") option
+            best_idx = -1
+            best_sc = -1.0
+            for j, (code, _txt) in enumerate(spec["options"]):
+                if code == "0" or code in bad_codes:
+                    continue
+                sc = float(scores[j])
+                if sc > best_sc:
+                    best_sc = sc
+                    best_idx = j
+            if best_idx < 0:
+                continue
+            forced_code = spec["options"][best_idx][0]
+            val = list(cur2)
+            val[-dep_pos] = forced_code
+            working[field] = "".join(val)
+            detected_fields.add(field)
+
+    # Index CLIP_AUTO_DETECT specs by (field, pos) for the consistency pass.
+    _spec_idx_by_fp = {(s["field"], s["pos"]): i for i, s in enumerate(CLIP_AUTO_DETECT)}
+
+    # HC: if length (pos 3) detected non-bald, force color (pos 1)
+    # and style (pos 2) to a non-zero pick.
+    if (allowed_fields is None or "hc" in allowed_fields):
+        # bald-like length codes that would NOT imply visible hair: 1
+        # (buzzcut, almost no hair) and 6 (fully bald).
+        cur_hc = working.get("hc")
+        if cur_hc and len(cur_hc) >= 3 and cur_hc[-3] not in ("0", "1", "6"):
+            deps = []
+            if ("hc", 1) in _spec_idx_by_fp:
+                deps.append((1, _spec_idx_by_fp[("hc", 1)], set()))
+            if ("hc", 2) in _spec_idx_by_fp:
+                # Style: don't force "bald" sub-style (9 = buzzcut/shaved)
+                deps.append((2, _spec_idx_by_fp[("hc", 2)], {"9"}))
+            _force_subdigits("hc", 3, deps)
+
+    # CL: if bottom type (pos 1) detected non-zero AND not "no bottom"
+    # (code 1), force top type (pos 3) to a non-topless pick. Same logic
+    # in reverse: if top type detected (not topless), force bottom.
+    if (allowed_fields is None or "cl" in allowed_fields):
+        cur_cl = working.get("cl")
+        if cur_cl and len(cur_cl) >= 3:
+            bot_type = cur_cl[-1]   # pos 1 = bottom type
+            top_type = cur_cl[-3]   # pos 3 = top type
+            if bot_type not in ("0", "1") and top_type == "0":
+                # Bottom present → top probably present too
+                if ("cl", 3) in _spec_idx_by_fp:
+                    _force_subdigits("cl", 1,
+                        [(3, _spec_idx_by_fp[("cl", 3)], {"1"})])
+            if top_type not in ("0", "1") and bot_type == "0":
+                if ("cl", 1) in _spec_idx_by_fp:
+                    _force_subdigits("cl", 3,
+                        [(1, _spec_idx_by_fp[("cl", 1)], {"1"})])
+
     # Return only fields that actually changed from original
     # For zero_is_none=False fields (FA/SK/BG), "0" is a valid detection — include even if all zeros
     result = {}
