@@ -842,7 +842,7 @@ _DEFAULT_CODED_FIELDS = [
     ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
     ("BG",  "Background",    2),   # 16×16 matrix — 2-digit hex (00-ff). Was 3
                                    # historically; reduced to match the actual
-                                   # BG_Table (e.g. Ocean=42).
+                                   # Background_Table (e.g. Ocean=42).
     ("O",   "Orientation",   2),   # f1=15:1  73=21:9  09=16:9  32=3:2  43=4:3  11=1:1  34=3:4  23=2:3  90=9:16
     ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
     ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
@@ -871,6 +871,100 @@ def _load_coded_fields():
     return list(_DEFAULT_CODED_FIELDS)
 
 CODED_FIELDS = _load_coded_fields()
+
+
+# ── Storage-key naming ───────────────────────────────────────────────────────
+# The CODED_FIELDS letter is the FILENAME code (e.g. "HC"). Historically the
+# JSON storage key was the lowercase letter ("hc"), which left attrs.json
+# riddled with cryptic 1-2 char keys. The map below translates each filename
+# code to a human-readable storage key. Filenames stay unchanged; only
+# attrs.json keys widen.
+#
+# Existing short-form data still loads via `field_storage_key()` for new
+# writes — `tools/migrate_storage_keys.py` rewrites attrs_*.json once.
+_STORAGE_KEY_MAP = {
+    "a":   "animal",
+    "pi":  "person_inhrt",
+    "e":   "eyes",
+    "hc":  "hair",
+    "fa":  "face_angle",
+    "x":   "expression",
+    "sk":  "skin",
+    "b":   "bust",
+    "wh":  "waist_hip",
+    "pm":  "posture_motion",
+    "cl":  "clothing",
+    "t":   "tool",
+    "cs":  "camera_shot",
+    "bg":  "background",
+    "o":   "orientation",
+    "r":   "resolution",
+    "k":   "frame_rate",
+    "j":   "timestamp",
+    "ed":  "editable_flag",
+    "wm":  "watermark_flag",
+}
+# Reverse — long → short, so we can spot legacy keys in stored data.
+_STORAGE_KEY_REVERSE = {v: k for k, v in _STORAGE_KEY_MAP.items()}
+
+
+def field_storage_key(field):
+    """Return the JSON storage key for a coded field. Accepts either the
+    uppercase filename letter ("HC") or the lowercase short code ("hc")
+    and returns the long form ("hair"). Unknown values pass through
+    unchanged so non-coded fields (text fields, etc.) still resolve."""
+    if not field:
+        return field
+    short = field.lower()
+    return _STORAGE_KEY_MAP.get(short, short)
+
+
+def field_storage_get(entry, field, default=None):
+    """Read a coded-field value from `entry` honoring both new long-form
+    keys and legacy short keys. Used during the migration window so a
+    half-migrated attrs.json still loads cleanly."""
+    if not isinstance(entry, dict):
+        return default
+    long_key  = field_storage_key(field)
+    short_key = field.lower() if field else field
+    if long_key in entry:
+        return entry[long_key]
+    if short_key in entry:
+        return entry[short_key]
+    return default
+
+
+# ── Disk-key translation ─────────────────────────────────────────────────────
+# In-memory attrs entries use the short coded-field keys (e.g. "hc", "bg") —
+# all the existing code paths read/write those names. On disk we want the
+# human-readable form ("hair", "background"). Translation happens ONLY at
+# the save/load boundaries so internal call sites don't need to change.
+
+def _entry_to_disk(entry):
+    """Convert in-memory entry (short keys) to JSON-on-disk format
+    (long keys). Non-coded keys (CLIP, FACE, prompt, seed, …) pass
+    through unchanged. Idempotent for already-long keys."""
+    if not isinstance(entry, dict):
+        return entry
+    out = {}
+    for k, v in entry.items():
+        # Only translate keys we know are short coded-field aliases.
+        # Anything else (already long, or a non-field key like "prompt")
+        # passes through.
+        out[_STORAGE_KEY_MAP.get(k, k)] = v
+    return out
+
+
+def _entry_from_disk(entry):
+    """Convert disk format (long keys) back to in-memory (short keys).
+    Accepts both long and short for safety while data is mid-migration —
+    a partially-migrated attrs.json still loads cleanly."""
+    if not isinstance(entry, dict):
+        return entry
+    out = {}
+    for k, v in entry.items():
+        out[_STORAGE_KEY_REVERSE.get(k, k)] = v
+    return out
 
 # Person token pattern: P + (human 3-hex OR animal A+3-hex)  [not followed by W]
 _PERSON_PAT = r'P(?!W)(A[0-9a-f]{3}|[0-9a-f]{3})'
@@ -1483,9 +1577,13 @@ def load(project):
     if os.path.exists(p):
         try:
             with open(p, encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
         except Exception:
-            pass
+            return {}
+        # Translate long-form disk keys ("hair", "background") back to
+        # the short in-memory aliases ("hc", "bg") that all the existing
+        # code expects. Idempotent for legacy short-keyed data.
+        return {p: _entry_from_disk(e) for p, e in raw.items()}
     return {}
 
 # Keys that live only in memory (diagnostic/score-text caches and runtime markers);
@@ -1536,8 +1634,11 @@ def save(project, data):
         cleaned = {}
         for path, entry in data.items():
             if isinstance(entry, dict):
-                cleaned[path] = {k: _cap_debug(k, v) for k, v in entry.items()
-                                 if not _is_transient_key(k)}
+                stripped = {k: _cap_debug(k, v) for k, v in entry.items()
+                            if not _is_transient_key(k)}
+                # Translate short coded-field keys (hc, bg, …) into the
+                # human-readable form (hair, background, …) on disk.
+                cleaned[path] = _entry_to_disk(stripped)
             else:
                 cleaned[path] = entry
         # Atomic write: dump to temp file, then rename, so a crash or second
@@ -3112,7 +3213,7 @@ CLIP_AUTO_DETECT = [
     ]},
     # ── Background major ─────────────────────────────────────────────────────
     # BG is a 2-digit field. pos=2 = leftmost digit (major scene
-    # category). Codes MUST match the user's BG_Table
+    # category). Codes MUST match the user's Background_Table
     # row-major layout — otherwise detecting "indoor" wrote 3
     # (the user's "Commercial" row), detecting "nature" wrote 6
     # (Space row), etc. The previous spec used CLIP-internal
@@ -4786,7 +4887,7 @@ def apply_tag_sync_rules(attrs_data, path, project):
     entry_tags = set(entry.get("tags", []))
     # Matrix groups (Background, ModelImage, ModelVideo, X, Animal, ...) store
     # their value at entry[section_name], not in entry["tags"]. The rule's
-    # tag_group key may use the legacy "_Table" suffix (e.g. BG_Table)
+    # tag_group key may use the legacy "_Table" suffix (e.g. Background_Table)
     # while the matrix section name is just "Background" — strip the suffix
     # and check both.
     try:

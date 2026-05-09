@@ -53,11 +53,20 @@ def _build_coded_labels():
 
 _CODED_LABELS = _build_coded_labels()
 
-# Maps section key (as used in attrs_tags) → lowercase CODED_FIELDS letter.
-# Pure 1:1 mapping — section names in attrs_tags MUST match the CODED_FIELDS
-# letter exactly (e.g. "BG" not "Background"). Earlier versions had alias
-# shims for human-label sections; those got renamed in the project files
-# (see tools/rename_background_to_bg.py), so the shim is gone.
+# Maps section key (canvas widget name) → lowercase storage key.
+#
+# Three layers, intentionally distinct:
+#   - filename code:   uppercase letter from CODED_FIELDS, e.g. "BG"
+#   - storage key:     lowercase, e.g. "bg" (what attrs.json holds)
+#   - canvas section:  human-readable, e.g. "Background"
+#
+# `Background` is the canvas section name; the alias resolves it down
+# to the storage key `bg` so reads/writes hit the right slot. This is
+# the ONLY direction (section → storage); never add the inverse.
+_HUMAN_LABEL_ALIASES = {
+    "Background": "bg",
+}
+
 def _build_section_to_field_key():
     try:
         import aisearch_attrs as _am
@@ -66,9 +75,10 @@ def _build_section_to_field_key():
             if digits == 0:
                 continue
             _map[letter] = letter.lower()
+        _map.update(_HUMAN_LABEL_ALIASES)
         return _map
     except Exception:
-        return {}
+        return dict(_HUMAN_LABEL_ALIASES)
 
 _SECTION_KEY_TO_FIELD = _build_section_to_field_key()
 
@@ -1613,9 +1623,14 @@ class FieldWidget(QGroupBox):
         # the same detection (P = primary face, PW = secondary faces). PI is
         # provenance-only and stays manual; assigned via the 👤 button →
         # Settings → Persons card buttons.
-        _CLIP_FIELDS = {"E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "P", "PW", "CL"}
+        # Show / Update show for any widget whose key resolves to a
+        # CLIP/face field — direct keys (E, HC, …) AND human-label
+        # sections like "Background" → "bg".
+        _CLIP_TARGETS = {"e", "hc", "fa", "sk", "pm", "cs", "bg", "x", "cl",
+                         "p", "pw"}
+        _resolved = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
         act_show = act_update = None
-        if self.key in _CLIP_FIELDS:
+        if _resolved in _CLIP_TARGETS:
             act_show   = menu.addAction(_lang_label("👁 Show / 👁 表示"))
             act_update = menu.addAction(_lang_label("🔄 Update / 🔄 更新"))
 
@@ -2176,9 +2191,21 @@ class AttrViewerWidget(QWidget):
             import aisearch_attrs as _am_mod
             _deleted = set(cfg.get("__deleted_sections__", []))
             _present = set(sec_order)
+            # Suppress auto-append of an FD key (e.g. "BG") when the
+            # project already has its human-label alias ("Background")
+            # in section_order — otherwise the canvas ends up with two
+            # widgets fighting for the same storage key.
+            _alias_owners = set()
+            for _alias, _resolved in _HUMAN_LABEL_ALIASES.items():
+                if _alias in _present:
+                    for _fd_k in _FD:
+                        if _fd_k.lower() == _resolved:
+                            _alias_owners.add(_fd_k)
             for _fd_key, (_fd_style, _) in _FD.items():
-                # Append if missing
-                if _fd_key not in _present and _fd_key not in _deleted:
+                # Append if missing AND not already covered by an alias.
+                if (_fd_key not in _present
+                        and _fd_key not in _deleted
+                        and _fd_key not in _alias_owners):
                     sec_order.append(_fd_key)
                 # Fill style if missing
                 if _fd_key not in sec_styles and _fd_key not in _deleted:
@@ -2361,8 +2388,8 @@ class AttrViewerWidget(QWidget):
         # manual wiring is preserved.
         _DEBUG_PARENT = {
             "CLIP_E":  "E",  "CLIP_HC": "HC", "CLIP_FA": "FA", "CLIP_SK": "SK",
-            "CLIP_PM": "PM", "CLIP_CS": "CS", "CLIP_BG": "BG", "CLIP_X":  "X",
-            "CLIP_CL": "CL",
+            "CLIP_PM": "PM", "CLIP_CS": "CS", "CLIP_BG": "Background",
+            "CLIP_X":  "X",  "CLIP_CL": "CL",
             "FACE":    "P",
             "FACE_PW": "PW",
         }

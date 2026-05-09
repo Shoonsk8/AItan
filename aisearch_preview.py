@@ -1727,7 +1727,7 @@ class PreviewWindow(QWidget):
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
                 # (for matrix fields like X, Background). Read X_Table /
-                # BG_Table from the project's tags file directly,
+                # Background_Table from the project's tags file directly,
                 # because attrs_mod.TAG_GROUPS can still be the default config
                 # for this process (not project-specific).
                 _tags_set_check = set(_entry.get("tags", []))
@@ -1742,12 +1742,12 @@ class PreviewWindow(QWidget):
                     pass
                 _x_opts_check = {r[0] for r in _proj_cfg.get("X_Table", [])
                                  if isinstance(r, (list, tuple)) and r}
-                _bg_opts_check = {r[0] for r in _proj_cfg.get("BG_Table", [])
+                _bg_opts_check = {r[0] for r in _proj_cfg.get("Background_Table", [])
                                   if isinstance(r, (list, tuple)) and r}
                 if not _x_opts_check:
                     _x_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("X_Table", [])}
                 if not _bg_opts_check:
-                    _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("BG_Table", [])}
+                    _bg_opts_check = {k for k, _ in attrs_mod.TAG_GROUPS.get("Background_Table", [])}
                 def _field_filled(f):
                     # Fully filled = every CLIP position for this field has a
                     # non-zero digit (or the position allows zero). If any
@@ -3689,10 +3689,14 @@ class PreviewWindow(QWidget):
         A missing field means: (a) Update on that field is a no-op, AND
         (b) Update on any OTHER field doesn't protect this one — it
         runs through detection and silently gets overwritten. Tested
-        in tests/test_clip_threshold.py."""
+        in tests/test_clip_threshold.py.
+
+        `key` may be the canvas section name like "Background" rather
+        than the storage/CLIP key — resolve through _SECTION_KEY_TO_FIELD."""
         from aisearch_attrs import CLIP_AUTO_DETECT
+        from attr_viewer import _SECTION_KEY_TO_FIELD
         _ALL = {s["field"] for s in CLIP_AUTO_DETECT}
-        _target = key.lower()
+        _target = _SECTION_KEY_TO_FIELD.get(key, key.lower())
         _skip = set()
         if _target == "p" or _target == "pw":
             # Person / persons-with: skip all CLIP fields, only run face detection

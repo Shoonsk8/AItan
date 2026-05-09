@@ -103,19 +103,18 @@ def test_hc_length_at_pos_1():
         "HC pos 1 prompts don't look like length prompts."
 
 
-def test_no_human_label_aliases_left_in_section_map():
-    """The alias shims (Background → bg, Hair → hc, …) were a workaround
-    for renamed sections in attrs_tags_*.json. After running
-    tools/rename_background_to_bg.py the project files use the canonical
-    short keys, and the shims must NOT come back — they hide future
-    drift instead of failing loudly. _SECTION_KEY_TO_FIELD should only
-    map CODED_FIELDS letters (with a few known exceptions) to their
-    lowercase form."""
+def test_background_alias_resolves_to_bg():
+    """Canvas section "Background" must resolve to storage key "bg".
+    Without this, the matrix widget reads/writes entry["background"]
+    while CLIP detection writes entry["bg"] — same data, two slots,
+    never met."""
     from attr_viewer import _SECTION_KEY_TO_FIELD
-    forbidden = ["Background", "Hair", "FaceAngle", "Skin", "Eyes",
-                 "CameraShot", "Expression", "Clothing", "PostureMotion"]
-    for k in forbidden:
-        assert k not in _SECTION_KEY_TO_FIELD, (
-            f"Human-label alias {k!r} is back in _SECTION_KEY_TO_FIELD. "
-            f"That hides BG↔Background-style drift instead of fixing it. "
-            f"Rename the section in attrs_tags_*.json instead.")
+    assert _SECTION_KEY_TO_FIELD.get("Background") == "bg"
+
+
+def test_alias_map_is_minimal():
+    """Only deliberate canvas-name renames belong in the alias map.
+    Adding more (Hair → hc, Eyes → e, etc.) creates shims for sections
+    that aren't actually renamed; they would just hide future drift."""
+    from attr_viewer import _HUMAN_LABEL_ALIASES
+    assert set(_HUMAN_LABEL_ALIASES.keys()) == {"Background"}

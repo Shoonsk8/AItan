@@ -1043,7 +1043,7 @@
       "Moan 喘ぎ声"
     ]
   ],
-  "BG_Table": [
+  "Background_Table": [
     [
       "00",
       "Solid BG / 単色背景"
@@ -1928,7 +1928,7 @@
     "WH",
     "PM",
     "CLIP_PM",
-    "BG",
+    "Background",
     "CS",
     "CLIP_BG",
     "CLIP_CS",
@@ -1971,7 +1971,7 @@
     "WH": "2dig",
     "PM": "2dig",
     "CLIP_PM": "text",
-    "BG": "matrix",
+    "Background": "matrix",
     "CS": "3dig",
     "CLIP_BG": "text",
     "CLIP_CS": "text",
@@ -2016,7 +2016,7 @@
       "CLIP_PM"
     ],
     "Sight": [
-      "BG",
+      "Background",
       "CS",
       "CLIP_BG",
       "CLIP_CS",
@@ -2089,7 +2089,7 @@
       "PostureMotion_motion",
       "PostureMotion_posture"
     ],
-    "BG": [
+    "Background": [
       "Background"
     ],
     "CS": [
