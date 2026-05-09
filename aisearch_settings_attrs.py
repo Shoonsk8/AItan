@@ -267,25 +267,38 @@ class _AttrsMixin:
             return grp
 
         _BASIC_STYLES = {"1dig", "2dig", "3dig", "4dig", "matrix", "id"}
-        # Map coded-field prefix → human label (from CODED_FIELDS).
-        # Stored values stay English so JSON keys / lookups don't shift;
-        # _CODED_LABEL_DISPLAY is the bilingual version used only for UI.
-        _CODED_LABELS = {letter: label
-                         for letter, label, _ in _am_ref._DEFAULT_CODED_FIELDS}
-        _CODED_LABELS["P"] = "Person ID"
-        _JA_CODED = {
-            "Animal": "動物", "PersonInhrt": "継承元", "Eyes": "目",
-            "Hair": "髪", "FaceAngle": "顔の角度", "Expression": "表情",
-            "Skin": "肌", "Bust": "バスト", "WaistHip": "ウエスト・ヒップ",
+        # Two separate maps for the Attributes tab UI:
+        #   _CODED_LABELS:        prefix → bilingual human label
+        #                         ("Hair / 髪") used as the default text
+        #                         in the Title text-input field
+        #   _CODED_LABEL_DISPLAY: prefix → storage key ("hair") used as
+        #                         the section's first title so the
+        #                         displayed key matches the on-disk JSON
+        #                         key (single source of truth)
+        _JA_LABELS = {
+            "Animal": "動物",        "PersonInhrt": "継承元",  "Eyes": "目",
+            "Hair": "髪",            "FaceAngle": "顔の角度",  "Expression": "表情",
+            "Skin": "肌",            "Bust": "バスト",         "WaistHip": "ウエスト・ヒップ",
             "PostureMotion": "姿勢・動作", "Clothing / 服装": "服装", "Tool": "道具",
             "CameraShot": "カメラショット", "Background": "背景",
             "Orientation": "縦横比", "Resolution": "解像度",
             "FrameRate": "フレームレート", "Timestamp": "タイムスタンプ",
-            "Editable": "編集可", "Watermark": "ウォーターマーク",
-            "Person ID": "人物ID",
+            "Editable": "編集可",    "Watermark": "ウォーターマーク",
+            "Person": "人物",        "PersonsWith": "同伴者",
         }
+        def _bilingual(en):
+            ja = _JA_LABELS.get(en, en)
+            return en if ja == en else f"{en} / {ja}"
+        _CODED_LABELS = {letter: _bilingual(label)
+                         for letter, label, _, *_ in _am_ref._DEFAULT_CODED_FIELDS}
+        _CODED_LABELS["P"]  = _bilingual("Person")
+        _CODED_LABELS["PW"] = _bilingual("PersonsWith")
         _CODED_LABEL_DISPLAY = {
-            k: _t(f"{v} / {_JA_CODED.get(v, v)}") for k, v in _CODED_LABELS.items()}
+            letter: storage
+            for letter, _label, _digits, storage in _am_ref._DEFAULT_CODED_FIELDS
+        }
+        _CODED_LABEL_DISPLAY.setdefault("P",  "person_id")
+        _CODED_LABEL_DISPLAY.setdefault("PW", "persons_with")
 
         def _build_ws_section(prefix, force_style=None, group=None, text_label=None, text_placeholder=None, initial_pairs=None, col_defs=None, saved_parent_name=None, saved_col_names=None, readonly=False, saved_field_name=None, _traw=None):
             if prefix in self._attr_ws_loaded:
@@ -325,9 +338,7 @@ class _AttrsMixin:
                     self._attr_aw_vbox.addWidget(widget)
 
             _lbl = _CODED_LABEL_DISPLAY.get(prefix, "")
-            if _lbl and prefix in FIELD_DEFS:
-                _sec_title_prefix = f"{_lbl}  [{prefix}]"
-            elif _lbl:
+            if _lbl:
                 _sec_title_prefix = _lbl
             elif saved_field_name:
                 _sec_title_prefix = saved_field_name
@@ -339,6 +350,24 @@ class _AttrsMixin:
             if style == "id":
                 sec = _WsSec(f"{_sec_title_prefix}   │   ID", prefix=prefix, color=_sec_color)
                 _add_to_target(sec)
+                bl = QVBoxLayout(sec.content)
+                # Title text box — same human-readable label field every
+                # other section type has. Saves to __parent_names__ on
+                # save like the rest. Header stays as the storage key.
+                _id_tl_row = QHBoxLayout(); _id_tl_row.setSpacing(6)
+                _id_tl_row.addWidget(QLabel(_t("Title: / タイトル："),
+                                            styleSheet="color:#888; font-size:8pt;"))
+                _id_tl_e = QLineEdit()
+                _id_tl_e.setFixedWidth(180); _id_tl_e.setStyleSheet(_les)
+                _id_tl_e.setPlaceholderText(_t("e.g. Timestamp / 例：タイムスタンプ"))
+                _id_saved_tl = (saved_parent_name
+                    or _am_ref.TAG_GROUPS.get("__parent_names__", {}).get(prefix)
+                    or _CODED_LABELS.get(prefix, prefix))
+                _id_tl_e.setText(_id_saved_tl)
+                _id_tl_row.addWidget(_id_tl_e); _id_tl_row.addStretch()
+                bl.addLayout(_id_tl_row)
+                self._attr_parent_names[prefix] = _id_tl_e
+
                 if prefix == "J":
                     msg = _t("  Timestamp ID — auto-stamped by scan  (not editable) / タイムスタンプID — スキャン時に自動付与（編集不可）")
                 elif prefix == "P":
@@ -347,19 +376,20 @@ class _AttrsMixin:
                     msg = _t(f"  Structural ID marker  (no editable data) / 構造IDマーカー（編集データなし）")
                 blank_lbl = QLabel(msg)
                 blank_lbl.setStyleSheet("color:#666; font-style:italic; padding:8px;")
-                bl = QVBoxLayout(sec.content); bl.addWidget(blank_lbl)
+                bl.addWidget(blank_lbl)
                 def _on_del_id(checked=False, pfx=prefix, s=sec):
                     self._attr_ws_loaded.discard(pfx)
                     s.setParent(None); s.deleteLater()
                 sec._del_btn.clicked.connect(_on_del_id)
                 return
 
-            if style == "matrix":
-                _saved_name = (saved_col_names or _am_ref.TAG_GROUPS.get("__col_names__", {}).get(prefix) or [None])[0]
-                _disp_title = (_saved_name or _sec_title_prefix)
-                _sec_title = f"{_disp_title}   │   16×16 matrix"
-            else:
-                _sec_title = f"{_sec_title_prefix}   │   {_style_names.get(style, style)}"
+            # Section title is the STORAGE KEY (the on-disk JSON key),
+            # not the col_names label. The human-readable name is
+            # editable below in the "Parent" text box and doesn't drive
+            # the section header — that's what the user asked for.
+            _format_hint = ("16×16 matrix" if style == "matrix"
+                            else _style_names.get(style, style))
+            _sec_title = f"{_sec_title_prefix}   │   {_format_hint}"
             sec = _WsSec(_sec_title, prefix=prefix, color=_sec_color)
             sec._section_style = style   # authoritative style stored on the widget
             _add_to_target(sec)
@@ -403,9 +433,9 @@ class _AttrsMixin:
                     rl2 = QHBoxLayout(rw); rl2.setContentsMargins(0,0,0,0); rl2.setSpacing(6)
                     flag_note = QLabel("☑", styleSheet="color:#6ea6f0; font-size:10pt;")
                     rl2.addWidget(flag_note)
-                    rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
+                    rl2.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                     l_e = QLineEdit(existing_label); l_e.setMinimumWidth(160); l_e.setStyleSheet(_les)
-                    l_e.setPlaceholderText(_t("Display Name / 表示名"))
+                    l_e.setPlaceholderText(_t("Title / タイトル"))
                     rl2.addWidget(l_e, stretch=1)
                     rl2.addWidget(QLabel(f"  key = {existing_key}", styleSheet="color:#555; font-size:8pt; font-style:italic;"))
                     bl_lay.addWidget(rw)
@@ -429,7 +459,7 @@ class _AttrsMixin:
                         lambda txt, _s=s: _s._title_lbl.setText(
                             _t(f"Key = {txt or _s.prefix}   │   Text Field / キー = {txt or _s.prefix}   │   テキストフィールド")))
                     lbl_row = QHBoxLayout(); lbl_row.setSpacing(6)
-                    lbl_row.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
+                    lbl_row.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                     lbl_e = QLineEdit()
                     lbl_e.setStyleSheet(_les); lbl_e.setMinimumWidth(160)
                     lbl_e.setPlaceholderText(_t("Display name (e.g. Prompt) / 表示名（例：プロンプト）"))
@@ -463,6 +493,22 @@ class _AttrsMixin:
                     row_lay.setContentsMargins(6, 3, 6, 5); row_lay.setSpacing(2)
                     self._attr_tag_groups[pfx] = []
 
+                    # Title text box — same human-readable label field as
+                    # dig/matrix sections have. Doesn't change the section
+                    # header (which stays the storage key).
+                    _tl_row = QHBoxLayout(); _tl_row.setSpacing(6)
+                    _tl_row.addWidget(QLabel(_t("Title: / タイトル："),
+                                             styleSheet="color:#888; font-size:8pt;"))
+                    _tl_e = QLineEdit()
+                    _tl_e.setFixedWidth(180); _tl_e.setStyleSheet(_les)
+                    _tl_e.setPlaceholderText(_t("e.g. Quality / 例：品質"))
+                    _saved_tl = (saved_parent_name
+                        or _am_ref.TAG_GROUPS.get("__parent_names__", {}).get(pfx)
+                        or pfx)
+                    _tl_e.setText(_saved_tl)
+                    _tl_row.addWidget(_tl_e); _tl_row.addStretch()
+                    row_lay.addLayout(_tl_row)
+                    self._attr_parent_names[pfx] = _tl_e
 
                     # Style selector — lets user change taglist ↔ radio in-place (hidden for readonly)
                     if sty in ("taglist", "radio") and not readonly:
@@ -478,8 +524,11 @@ class _AttrsMixin:
                             new_sty = cb.currentData()
                             _s._section_style = new_sty
                             self._attr_section_styles[_pfx] = new_sty
+                            # Header stays as the storage key — only the
+                            # format hint after the divider changes.
+                            _disp_key = _CODED_LABEL_DISPLAY.get(_pfx, _pfx.lower())
                             _s._title_lbl.setText(
-                                f"Key = {_pfx}   │   {_style_names.get(new_sty, new_sty)}")
+                                f"{_disp_key}   │   {_style_names.get(new_sty, new_sty)}")
                         _sty_cb.currentIndexChanged.connect(_on_sty_change)
                         _sty_row.addWidget(_sty_cb)
                         _sty_row.addStretch()
@@ -495,7 +544,7 @@ class _AttrsMixin:
                             k_e = QLabel(k_val); k_e.setFixedWidth(90)
                             k_e.setStyleSheet(_lbl_ro_ss)
                             rl2.addWidget(k_e)
-                            rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
+                            rl2.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                             l_e = QLabel(l_val); l_e.setMinimumWidth(120)
                             l_e.setStyleSheet(_lbl_ro_ss)
                         else:
@@ -504,10 +553,10 @@ class _AttrsMixin:
                             k_e.setStyleSheet(_les)
                             k_e.setPlaceholderText("tag_key")
                             rl2.addWidget(k_e)
-                            rl2.addWidget(QLabel(_t("Label: / ラベル："), styleSheet="color:#888; font-size:8pt;"))
+                            rl2.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                             l_e = QLineEdit(l_val); l_e.setMinimumWidth(120)
                             l_e.setStyleSheet(_les)
-                            l_e.setPlaceholderText(_t("Display Name / 表示名"))
+                            l_e.setPlaceholderText(_t("Title / タイトル"))
                         rl2.addWidget(l_e, stretch=1)
                         if not _readonly:
                             btn_x = QPushButton("✕"); btn_x.setFixedWidth(26)
@@ -549,17 +598,16 @@ class _AttrsMixin:
                     cl.setContentsMargins(4, 4, 4, 4); cl.setSpacing(4)
                     if sty == "matrix":
                         _mx_row = QHBoxLayout(); _mx_row.setSpacing(6)
-                        _mx_row.addWidget(QLabel(_t("Name: / 名前："), styleSheet="color:#888; font-size:8pt;"))
+                        _mx_row.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                         _mx_name_e = QLineEdit()
                         _mx_name_e.setFixedWidth(180); _mx_name_e.setStyleSheet(_les)
                         _mx_name_e.setPlaceholderText(_t("e.g. Expression / 例：表情"))
                         _saved_mx = _am_ref.TAG_GROUPS.get("__col_names__", {}).get(pfx, [""])
                         _init_name = (_saved_mx[0] if _saved_mx else "") or pfx
                         _mx_name_e.setText(_init_name)
-                        s._title_lbl.setText(f"{_init_name or pfx}   │   16×16 matrix")
-                        _mx_name_e.textChanged.connect(
-                            lambda txt, _s=s, _pfx=pfx: _s._title_lbl.setText(
-                                f"{txt or _pfx}   │   16×16 matrix"))
+                        # The Name text box edits the HUMAN label only; the
+                        # section title stays the storage key (set in the
+                        # outer scope) and is immutable.
                         _mx_row.addWidget(_mx_name_e); _mx_row.addStretch()
                         cl.addLayout(_mx_row)
                         self._attr_col_names[pfx] = [_mx_name_e]
@@ -596,11 +644,11 @@ class _AttrsMixin:
                             or _am_ref.TAG_GROUPS.get("__parent_names__", {}).get(pfx)
                             or pfx.lower())
                         _pr_row = QHBoxLayout(); _pr_row.setSpacing(6)
-                        _pr_row.addWidget(QLabel(_t("Parent: / 親フィールド："), styleSheet="color:#888; font-size:8pt;"))
+                        _pr_row.addWidget(QLabel(_t("Title: / タイトル："), styleSheet="color:#888; font-size:8pt;"))
                         _is_coded_field = pfx in FIELD_DEFS
                         _parent_e = QLineEdit(_CODED_LABELS.get(pfx, _saved_parent) if _is_coded_field else _saved_parent)
                         _parent_e.setFixedWidth(140)
-                        _parent_e.setPlaceholderText(_t("e.g. hair / 例：hair"))
+                        _parent_e.setPlaceholderText(_t("e.g. Hair / 例：髪"))
                         if _is_coded_field:
                             _parent_e.setEnabled(False)
                         else:
@@ -620,7 +668,12 @@ class _AttrsMixin:
                             _base = col_lbl.split()[0].rstrip("s").lower()
                             _col_bases.append(_base)
                             saved_name = _saved_cols[ci] if ci < len(_saved_cols) else ""
-                            _clean_parent = _CODED_LABELS.get(pfx, _saved_parent) if _is_coded_field else _saved_parent
+                            # Column name default uses the STORAGE KEY, not
+                            # the bilingual display label — otherwise we'd
+                            # get nonsense like "Skin / 肌_type".
+                            _clean_parent = (_CODED_LABEL_DISPLAY.get(pfx)
+                                             if _is_coded_field
+                                             else _saved_parent)
                             default_name = f"{_clean_parent}_{_base}"
                             col_e = QLineEdit(saved_name or default_name)
                             col_e.setFixedHeight(22); col_e.setMinimumWidth(110)
@@ -632,7 +685,15 @@ class _AttrsMixin:
                             col_name_edits.append(col_e)
                         self._attr_col_names[pfx] = col_name_edits
                         def _on_parent_change(text, edits=col_name_edits, bases=_col_bases, _pfx=pfx):
-                            _p = text.strip() or _pfx.lower()
+                            # For column names, prefer a clean alphanumeric
+                            # base — strip the "EN / JP" form down to the
+                            # English half, replace spaces with underscores,
+                            # so we end up with "skin_type", not
+                            # "Skin / 肌_type".
+                            raw = (text or _pfx).strip()
+                            en = raw.split(" / ", 1)[0].strip()
+                            _p = (en.lower().replace(" ", "_")
+                                  or _CODED_LABEL_DISPLAY.get(_pfx, _pfx.lower()))
                             for col_e, base in zip(edits, bases):
                                 col_e.setText(f"{_p}_{base}")
                         if not _is_coded_field:

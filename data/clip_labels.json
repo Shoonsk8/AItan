@@ -519,40 +519,40 @@
   {
     "field": "bg",
     "pos": 2,
-    "zero_is_none": false,
+    "zero_is_none": true,
     "threshold": 0.2,
     "options": [
       [
         "0",
-        "solid pure color background plain no details black white red green or chromakey"
+        "a person photographed against a flat solid color background like a white green or black studio backdrop chromakey"
       ],
       [
         "1",
-        "indoor residential interior bedroom living room home gym personal space"
+        "a person photographed inside a private home interior bedroom living room kitchen with personal furniture visible behind"
       ],
       [
         "2",
-        "outdoor residential exterior of a house yard backyard garden swimming pool"
+        "a person photographed in a residential outdoor area like a house yard backyard garden patio or swimming pool"
       ],
       [
         "3",
-        "commercial indoor location store shop restaurant cafe office hospital school commercial gym"
+        "a person photographed inside a commercial indoor business like a store cafe restaurant office gym studio classroom"
       ],
       [
         "4",
-        "nature outdoor wilderness beach ocean lake forest mountain field trees grass"
+        "a person photographed in a wilderness nature scene with trees grass forest mountains beach or open natural landscape"
       ],
       [
         "5",
-        "urban city street buildings park public square outdoors"
+        "a person photographed on a city street with buildings cars sidewalks crowds or urban architecture visible behind"
       ],
       [
         "6",
-        "outer space stars cosmos planets moon surface galaxy"
+        "an astronaut floating in deep outer space with a planet or spacecraft visible in the vacuum of space"
       ],
       [
         "7",
-        "castle medieval fortress historic stone interior or exterior of a castle"
+        "a person inside a stone castle with medieval walls towers fortress architecture or historic stonework visible behind"
       ]
     ]
   },

@@ -57,11 +57,14 @@ def test_hc_filename_to_combo_state_round_trips(qtbot):
     """End-to-end: a filename like HC0k5 must produce
     Color=Platinum (5)? — actually no, per the canvas convention,
     pos 3=Color (leftmost), so HC value '0k5' = Color('0' = No hair),
-    Style('k' = Side Swept), Length('5' = Very Long)."""
+    Style('k' = Side Swept), Length('5' = Very Long).
+
+    parse_coded_filename returns LONG storage keys ("hair") post the
+    2026-05 storage-key migration."""
     from aisearch_attrs import parse_coded_filename
     parsed = parse_coded_filename("P001HC0k5")
-    assert parsed["hc"] == "0k5"
-    val = parsed["hc"]
+    assert parsed["hair"] == "0k5"
+    val = parsed["hair"]
     # pos 1 = rightmost = Length
     assert val[-1] == "5"   # Very Long
     # pos 2 = middle = Style
@@ -75,10 +78,12 @@ def test_hc_clip_detection_writes_into_canvas_slots(qtbot):
     numbers. If CLIP detects a Color (e.g. '4' Blonde), it should
     end up in val[-3] — the leftmost slot — so the canvas Color
     combo picks it up.
+
+    spec["field"] is the long storage key "hair" post-rename.
     """
     from aisearch_attrs import CLIP_AUTO_DETECT
     color_specs = [s for s in CLIP_AUTO_DETECT
-                   if s["field"] == "hc" and s["pos"] == 3]
+                   if s["field"] == "hair" and s["pos"] == 3]
     assert color_specs, "HC color must live at pos 3 after the 2026-05 fix"
     color_codes = [opt[0] for opt in color_specs[0]["options"]]
     assert "4" in color_codes

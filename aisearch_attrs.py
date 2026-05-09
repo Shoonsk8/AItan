@@ -182,32 +182,32 @@ def detect_file_attrs(path):
 
         # R — resolution based on longer side
         long_side = max(width, height)
-        if   long_side >= 7680: result["r"] = "08"   # 8K
-        elif long_side >= 3840: result["r"] = "04"   # 4K
-        elif long_side >= 2560: result["r"] = "a4"   # 1440p
-        elif long_side >= 1920: result["r"] = "a8"   # 1080p
-        elif long_side >= 1280: result["r"] = "72"   # 720p
-        elif long_side >= 854:  result["r"] = "48"   # 480p
-        else:                   result["r"] = "36"   # 360p
+        if   long_side >= 7680: result["resolution"] = "08"   # 8K
+        elif long_side >= 3840: result["resolution"] = "04"   # 4K
+        elif long_side >= 2560: result["resolution"] = "a4"   # 1440p
+        elif long_side >= 1920: result["resolution"] = "a8"   # 1080p
+        elif long_side >= 1280: result["resolution"] = "72"   # 720p
+        elif long_side >= 854:  result["resolution"] = "48"   # 480p
+        else:                   result["resolution"] = "36"   # 360p
 
         # O — orientation / aspect ratio
         ratio = width / height
-        if   abs(ratio - 1.0) < 0.05:  result["o"] = "11"  # 1:1  square
-        elif ratio >= 4.0:              result["o"] = "f1"  # 15:1 extreme ultra-wide
-        elif ratio >= 2.2:              result["o"] = "73"  # 21:9 cinema wide
-        elif ratio >= 1.7:              result["o"] = "09"  # 16:9 landscape
-        elif ratio >= 1.4:              result["o"] = "32"  # 3:2  landscape (photo)
-        elif ratio > 1.05:              result["o"] = "43"  # 4:3  landscape
-        elif ratio > 0.72:              result["o"] = "34"  # 3:4  portrait
-        elif ratio > 0.58:              result["o"] = "23"  # 2:3  portrait (photo)
-        else:                           result["o"] = "90"  # 9:16 portrait
+        if   abs(ratio - 1.0) < 0.05:  result["orientation"] = "11"  # 1:1  square
+        elif ratio >= 4.0:              result["orientation"] = "f1"  # 15:1 extreme ultra-wide
+        elif ratio >= 2.2:              result["orientation"] = "73"  # 21:9 cinema wide
+        elif ratio >= 1.7:              result["orientation"] = "09"  # 16:9 landscape
+        elif ratio >= 1.4:              result["orientation"] = "32"  # 3:2  landscape (photo)
+        elif ratio > 1.05:              result["orientation"] = "43"  # 4:3  landscape
+        elif ratio > 0.72:              result["orientation"] = "34"  # 3:4  portrait
+        elif ratio > 0.58:              result["orientation"] = "23"  # 2:3  portrait (photo)
+        else:                           result["orientation"] = "90"  # 9:16 portrait
 
         # K — frame rate (video only; images have frame_count == 1)
         if frames > 1 and fps > 0:
-            if   fps >= 100: result["k"] = "b0"  # 120fps
-            elif fps >= 55:  result["k"] = "60"  # 60fps
-            elif fps >= 27:  result["k"] = "30"  # 30fps
-            else:            result["k"] = "24"  # 24fps
+            if   fps >= 100: result["frame_rate"] = "b0"  # 120fps
+            elif fps >= 55:  result["frame_rate"] = "60"  # 60fps
+            elif fps >= 27:  result["frame_rate"] = "30"  # 30fps
+            else:            result["frame_rate"] = "24"  # 24fps
 
     except Exception:
         pass
@@ -535,6 +535,11 @@ _DEFAULT_FIELD_NAMES = {
     "Variant": "Variant",
     "Source":  "Source",
     "Misc":    "Misc",
+    # Person fields aren't in CODED_FIELDS (multi-token tags), so they
+    # have no auto-derived label. Without these, the canvas displayed
+    # the literal key (P / PW). Filename codes stay short.
+    "P":       "Person",
+    "PW":      "PersonsWith",
 }
 
 def _load_tag_groups(tags_file=None):
@@ -819,51 +824,67 @@ def face_angle_label(f_code):
 # Default coded fields — used as fallback when attrs_tags.json has no __coded_fields__ key.
 # To change coded fields without editing Python: add "__coded_fields__" to data/attrs_tags.json.
 _DEFAULT_CODED_FIELDS = [
-    # (letter, label, digits)
-    # digits: 2 or 3 = hex digit count; 0 = boolean flag (letter only, no value)
-    # Each digit position has independent meaning — see _DEFAULT_TAG_GROUPS for sub-tables
+    # (letter, label, digits, storage_key)
+    # letter:       filename code (e.g. "HC" — used in coded filenames)
+    # label:        human-readable display label
+    # digits:       2 or 3 = hex digit count; 0 = boolean flag
+    # storage_key:  long human-readable key used in attrs.json AND in memory
+    # Each digit position has independent meaning — see _DEFAULT_TAG_GROUPS
     # ── Person / Subject ─────────────────────────────────────────────────────
-    ("A",   "Animal",        2),   # animal type — 2-digit matrix (00 = no animal)
-    ("PI",  "PersonInhrt",   3),   # origin/inherited person ID
+    ("A",   "Animal",        2, "animal"),
+    ("PI",  "PersonInhrt",   3, "person_inhrt"),
     # PW is handled as multi-token (like P), not a single CODED_FIELD
     # ── Face ─────────────────────────────────────────────────────────────────
-    ("E",   "Eyes",          2),   # [2nd=color][1st=modifier]
-    ("HC",  "Hair",          3),   # [3rd=length][2nd=style][1st=color]
-    ("FA",  "FaceAngle",     2),   # [2nd=vertical][1st=direction]
-    ("X",   "Expression",    2),   # [2nd=category][1st=index]  see EXPRESSION_TABLE
+    ("E",   "Eyes",          2, "eyes"),
+    ("HC",  "Hair",          3, "hair"),
+    ("FA",  "FaceAngle",     2, "face_angle"),
+    ("X",   "Expression",    2, "expression"),
     # ── Body ─────────────────────────────────────────────────────────────────
-    ("SK",  "Skin",          2),   # [2nd=reserved][1st=type 0-5]
-    ("B",   "Bust",          2),   # [2nd=size][1st=shape]
-    ("WH",  "WaistHip",      2),   # [2nd=waist][1st=hip]
-    ("PM",  "PostureMotion", 2),   # [2nd=posture][1st=motion]
-    ("CL",  "Clothing / 服装", 4),   # [4=topColor][3=top][2=botColor][1=bot]; 0=unknown 1=none f=custom
-    ("T",   "Tool",          2),   # 00=nothing  ff=custom
+    ("SK",  "Skin",          2, "skin"),
+    ("B",   "Bust",          2, "bust"),
+    ("WH",  "WaistHip",      2, "waist_hip"),
+    ("PM",  "PostureMotion", 2, "posture_motion"),
+    ("CL",  "Clothing / 服装", 4, "clothing"),
+    ("T",   "Tool",          2, "tool"),
     # ── Technical ────────────────────────────────────────────────────────────
-    ("CS",  "CameraShot",    3),   # [3rd=shot area][2nd=angle][1st=lighting]
-    ("BG",  "Background",    2),   # 16×16 matrix — 2-digit hex (00-ff). Was 3
-                                   # historically; reduced to match the actual
-                                   # Background_Table (e.g. Ocean=42).
-    ("O",   "Orientation",   2),   # f1=15:1  73=21:9  09=16:9  32=3:2  43=4:3  11=1:1  34=3:4  23=2:3  90=9:16
-    ("R",   "Resolution",    2),   # 36=360p 48=480p 72=720p a8=1080p a4=1440p 04=4K 08=8K
-    ("K",   "FrameRate",     2),   # 24=24fps 30=30fps 60=60fps b0=120fps
-    ("J",   "Timestamp",     8),   # yymmddHHMMSS as 8 base-36 chars
-    ("ED",  "Editable",      0),   # flag — ED present = app may auto-rename
-    ("WM",  "Watermark",     0),   # flag — WM present = watermarked. Always last.
+    ("CS",  "CameraShot",    3, "camera_shot"),
+    ("BG",  "Background",    2, "background"),
+    ("O",   "Orientation",   2, "orientation"),
+    ("R",   "Resolution",    2, "resolution"),
+    ("K",   "FrameRate",     2, "frame_rate"),
+    ("J",   "Timestamp",     8, "timestamp"),
+    ("ED",  "Editable",      0, "editable_flag"),
+    ("WM",  "Watermark",     0, "watermark_flag"),
 ]
 
 def _load_coded_fields():
     """Load CODED_FIELDS from data/attrs_tags.json __coded_fields__ key.
-    Falls back to _DEFAULT_CODED_FIELDS if not present or on error."""
+    Falls back to _DEFAULT_CODED_FIELDS if not present or on error.
+
+    Each entry is a 4-tuple: (letter, label, digits, storage_key).
+    Older saves had 3-tuples — fall back to the default's storage_key
+    (looked up by letter) so old project files keep loading cleanly."""
     try:
         if os.path.exists(TAGS_FILE):
             with open(TAGS_FILE, encoding="utf-8") as _f:
                 _raw = json.load(_f)
             _cf = _raw.get("__coded_fields__")
             if _cf and isinstance(_cf, list):
+                # Build a letter→storage_key map from the defaults so we
+                # can fill in the 4th element when loading old 3-tuples.
+                _default_storage = {l: sk
+                                    for l, _, _, sk in _DEFAULT_CODED_FIELDS}
                 result = []
                 for item in _cf:
-                    if isinstance(item, (list, tuple)) and len(item) == 3:
-                        result.append((str(item[0]), str(item[1]), int(item[2])))
+                    if isinstance(item, (list, tuple)) and len(item) >= 3:
+                        letter = str(item[0])
+                        label  = str(item[1])
+                        digits = int(item[2])
+                        if len(item) >= 4 and item[3]:
+                            storage = str(item[3])
+                        else:
+                            storage = _default_storage.get(letter, letter.lower())
+                        result.append((letter, label, digits, storage))
                 if result:
                     return result
     except Exception:
@@ -874,49 +895,41 @@ CODED_FIELDS = _load_coded_fields()
 
 
 # ── Storage-key naming ───────────────────────────────────────────────────────
-# The CODED_FIELDS letter is the FILENAME code (e.g. "HC"). Historically the
-# JSON storage key was the lowercase letter ("hc"), which left attrs.json
-# riddled with cryptic 1-2 char keys. The map below translates each filename
-# code to a human-readable storage key. Filenames stay unchanged; only
-# attrs.json keys widen.
+# Storage key = the lowercase human-readable name used in attrs.json AND
+# in memory (e.g. "hair"). It's the 4th element of each CODED_FIELDS tuple.
+# Filenames keep the short uppercase letter ("HC") — the storage key only
+# governs JSON / Python-dict access.
 #
-# Existing short-form data still loads via `field_storage_key()` for new
-# writes — `tools/migrate_storage_keys.py` rewrites attrs_*.json once.
-_STORAGE_KEY_MAP = {
-    "a":   "animal",
-    "pi":  "person_inhrt",
-    "e":   "eyes",
-    "hc":  "hair",
-    "fa":  "face_angle",
-    "x":   "expression",
-    "sk":  "skin",
-    "b":   "bust",
-    "wh":  "waist_hip",
-    "pm":  "posture_motion",
-    "cl":  "clothing",
-    "t":   "tool",
-    "cs":  "camera_shot",
-    "bg":  "background",
-    "o":   "orientation",
-    "r":   "resolution",
-    "k":   "frame_rate",
-    "j":   "timestamp",
-    "ed":  "editable_flag",
-    "wm":  "watermark_flag",
-}
-# Reverse — long → short, so we can spot legacy keys in stored data.
+# Two derived maps:
+#   _STORAGE_KEY_MAP:     letter.lower() / legacy short code → storage key
+#   _STORAGE_KEY_REVERSE: storage key                       → letter.lower()
+# Both are useful for migration / audit but aren't load-bearing — code
+# should call field_storage_key() instead of consulting them directly.
+def _build_storage_key_map():
+    """Map every legacy short alias of a coded field (the lowercase
+    letter) to its current storage key. Includes letter aliases on
+    aliased fields like ED→editable_flag."""
+    out = {}
+    for letter, _label, _digits, storage in CODED_FIELDS:
+        out[letter.lower()] = storage
+    return out
+
+_STORAGE_KEY_MAP = _build_storage_key_map()
 _STORAGE_KEY_REVERSE = {v: k for k, v in _STORAGE_KEY_MAP.items()}
 
 
 def field_storage_key(field):
-    """Return the JSON storage key for a coded field. Accepts either the
-    uppercase filename letter ("HC") or the lowercase short code ("hc")
-    and returns the long form ("hair"). Unknown values pass through
-    unchanged so non-coded fields (text fields, etc.) still resolve."""
+    """Return the JSON storage key for a coded field.
+    Accepts either the uppercase filename letter ("HC"), the lowercase
+    legacy short code ("hc"), or the long storage key itself ("hair")
+    — any of these resolves to the canonical storage form."""
     if not field:
         return field
-    short = field.lower()
-    return _STORAGE_KEY_MAP.get(short, short)
+    s = field.lower()
+    if s in _STORAGE_KEY_MAP:
+        return _STORAGE_KEY_MAP[s]
+    # Already a long storage key — return unchanged.
+    return s
 
 
 def field_storage_get(entry, field, default=None):
@@ -941,30 +954,85 @@ def field_storage_get(entry, field, default=None):
 # the save/load boundaries so internal call sites don't need to change.
 
 def _entry_to_disk(entry):
-    """Convert in-memory entry (short keys) to JSON-on-disk format
-    (long keys). Non-coded keys (CLIP, FACE, prompt, seed, …) pass
-    through unchanged. Idempotent for already-long keys."""
+    """Memory and disk now share the same long-form keys. Pass-through.
+    Kept as a hook in case future asymmetries get added without
+    needing to revisit save()."""
+    return entry
+
+
+def _entry_from_disk(entry):
+    """Translate LEGACY short keys (pre-2026-05) to the canonical long
+    form on read. Idempotent for current long-keyed files. Without
+    this, a project last saved before the rename loses its coded-field
+    values on first read."""
     if not isinstance(entry, dict):
         return entry
     out = {}
     for k, v in entry.items():
-        # Only translate keys we know are short coded-field aliases.
-        # Anything else (already long, or a non-field key like "prompt")
-        # passes through.
         out[_STORAGE_KEY_MAP.get(k, k)] = v
     return out
 
 
-def _entry_from_disk(entry):
-    """Convert disk format (long keys) back to in-memory (short keys).
-    Accepts both long and short for safety while data is mid-migration —
-    a partially-migrated attrs.json still loads cleanly."""
-    if not isinstance(entry, dict):
-        return entry
-    out = {}
-    for k, v in entry.items():
-        out[_STORAGE_KEY_REVERSE.get(k, k)] = v
-    return out
+# ── Workspace prefix translation ─────────────────────────────────────────────
+# attribute_workspace.json uses composite keys: <PREFIX><HEX_VALUE>, e.g.
+# "PM00", "HC123". Same goal as the entry-level translation: long names on
+# disk, short uppercase prefixes in memory.
+_WS_PREFIX_TO_LONG = {
+    "A":   "animal",
+    "PI":  "person_inhrt",
+    "E":   "eyes",
+    "HC":  "hair",
+    "FA":  "face_angle",
+    "X":   "expression",
+    "SK":  "skin",
+    "B":   "bust",
+    "WH":  "waist_hip",
+    "PM":  "posture_motion",
+    "CL":  "clothing",
+    "T":   "tool",
+    "CS":  "camera_shot",
+    "BG":  "background",
+    "O":   "orientation",
+    "R":   "resolution",
+    "K":   "frame_rate",
+}
+_WS_LONG_TO_PREFIX = {v: k for k, v in _WS_PREFIX_TO_LONG.items()}
+# Sort longest-first so "BG" wins over "B" when matching at start of a key.
+_WS_LONGS_BY_LEN = sorted(_WS_LONG_TO_PREFIX.keys(), key=len, reverse=True)
+_WS_PREFIXES_BY_LEN = sorted(_WS_PREFIX_TO_LONG.keys(), key=len, reverse=True)
+
+
+def workspace_key_to_disk(key):
+    """`PM00` → `posture_motion00`. Idempotent: already-long keys
+    pass through unchanged."""
+    if not isinstance(key, str):
+        return key
+    for short in _WS_PREFIXES_BY_LEN:
+        if key.startswith(short) and len(key) > len(short):
+            return _WS_PREFIX_TO_LONG[short] + key[len(short):]
+    return key
+
+
+def workspace_key_from_disk(key):
+    """`posture_motion00` → `PM00`. Idempotent."""
+    if not isinstance(key, str):
+        return key
+    for long in _WS_LONGS_BY_LEN:
+        if key.startswith(long) and len(key) > len(long):
+            return _WS_LONG_TO_PREFIX[long] + key[len(long):]
+    return key
+
+
+def workspace_data_to_disk(data):
+    if not isinstance(data, dict):
+        return data
+    return {workspace_key_to_disk(k): v for k, v in data.items()}
+
+
+def workspace_data_from_disk(data):
+    if not isinstance(data, dict):
+        return data
+    return {workspace_key_from_disk(k): v for k, v in data.items()}
 
 # Person token pattern: P + (human 3-hex OR animal A+3-hex)  [not followed by W]
 _PERSON_PAT = r'P(?!W)(A[0-9a-f]{3}|[0-9a-f]{3})'
@@ -973,18 +1041,24 @@ _PW_PAT = r'PW([0-9a-f]{3})'
 
 # Regex for the non-person coded fields (after all P tokens are stripped).
 # Values are lowercase a-z + 0-9 (base-36), so per-position tag tables can
-# hold up to 36 entries. Field KEYS stay uppercase, so a lowercase letter
-# in a value never collides with another field's key. (Old hex-only data
-# remains valid since [0-9a-z] is a superset of [0-9a-f].)
-def _field_pat(letter, digits):
+# hold up to 36 entries. Field KEYS in the filename stay uppercase letters
+# (HC, BG); regex group names use the LONG storage key ("hair", "background")
+# so the parsed dict speaks the same namespace as in-memory entries.
+# (Old hex-only data remains valid since [0-9a-z] is a superset of [0-9a-f].)
+def _field_pat(letter, digits, storage):
     if digits == 0:
-        return rf'(?P<{letter.lower()}>{letter})?'      # flag: just the letter, no value
+        return rf'(?P<{storage}>{letter})?'      # flag: just the letter, no value
     char_cls = "[0-9a-z]"
-    return rf'(?:{letter}(?P<{letter.lower()}>{char_cls}{{{digits}}}))?'
+    return rf'(?:{letter}(?P<{storage}>{char_cls}{{{digits}}}))?'
+
+def _storage_key_for(cf_entry):
+    """Return the long storage key for a CODED_FIELDS row (4th element);
+    falls back to lowercase letter for older 3-tuple definitions."""
+    return cf_entry[3] if len(cf_entry) >= 4 else cf_entry[0].lower()
 
 _FIELD_RE = re.compile(
     r'^'
-    + ''.join(_field_pat(letter, digits) for letter, _, digits in CODED_FIELDS)
+    + ''.join(_field_pat(cf[0], cf[2], _storage_key_for(cf)) for cf in CODED_FIELDS)
     + r'$'
     # NOTE: no re.IGNORECASE — uppercase = field key, lowercase = value
 )
@@ -1026,8 +1100,9 @@ def parse_coded_filename(stem):
         # fresh J from ctime → endless filename churn.
         result = {'persons': persons, 'persons_with': persons_with}
         _ok = False
-        for letter, _, digits in CODED_FIELDS:
-            lk = letter.lower()
+        for cf in CODED_FIELDS:
+            letter, _, digits = cf[0], cf[1], cf[2]
+            lk = _storage_key_for(cf)   # long storage key
             if digits == 0:
                 # Boolean flag — letter, not part of another key's name.
                 # Lookbehind forbids uppercase only (lowercase hex is fine
@@ -1061,7 +1136,10 @@ def parse_coded_filename(stem):
 def build_coded_filename(parts, date_first=False, field_order=None):
     """Build a coded filename stem from a dict of parts.
     Format: P{pid}[P{pid2}…][PW{pid}…]{fields in CODED_FIELDS order}.
-    parts keys: persons (list), persons_with (list), plus lowercase coded field keys.
+    parts keys: persons (list), persons_with (list), plus long storage keys
+    (e.g. "hair", "background") matching what parse_coded_filename returns
+    and what entries store. For backwards compat, short letter keys ("hc")
+    are also accepted.
 
     The legacy date-first mode (J{j} prepended) was removed — J now lives at
     its CODED_FIELDS position like every other field. Files with no person
@@ -1076,8 +1154,11 @@ def build_coded_filename(parts, date_first=False, field_order=None):
         pw = str(pw).strip().lower().zfill(3)[:3]
         if pw and pw != "000":
             stem += f'PW{pw}'
-    for letter, _, digits in _fields:
-        val = parts.get(letter.lower(), "")
+    for cf in _fields:
+        letter, _, digits = cf[0], cf[1], cf[2]
+        storage = _storage_key_for(cf)
+        # Try long storage key first; fall back to legacy short letter key.
+        val = parts.get(storage, "") or parts.get(letter.lower(), "")
         if not val:
             continue
         if digits == 0:
@@ -1581,7 +1662,7 @@ def load(project):
         except Exception:
             return {}
         # Translate long-form disk keys ("hair", "background") back to
-        # the short in-memory aliases ("hc", "bg") that all the existing
+        # the short in-memory aliases ("hair", "bg") that all the existing
         # code expects. Idempotent for legacy short-keyed data.
         return {p: _entry_from_disk(e) for p, e in raw.items()}
     return {}
@@ -1654,9 +1735,19 @@ def get(attrs_data, path):
 
 def get_coded_field(entry, letter):
     """Read a coded field value from an entry dict.
-    Checks manual key (letter.lower()) first, then auto-detected (cf_{letter.lower()}).
-    Treats both storage locations as equivalent sources for the same field."""
-    return entry.get(letter.lower(), "") or entry.get(f"cf_{letter.lower()}", "")
+    Checks the storage key (long form — "hair", "background", …) first,
+    then the auto-detected variant (cf_{storage_key}). Backward-compat:
+    legacy short keys (letter.lower()) are also checked so a stale
+    in-memory entry from before the migration still resolves.
+    """
+    sk = field_storage_key(letter)
+    short = letter.lower() if letter else ""
+    return (entry.get(sk, "")
+            or entry.get(f"cf_{sk}", "")
+            # legacy fallbacks — for entries that haven't been re-saved
+            # since the rename or that came from an older import path.
+            or entry.get(short, "")
+            or entry.get(f"cf_{short}", ""))
 
 _UNSET = object()  # sentinel — distinguishes "not passed" from "explicit empty"
 
@@ -2924,7 +3015,7 @@ def detect_tags_from_filename(path, rules, existing_tags=None):
         elif "field" in rule:
             # Boolean coded field (digits=0) — add tag matching the field label
             field = rule.get("field", "").upper()
-            for _l, _lb, _d in CODED_FIELDS:
+            for _l, _lb, _d, *_ in CODED_FIELDS:
                 if _l == field and _d == 0:
                     tag_key = _lb.lower()   # e.g. "Watermark" → "watermark"
                     if tag_key and tag_key not in tags:
@@ -3067,7 +3158,7 @@ CLIP_AUTO_DETECT = [
     # regions of the image. Calling out "very dark" / "bright light" /
     # "saturated" gives CLIP a sharper axis to score along.
     # pos 3 = leftmost digit (canvas convention: Color, Style, Length).
-    {"field": "hc", "pos": 3, "zero_is_none": True,  "threshold": 0.20, "options": [
+    {"field": "hair", "pos": 3, "zero_is_none": True,  "threshold": 0.20, "options": [
         ("1", "a person with very dark jet black hair, no light tones, no highlights"),
         ("2", "a person with dark brown brunette hair, deep cocoa or chocolate tone"),
         ("3", "a person with light brown caramel hair, mid-tone warm brown"),
@@ -3085,7 +3176,7 @@ CLIP_AUTO_DETECT = [
         ("f", "a person with neon glowing fluorescent hair color"),
     ]},
     # ── Hair style ────────────────────────────────────────────────────────────
-    {"field": "hc", "pos": 2, "zero_is_none": True,  "threshold": 0.16, "options": [
+    {"field": "hair", "pos": 2, "zero_is_none": True,  "threshold": 0.16, "options": [
         ("1", "a person with flat straight hair with no curl or wave"),
         ("2", "a person with gently wavy or slightly curled hair"),
         ("3", "a person with clearly curly or spiral ringlet hair texture"),
@@ -3124,7 +3215,7 @@ CLIP_AUTO_DETECT = [
     ]},
     # ── Hair length ───────────────────────────────────────────────────────────
     # pos 1 = rightmost digit.
-    {"field": "hc", "pos": 1, "zero_is_none": True,  "threshold": 0.16, "options": [
+    {"field": "hair", "pos": 1, "zero_is_none": True,  "threshold": 0.16, "options": [
         ("1", "a person with a buzzcut shaved head with almost no hair visible"),
         ("2", "a person with very short hair above the ears not reaching the jaw"),
         ("3", "a person with hair ending at or just touching the shoulders"),
@@ -3134,7 +3225,7 @@ CLIP_AUTO_DETECT = [
         ("7", "a person with partially bald receding hairline or thinning hair on top of the head"),
     ]},
     # ── Face direction ────────────────────────────────────────────────────────
-    {"field": "fa", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
+    {"field": "face_angle", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
         ("0", "a person facing directly forward toward camera"),
         ("1", "a person facing right full profile side view"),
         ("2", "a person facing slightly right three-quarter view"),
@@ -3143,13 +3234,13 @@ CLIP_AUTO_DETECT = [
         ("5", "a person facing away from camera showing back of head"),
     ]},
     # ── Face vertical tilt ────────────────────────────────────────────────────
-    {"field": "fa", "pos": 2, "zero_is_none": False, "threshold": 0.0,  "options": [
+    {"field": "face_angle", "pos": 2, "zero_is_none": False, "threshold": 0.0,  "options": [
         ("0", "a person with head at normal horizontal level"),
         ("1", "a person with head tilted upward chin raised"),
         ("2", "a person with head bowed or tilted downward"),
     ]},
     # ── Skin type ─────────────────────────────────────────────────────────────
-    {"field": "sk", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
+    {"field": "skin", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
         ("0", "a person with very fair or pale white skin"),
         ("1", "a person with fair light skin tone"),
         ("2", "a person with medium beige or light tan skin"),
@@ -3158,7 +3249,7 @@ CLIP_AUTO_DETECT = [
         ("5", "a person with very dark deeply pigmented skin"),
     ]},
     # ── Posture ───────────────────────────────────────────────────────────────
-    {"field": "pm", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
+    {"field": "posture_motion", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
         ("0", "a person standing upright on both feet"),
         ("2", "a person sitting down on a chair or floor"),
         ("3", "a person kneeling on one or both knees"),
@@ -3168,7 +3259,7 @@ CLIP_AUTO_DETECT = [
         ("7", "a person doing a handstand upside down"),
     ]},
     # ── Motion ────────────────────────────────────────────────────────────────
-    {"field": "pm", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
+    {"field": "posture_motion", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
         ("0", "a person posing still not moving"),
         ("2", "a person walking"),
         ("3", "a person running"),
@@ -3179,7 +3270,7 @@ CLIP_AUTO_DETECT = [
         ("8", "a person fighting or in combat action pose"),
     ]},
     # ── Shot type ─────────────────────────────────────────────────────────────
-    {"field": "cs", "pos": 3, "zero_is_none": True,  "threshold": 0.18, "options": [
+    {"field": "camera_shot", "pos": 3, "zero_is_none": True,  "threshold": 0.18, "options": [
         ("1", "extreme close-up shot of eyes lips or small facial detail only"),
         ("2", "close-up shot showing only the face tightly framed"),
         ("3", "big close-up showing face and very top of shoulders"),
@@ -3193,7 +3284,7 @@ CLIP_AUTO_DETECT = [
         ("b", "extreme wide shot with small distant figure in large environment"),
     ]},
     # ── Camera angle ─────────────────────────────────────────────────────────
-    {"field": "cs", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
+    {"field": "camera_shot", "pos": 2, "zero_is_none": True, "default_is_zero": True, "threshold": 0.22, "options": [
         ("0", "straight eye-level shot with camera at subject's eye height facing forward"),
         ("1", "low angle shot looking upward at the subject"),
         ("2", "high angle shot looking downward at the subject"),
@@ -3202,7 +3293,7 @@ CLIP_AUTO_DETECT = [
         ("5", "bird's eye view shot directly from overhead above"),
     ]},
     # ── Lighting ─────────────────────────────────────────────────────────────
-    {"field": "cs", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
+    {"field": "camera_shot", "pos": 1, "zero_is_none": True, "default_is_zero": True, "threshold": 0.20, "options": [
         ("0", "natural ambient light no artificial setup"),
         ("1", "bright sunny daylight outdoor lighting"),
         ("2", "warm golden sunset or sunrise lighting"),
@@ -3229,18 +3320,54 @@ CLIP_AUTO_DETECT = [
     #   5 = City    (50 City, 51 Street, 52 Park)
     #   6 = Space   (60 Space, 61 Stars, 62 Moon)
     #   7 = Castle
-    {"field": "bg", "pos": 2, "zero_is_none": False, "threshold": 0.20, "options": [
-        ("0", "solid pure color background plain no details black white red green or chromakey"),
-        ("1", "indoor residential interior bedroom living room home gym personal space"),
-        ("2", "outdoor residential exterior of a house yard backyard garden swimming pool"),
-        ("3", "commercial indoor location store shop restaurant cafe office hospital school commercial gym"),
-        ("4", "nature outdoor wilderness beach ocean lake forest mountain field trees grass"),
-        ("5", "urban city street buildings park public square outdoors"),
-        ("6", "outer space stars cosmos planets moon surface galaxy"),
-        ("7", "castle medieval fortress historic stone interior or exterior of a castle"),
+    # zero_is_none=True: "0" (Solid pure color) wins by argmax on every
+    # bokeh / shallow-depth-of-field portrait because all the other prompts
+    # score similarly low on a blurred background. Treating "0" as "didn't
+    # confidently detect" keeps the field blank in those cases instead of
+    # lying about it being a solid color background.
+    # Prompts use "behind a person" framing because the images are portraits.
+    # Without that cue, CLIP scores the whole image (mostly the person)
+    # and every scene prompt scores similarly low — whichever prompt has
+    # the most distinctive vocabulary then wins by accident. The "outer
+    # space" prompt was particularly susceptible because it has seven
+    # celestial nouns and any bokeh / stage-light dot pattern triggered
+    # it. Keep the space prompt narrow to actual deep-space imagery.
+    {"field": "background", "pos": 2, "zero_is_none": True, "threshold": 0.20, "options": [
+        ("0", "a person photographed against a flat solid color background like a white green or black studio backdrop chromakey"),
+        ("1", "a person photographed inside a private home interior bedroom living room kitchen with personal furniture visible behind"),
+        ("2", "a person photographed in a residential outdoor area like a house yard backyard garden patio or swimming pool"),
+        ("3", "a person photographed inside a commercial indoor business like a store cafe restaurant office gym studio classroom"),
+        ("4", "a person photographed in a wilderness nature scene with trees grass forest mountains beach or open natural landscape"),
+        ("5", "a person photographed on a city street with buildings cars sidewalks crowds or urban architecture visible behind"),
+        ("6", "an astronaut floating in deep outer space with a planet or spacecraft visible in the vacuum of space"),
+        ("7", "a person inside a stone castle with medieval walls towers fortress architecture or historic stonework visible behind"),
+    ]},
+    # ── Animal group (major row only — sub-types within a group come from
+    # manual selection or per-field correction learning). zero_is_none=True
+    # means "no animal" (code 0) is suppressed so portraits without animals
+    # don't get a false animal tag.
+    # Row codes match attrs_tags_<PROJECT>.json A_Table:
+    #   1=Dog 2=Cat 3=Bird 4=Farm/Livestock(horse,cow,pig,sheep)
+    #   5=Reptile 6=Aquatic mammal(dolphin,whale) 7=Fish/Marine(shark,octopus)
+    #   8=Wild predator(lion,tiger,bear,wolf) 9=Wild prey(deer,elephant,zebra)
+    #   a=Small mammal/Rodent  b=Insect  f=Mythical/Fantasy
+    {"field": "animal", "pos": 2, "zero_is_none": True, "threshold": 0.20, "options": [
+        ("0", "a person photographed alone with no animal companion or pet visible in frame"),
+        ("1", "a person photographed with a domestic dog or puppy beside them as pet or companion"),
+        ("2", "a person photographed with a domestic cat or kitten beside them as pet or companion"),
+        ("3", "a person photographed with a bird parrot eagle owl peacock or songbird visible"),
+        ("4", "a person photographed with farm livestock horse pony cow pig sheep goat or chicken in a barn pasture or stable"),
+        ("5", "a person photographed with a reptile snake lizard turtle or crocodile"),
+        ("6", "a person photographed in water with an aquatic mammal dolphin whale seal or sea lion"),
+        ("7", "a person photographed underwater with fish or marine life tropical fish shark octopus or jellyfish"),
+        ("8", "a person photographed with a wild predator carnivore lion tiger bear wolf or fox"),
+        ("9", "a person photographed with a wild prey herbivore deer elephant giraffe zebra rhino or hippo"),
+        ("a", "a person photographed with a small mammal rodent rabbit hamster capybara ferret or squirrel"),
+        ("b", "a person photographed with an insect or arachnid butterfly bee or spider visible"),
+        ("f", "a person photographed with a mythical fantasy creature dragon unicorn phoenix or mermaid"),
     ]},
     # ── Expression family (first digit — AI detects x0 baseline of each family) ─
-    {"field": "x", "pos": 2, "zero_is_none": True,  "threshold": 0.18, "options": [
+    {"field": "expression", "pos": 2, "zero_is_none": True,  "threshold": 0.18, "options": [
         ("0", "a person with a neutral blank expressionless face"),
         ("1", "a person smiling or laughing with a happy expression"),
         ("2", "a person sneering or showing contempt disgust"),
@@ -3256,7 +3383,7 @@ CLIP_AUTO_DETECT = [
         ("c", "a person with an intense fierce dramatic stare"),
     ]},
     # ── Eye color ─────────────────────────────────────────────────────────────
-    {"field": "e", "pos": 1, "zero_is_none": True,  "threshold": 0.18, "options": [
+    {"field": "eyes", "pos": 1, "zero_is_none": True,  "threshold": 0.18, "options": [
         ("1", "a person with chocolate brown eyes warm dark iris"),
         ("2", "a person with vivid blue eyes bright sky blue or ocean blue iris"),
         ("3", "a person with hazel eyes green-brown mixed iris"),
@@ -3269,7 +3396,7 @@ CLIP_AUTO_DETECT = [
         ("a", "a person with very dark almost black eyes deep dark iris"),
     ]},
     # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
-    {"field": "cl", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
+    {"field": "clothing", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
         ("1", "a person who is topless without any top garment"),
         ("2", "a person wearing a t-shirt"),
         ("3", "a person wearing a blouse or button-up shirt"),
@@ -3286,7 +3413,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing a costume top"),
     ]},
     # ── Clothing — Top color (pos 4) ──────────────────────────────────────────
-    {"field": "cl", "pos": 4, "zero_is_none": True, "threshold": 0.14, "options": [
+    {"field": "clothing", "pos": 4, "zero_is_none": True, "threshold": 0.14, "options": [
         ("1", "a person whose top is bare skin or no fabric color"),
         ("2", "a person wearing a black colored top"),
         ("3", "a person wearing a white colored top"),
@@ -3303,7 +3430,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing a multi-colored or patterned top"),
     ]},
     # ── Clothing — Bottom type (pos 1) ────────────────────────────────────────
-    {"field": "cl", "pos": 1, "zero_is_none": True, "threshold": 0.15, "options": [
+    {"field": "clothing", "pos": 1, "zero_is_none": True, "threshold": 0.15, "options": [
         ("1", "a person with no bottom garment bare lower body"),
         ("2", "a person wearing jeans denim pants"),
         ("3", "a person wearing trousers or slacks"),
@@ -3320,7 +3447,7 @@ CLIP_AUTO_DETECT = [
         ("e", "a person wearing stockings or tights"),
     ]},
     # ── Clothing — Bottom color (pos 2) ───────────────────────────────────────
-    {"field": "cl", "pos": 2, "zero_is_none": True, "threshold": 0.14, "options": [
+    {"field": "clothing", "pos": 2, "zero_is_none": True, "threshold": 0.14, "options": [
         ("1", "a person whose bottom is bare skin or no fabric color"),
         ("2", "a person wearing black colored bottoms"),
         ("3", "a person wearing white colored bottoms"),
@@ -3345,16 +3472,23 @@ _CLIP_AUTO_DETECT_DEFAULTS = CLIP_AUTO_DETECT  # keep defaults reference
 def load_clip_labels():
     """Load CLIP label overrides from clip_labels.json.
     Merges file contents over defaults so new (field, pos) entries added in
-    code (e.g. CL) appear automatically without forcing a delete-and-resave."""
+    code (e.g. CL) appear automatically without forcing a delete-and-resave.
+
+    On-disk format keeps SHORT field codes ("hc", "bg") for backward
+    compatibility with user backups; in-memory uses LONG storage keys
+    ("hair", "background"). Translate at the boundary."""
     try:
         if os.path.exists(CLIP_LABELS_FILE):
             with open(CLIP_LABELS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             for spec in data:
                 spec["options"] = [tuple(o) for o in spec["options"]]
-            seen = {(s["field"].lower(), s["pos"]) for s in data}
+                # Short → long. Idempotent for already-long files.
+                _f = spec.get("field", "")
+                spec["field"] = _STORAGE_KEY_MAP.get(_f, _f)
+            seen = {(s["field"], s["pos"]) for s in data}
             for default_spec in _CLIP_AUTO_DETECT_DEFAULTS:
-                key = (default_spec["field"].lower(), default_spec["pos"])
+                key = (default_spec["field"], default_spec["pos"])
                 if key not in seen:
                     data.append(dict(default_spec))
             return data
@@ -3363,13 +3497,17 @@ def load_clip_labels():
     return list(_CLIP_AUTO_DETECT_DEFAULTS)
 
 def save_clip_labels(specs):
-    """Save CLIP label specs to clip_labels.json and invalidate the cache."""
+    """Save CLIP label specs to clip_labels.json and invalidate the cache.
+    Writes with SHORT field codes for backward-compat with user backups."""
     global CLIP_AUTO_DETECT, _clip_label_cache
-    # Serialise options as lists (JSON doesn't support tuples)
     out = []
     for spec in specs:
         s = dict(spec)
+        # JSON doesn't support tuples — serialise option pairs as lists.
         s["options"] = [list(o) for o in spec["options"]]
+        # Long → short on disk so older tooling can still read the file.
+        _f = s.get("field", "")
+        s["field"] = _STORAGE_KEY_REVERSE.get(_f, _f)
         out.append(s)
     with open(CLIP_LABELS_FILE, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
@@ -3443,8 +3581,15 @@ def _save_corrections(project, corrections):
 
 
 def add_correction(project, path_key, image_emb, coded_entry):
-    """Record coded field values from a baked entry as labeled examples for future detection.
-    Called after a successful bake. Re-baking the same path updates its examples."""
+    """Record coded field values from a baked entry as labeled examples
+    for future detection. Stores the FULL value per field (e.g. BG="36"
+    as one example, not "3" and "6" separately) — for matrix-style
+    fields like BG, the digits aren't independent (col 6 of row 3 means
+    Commercial Gym, but col 6 of row 0 means nothing). Per-field
+    learning preserves that semantic unit and matches how the user
+    thinks about the matrix.
+
+    Re-baking the same path replaces its previous corrections."""
     try:
         import torch
         corrections = load_corrections(project)
@@ -3453,30 +3598,50 @@ def add_correction(project, path_key, image_emb, coded_entry):
         if hasattr(emb, "dim") and emb.dim() > 1:
             emb = emb.squeeze(0)
         emb = emb.cpu()
-        field_digits = {cf[0].lower(): cf[2] for cf in CODED_FIELDS if cf[2] > 0}
-        for spec in CLIP_AUTO_DETECT:
-            field = spec["field"]
-            pos   = spec["pos"]
-            zero_is_none = spec.get("zero_is_none", True)
-            digits = field_digits.get(field, 1)
-            val = coded_entry.get(field, "")
+        # Iterate every coded field with digits > 0. Read by long storage
+        # key (post-migration entries store at "hair", "background", …).
+        for cf in CODED_FIELDS:
+            letter, _label, digits = cf[0], cf[1], cf[2]
+            if digits <= 0:
+                continue
+            sk = cf[3] if len(cf) >= 4 else letter.lower()
+            val = (coded_entry.get(sk) or coded_entry.get(letter.lower())
+                   or "").strip().lower()
             if not val:
                 continue
-            val_padded = val.zfill(digits)
-            digit = val_padded[-pos] if pos <= len(val_padded) else "0"
-            if zero_is_none and digit == "0":
+            # Skip pure-zero values — those mean "didn't detect" / default.
+            # A real "0X" value (e.g. BG=05 = Red BG) still has a non-zero
+            # digit somewhere and is kept.
+            if all(c == "0" for c in val):
                 continue
-            corrections.append({"path": path_key, "field": field, "pos": pos,
-                                 "value": digit, "emb": emb})
+            corrections.append({"path": path_key, "field": sk,
+                                "value": val, "emb": emb})
         _save_corrections(project, corrections)
     except Exception:
         pass
 
 
-def detect_from_corrections(image_emb, corrections, field, pos, threshold=0.92):
-    """Return correction-based detection value or None.
+def detect_from_corrections(image_emb, corrections, field, pos=None, threshold=0.92):
+    """Return correction-based detection for `field` or None.
+
+    Per-field corrections store the FULL value (e.g. BG="36"). When `pos`
+    is None the full value is returned. When `pos` is given the digit at
+    that position is extracted (pos=1 = rightmost). Legacy per-pos
+    correction records (saved before the per-field migration) are still
+    honored — if a record has its own `pos` field it must match, and
+    its `value` is returned as-is.
+
     Only fires when a stored example is very similar (cosine ≥ threshold)."""
-    relevant = [c for c in corrections if c["field"] == field and c["pos"] == pos]
+    relevant = []
+    for c in corrections:
+        if c.get("field") != field:
+            continue
+        # Legacy per-pos record (has explicit pos): only relevant when
+        # caller asks for the same pos.
+        if "pos" in c:
+            if pos is None or c["pos"] != pos:
+                continue
+        relevant.append(c)
     if not relevant:
         return None
     try:
@@ -3487,11 +3652,18 @@ def detect_from_corrections(image_emb, corrections, field, pos, threshold=0.92):
         embs = torch.stack([c["emb"] for c in relevant])
         sims = torch.nn.functional.cosine_similarity(emb.unsqueeze(0), embs)
         best_idx = int(sims.argmax())
-        if float(sims[best_idx]) >= threshold:
-            return relevant[best_idx]["value"]
+        if float(sims[best_idx]) < threshold:
+            return None
+        rec = relevant[best_idx]
+        val = rec["value"]
+        if "pos" in rec:
+            return val   # legacy single-digit record; already a digit
+        if pos is None:
+            return val   # per-field whole-value lookup
+        # Per-field record but caller wants a specific position digit.
+        return val[-pos] if pos <= len(val) else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, project=None):
@@ -3511,18 +3683,20 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     if cache is None:
         return {}
 
-    # Build field → total_digits map from CODED_FIELDS
-    field_digits_map = {cf[0].lower(): cf[2] for cf in CODED_FIELDS if cf[2] > 0}
+    # Build field → total_digits map keyed by long storage key, since
+    # spec["field"] in CLIP_AUTO_DETECT is the long storage name.
+    field_digits_map = {(cf[3] if len(cf) >= 4 else cf[0].lower()): cf[2]
+                        for cf in CODED_FIELDS if cf[2] > 0}
 
     working = {}  # field → hex string being assembled
     detected_fields = set()  # fields where at least one digit was detected
 
     # Per-field placeholder for "not yet filled" digits. Default is
-    # "0" (zero), but X (expression) uses literal "x" so unscored
-    # sub-digits read as "1x"/"2x" — clearly "family detected, detail
-    # not auto-filled" — instead of "10"/"20" which would lie about
-    # the detail being a real default category.
-    _field_fill = {"x": "x"}
+    # "0" (zero), but expression uses literal "x" so unscored sub-digits
+    # read as "1x"/"2x" — clearly "family detected, detail not auto-
+    # filled" — instead of "10"/"20" which would lie about the detail
+    # being a real default category.
+    _field_fill = {"expression": "x"}
 
     def _get_working(field):
         if field not in working:
@@ -3543,10 +3717,40 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
 
     corrections = load_corrections(project) if project else []
 
+    # Per-field whole-value correction pass — runs BEFORE per-pos CLIP
+    # scoring. If a near-duplicate image with this field already labeled
+    # exists in corrections, write the WHOLE stored value (e.g. BG="36"
+    # both digits) and mark the field fully detected so the per-pos loop
+    # below skips it. Without this, only digits with a CLIP_AUTO_DETECT
+    # spec would get filled — pos 1 of BG would always default to "0".
+    if corrections:
+        _emb_1d = emb.squeeze(0) if hasattr(emb, "dim") and emb.dim() > 1 else emb
+        _corrected_fields = set()
+        # Unique long storage keys present in corrections.
+        for _field in {c.get("field") for c in corrections if c.get("field")}:
+            if allowed_fields is not None and _field not in allowed_fields:
+                continue
+            _full = detect_from_corrections(_emb_1d, corrections, _field, pos=None)
+            if _full is None:
+                continue
+            # Skip if every position already user-set (don't overwrite).
+            _existing = (existing_entry.get(_field, "") or "").strip().lower()
+            if _existing and _existing == _full:
+                continue
+            working[_field] = _full
+            detected_fields.add(_field)
+            _corrected_fields.add(_field)
+        # Spec iteration below will check this set and skip per-pos work
+        # on fields whose whole value already came from a correction.
+    else:
+        _corrected_fields = set()
+
     for i, spec in enumerate(CLIP_AUTO_DETECT):
         field       = spec["field"]
         if allowed_fields is not None and field not in allowed_fields:
             continue
+        if field in _corrected_fields:
+            continue   # whole value already set from correction
         pos         = spec["pos"]
         zero_is_none    = spec.get("zero_is_none", True)
         default_is_zero = spec.get("default_is_zero", False)
@@ -3616,9 +3820,10 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     # if the bottom type was detected, the top isn't really "absent",
     # CLIP just didn't peak above the threshold.
     def _force_subdigits(field, leader_pos, dependent_specs):
-        """If the digit at `leader_pos` for `field` is non-zero AND
-        not in `bald_codes`, run dependent_specs (list of (pos, spec_idx))
-        with no threshold, pick best non-zero, write to working[field]."""
+        """Force any zero sub-digits of `field` (long storage key, e.g.
+        "hair") to a non-zero argmax pick when the `leader_pos` digit is
+        non-zero. Spec field, working dict and CODED_FIELDS digits are
+        all keyed by the same long storage key, no translation needed."""
         cur = working.get(field) or _get_working(field)
         if not cur:
             return
@@ -3659,41 +3864,41 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
             working[field] = "".join(val)
             detected_fields.add(field)
 
-    # Index CLIP_AUTO_DETECT specs by (field, pos) for the consistency pass.
+    # Index CLIP_AUTO_DETECT specs by (field, pos) — both long-keyed.
     _spec_idx_by_fp = {(s["field"], s["pos"]): i for i, s in enumerate(CLIP_AUTO_DETECT)}
 
     # HC: if length (pos 3) detected non-bald, force color (pos 1)
     # and style (pos 2) to a non-zero pick.
-    if (allowed_fields is None or "hc" in allowed_fields):
+    if (allowed_fields is None or "hair" in allowed_fields):
         # bald-like length codes that would NOT imply visible hair: 1
         # (buzzcut, almost no hair) and 6 (fully bald).
-        cur_hc = working.get("hc")
+        cur_hc = working.get("hair")
         if cur_hc and len(cur_hc) >= 3 and cur_hc[-3] not in ("0", "1", "6"):
             deps = []
-            if ("hc", 1) in _spec_idx_by_fp:
-                deps.append((1, _spec_idx_by_fp[("hc", 1)], set()))
-            if ("hc", 2) in _spec_idx_by_fp:
+            if ("hair", 1) in _spec_idx_by_fp:
+                deps.append((1, _spec_idx_by_fp[("hair", 1)], set()))
+            if ("hair", 2) in _spec_idx_by_fp:
                 # Style: don't force "bald" sub-style (9 = buzzcut/shaved)
-                deps.append((2, _spec_idx_by_fp[("hc", 2)], {"9"}))
-            _force_subdigits("hc", 3, deps)
+                deps.append((2, _spec_idx_by_fp[("hair", 2)], {"9"}))
+            _force_subdigits("hair", 3, deps)
 
     # CL: if bottom type (pos 1) detected non-zero AND not "no bottom"
     # (code 1), force top type (pos 3) to a non-topless pick. Same logic
     # in reverse: if top type detected (not topless), force bottom.
-    if (allowed_fields is None or "cl" in allowed_fields):
-        cur_cl = working.get("cl")
+    if (allowed_fields is None or "clothing" in allowed_fields):
+        cur_cl = working.get("clothing")
         if cur_cl and len(cur_cl) >= 3:
             bot_type = cur_cl[-1]   # pos 1 = bottom type
             top_type = cur_cl[-3]   # pos 3 = top type
             if bot_type not in ("0", "1") and top_type == "0":
                 # Bottom present → top probably present too
-                if ("cl", 3) in _spec_idx_by_fp:
-                    _force_subdigits("cl", 1,
-                        [(3, _spec_idx_by_fp[("cl", 3)], {"1"})])
+                if ("clothing", 3) in _spec_idx_by_fp:
+                    _force_subdigits("clothing", 1,
+                        [(3, _spec_idx_by_fp[("clothing", 3)], {"1"})])
             if top_type not in ("0", "1") and bot_type == "0":
-                if ("cl", 1) in _spec_idx_by_fp:
-                    _force_subdigits("cl", 3,
-                        [(1, _spec_idx_by_fp[("cl", 1)], {"1"})])
+                if ("clothing", 1) in _spec_idx_by_fp:
+                    _force_subdigits("clothing", 3,
+                        [(1, _spec_idx_by_fp[("clothing", 1)], {"1"})])
 
     # CS shot type → CL visibility: if the camera shot is close-up
     # / portrait / waist-up, the bottom (pants/skirt) isn't visible
@@ -3715,9 +3920,9 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     # as the explicit "real zero category" (topless, no bottom, bare
     # skin) where defined.
     _NA = "0"
-    if (allowed_fields is None or "cl" in allowed_fields):
-        cs_val = working.get("cs") or _get_working("cs")
-        cl_val = working.get("cl") or _get_working("cl")
+    if (allowed_fields is None or "clothing" in allowed_fields):
+        cs_val = working.get("camera_shot") or _get_working("camera_shot")
+        cl_val = working.get("clothing") or _get_working("clothing")
         if cs_val and len(cs_val) >= 3 and cl_val:
             cs_shot = cs_val[-3]
             cl_chars = list(cl_val)
@@ -3737,8 +3942,8 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                         cl_chars[idx] = _NA
                         cl_changed = True
             if cl_changed:
-                working["cl"] = "".join(cl_chars)
-                detected_fields.add("cl")
+                working["clothing"] = "".join(cl_chars)
+                detected_fields.add("clothing")
 
     # PM (Posture/Motion) cross-rule: only force N/A for very tight
     # close-ups (CS 1-4) where neither shoulders nor torso are visible.
@@ -3746,9 +3951,9 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
     # frame, so CLIP can usefully read motion (still vs walking) and
     # often posture (standing vs sitting/leaning) from shoulder line
     # and arm angle. Forcing N/A there hid PM on every bust-shot image.
-    if (allowed_fields is None or "pm" in allowed_fields):
-        cs_val = working.get("cs") or _get_working("cs")
-        pm_val = working.get("pm") or _get_working("pm")
+    if (allowed_fields is None or "posture_motion" in allowed_fields):
+        cs_val = working.get("camera_shot") or _get_working("camera_shot")
+        pm_val = working.get("posture_motion") or _get_working("posture_motion")
         if cs_val and len(cs_val) >= 3 and pm_val:
             cs_shot = cs_val[-3]
             if cs_shot in ("1", "2", "3", "4"):
@@ -3760,15 +3965,15 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                         pm_chars[idx] = _NA
                         pm_changed = True
                 if pm_changed:
-                    working["pm"] = "".join(pm_chars)
-                    detected_fields.add("pm")
+                    working["posture_motion"] = "".join(pm_chars)
+                    detected_fields.add("posture_motion")
 
     # And for B (Bust) and WH (Waist/Hip): N/A for shots that don't
     # show that body region. Bust visible from CS 5 (bust shot) up;
     # waist/hip visible from CS 7 (waist up) up.
-    if (allowed_fields is None or "b" in allowed_fields):
-        cs_val = working.get("cs") or _get_working("cs")
-        b_val = working.get("b") or _get_working("b")
+    if (allowed_fields is None or "bust" in allowed_fields):
+        cs_val = working.get("camera_shot") or _get_working("camera_shot")
+        b_val = working.get("bust") or _get_working("bust")
         if cs_val and len(cs_val) >= 3 and b_val:
             cs_shot = cs_val[-3]
             if cs_shot in ("1", "2", "3", "4"):
@@ -3781,11 +3986,11 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                         b_chars[idx] = _NA
                         b_changed = True
                 if b_changed:
-                    working["b"] = "".join(b_chars)
-                    detected_fields.add("b")
-    if (allowed_fields is None or "wh" in allowed_fields):
-        cs_val = working.get("cs") or _get_working("cs")
-        wh_val = working.get("wh") or _get_working("wh")
+                    working["bust"] = "".join(b_chars)
+                    detected_fields.add("bust")
+    if (allowed_fields is None or "waist_hip" in allowed_fields):
+        cs_val = working.get("camera_shot") or _get_working("camera_shot")
+        wh_val = working.get("waist_hip") or _get_working("waist_hip")
         if cs_val and len(cs_val) >= 3 and wh_val:
             cs_shot = cs_val[-3]
             if cs_shot in ("1", "2", "3", "4", "5", "6"):
@@ -3798,8 +4003,8 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
                         wh_chars[idx] = _NA
                         wh_changed = True
                 if wh_changed:
-                    working["wh"] = "".join(wh_chars)
-                    detected_fields.add("wh")
+                    working["waist_hip"] = "".join(wh_chars)
+                    detected_fields.add("waist_hip")
 
     # Return only fields that actually changed from original. The
     # all-placeholder check (e.g. "00") is conditional: for fields
@@ -3876,8 +4081,15 @@ def inspect_clip_scores(image_emb):
                 and not spec.get("default_is_zero", False)
                 and winner == "0"):
             winner = None
+        # `field` here is the FILENAME LETTER ("HC", "BG", "CL") used by
+        # the debug-tile system (CLIP_HC, CLIP_BG, …). spec["field"] is
+        # the long storage key — translate via _STORAGE_KEY_REVERSE.
+        # Also expose the long key so consumers can write to entry[long]
+        # without having to re-translate.
+        _short = _STORAGE_KEY_REVERSE.get(spec["field"], spec["field"])
         results.append({
-            "field": spec["field"].upper(),
+            "field": _short.upper(),
+            "storage_key": spec["field"],
             "pos": spec["pos"],
             "threshold": threshold,
             "zero_is_none": spec.get("zero_is_none", True),
@@ -4229,10 +4441,10 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
         new_stem = f"P{pid}J{j_code}"
     else:
         current_persons = parts.get("persons", [])
-        if current_persons and current_persons[0] == pid and parts.get("j"):
+        if current_persons and current_persons[0] == pid and parts.get("timestamp"):
             return path   # already correct — nothing to do
-        if not parts.get("j"):
-            parts["j"] = julian_id_for_file(path)  # stamp creation date if not already present
+        if not parts.get("timestamp"):
+            parts["timestamp"] = julian_id_for_file(path)  # stamp creation date if not already present
         parts["persons"] = [pid] + current_persons[1:]   # keep secondary persons
         new_stem = build_coded_filename(parts, field_order=get_sync_field_order(project))
         if not new_stem:
@@ -4253,19 +4465,28 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
     return new_path
 
 
-def _entry_value_for_letter(entry, letter, label):
+def _entry_value_for_letter(entry, letter, label, storage_key=None):
     """Return the entry's stored value for a CODED_FIELDS letter, checking
     every key the codebase has used over time. Different storage shapes:
       - matrix sections (A/X) — uppercase letter is the section/widget key
       - matrix sections w/ label name (T→Tool, BG→Background) — label key
+      - canonical long storage key (post-2026-05): "hair", "background", …
       - dig fields (E/HC/FA/SK/B/WH/PM/CL/CS/O/R/K) — lowercase letter
-      - cf_<letter> (auto-detected from CLIP / metadata)
-    Matrix-style keys are checked FIRST so the user's current widget pick
-    wins over a stale lowercase value left over from filename parsing.
-    Without this, picking Ocean (Background=42) was getting overridden by
-    the old filename-parsed bg='200' and writing BG042 instead of BG42."""
+      - cf_<letter> / cf_<storage_key> (auto-detected from CLIP / metadata)
+    The LONG storage key is checked first so the post-rename canonical
+    form wins. Matrix-style keys come next so the user's current widget
+    pick beats a stale lowercase value left over from filename parsing.
+    Without this, the rename function couldn't see entry["hair"] / ["background"]
+    and built a stem missing every CLIP-detected field — exactly the
+    "filename too short for the EXIF data" bug."""
     lk = letter.lower()
-    for _key in (letter, label, lk, f"cf_{lk}"):
+    sk = (storage_key or "").strip().lower()
+    keys = []
+    if sk: keys.append(sk)
+    keys += [letter, label, lk]
+    if sk: keys.append(f"cf_{sk}")
+    keys.append(f"cf_{lk}")
+    for _key in keys:
         if _key:
             _v = (entry.get(_key) or "")
             if isinstance(_v, str) and _v.strip():
@@ -4293,19 +4514,23 @@ def would_rename(attrs_data, path, project=None):
         parts["persons_with"] = pws
 
     _changed_field = False
-    for letter, label, digits in CODED_FIELDS:
+    for cf in CODED_FIELDS:
+        letter, label, digits = cf[0], cf[1], cf[2]
         if letter == "J" or digits == 0:
             continue
-        lk = letter.lower()
-        v = _entry_value_for_letter(entry, letter, label)
-        if v and parts.get(lk, "") != v:
-            parts[lk] = v
+        sk = _storage_key_for(cf)
+        v = _entry_value_for_letter(entry, letter, label, storage_key=sk)
+        # Compare against the parts entry the parser produces (long key);
+        # also keep the short letter key in sync so legacy callers see it.
+        if v and parts.get(sk, "") != v:
+            parts[sk] = v
+            parts[letter.lower()] = v
             _changed_field = True
 
     if not _changed_field and not pid and not pws:
         return False
-    if not parts.get("j"):
-        parts["j"] = julian_id_for_file(path)
+    if not parts.get("timestamp"):
+        parts["timestamp"] = julian_id_for_file(path)
     date_first = not bool(parts.get("persons"))
     new_stem = build_coded_filename(parts, date_first=date_first,
                                     field_order=get_sync_field_order(project))
@@ -4354,24 +4579,27 @@ def rename_file_to_match_entry(attrs_data, path, project=None, defer_save=False)
     if pws:
         parts["persons_with"] = pws
 
-    # Every coded field — entry's canonical lowercase key is the source.
-    # Backward-compat fallbacks (matrix uppercase, label, cf_) handled by
-    # _entry_value_for_letter for entries that haven't been migrated yet.
-    for letter, label, digits in CODED_FIELDS:
+    # Every coded field — entry's canonical long storage key is the source.
+    # Backward-compat fallbacks (matrix uppercase, label, short letter,
+    # cf_) handled by _entry_value_for_letter for entries that haven't
+    # been migrated yet.
+    for cf in CODED_FIELDS:
+        letter, label, digits = cf[0], cf[1], cf[2]
         if letter == "J":
             continue
-        lk = letter.lower()
+        sk = _storage_key_for(cf)
+        v = _entry_value_for_letter(entry, letter, label, storage_key=sk)
         if digits == 0:
-            # Boolean flag: parts[lk] = letter when on, "" when off.
-            v = _entry_value_for_letter(entry, letter, label)
-            parts[lk] = letter if _bool_flag_on(v) else ""
+            # Boolean flag: parts[sk] = letter when on, "" when off.
+            parts[sk] = letter if _bool_flag_on(v) else ""
+            parts[letter.lower()] = parts[sk]   # legacy fallback
         else:
-            v = _entry_value_for_letter(entry, letter, label)
             if v:
-                parts[lk] = v
+                parts[sk] = v
+                parts[letter.lower()] = v   # legacy fallback
 
-    if not parts.get("j"):
-        parts["j"] = julian_id_for_file(path)
+    if not parts.get("timestamp"):
+        parts["timestamp"] = julian_id_for_file(path)
     date_first = not bool(parts.get("persons"))
     new_stem = build_coded_filename(parts, date_first=date_first)
     if not new_stem or new_stem == stem:
@@ -4418,8 +4646,8 @@ def rename_to_date_first(attrs_data, path, project=None):
         parts = {"persons": [], "persons_with": [], "j": j_code}
     else:
         # Already coded (person-first or date-first) — keep all fields, update J if absent
-        if not parts.get("j"):
-            parts["j"] = j_code
+        if not parts.get("timestamp"):
+            parts["timestamp"] = j_code
     new_stem = build_coded_filename(parts, date_first=True,
                                     field_order=get_sync_field_order(project))
     if not new_stem:
@@ -5173,12 +5401,12 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
             if _needs_fa and pose_tag:
                 fa_dir = _POSE_TO_FA_DIR.get(pose_tag)
                 if fa_dir:
-                    entry["fa"] = fa_dir   # single digit: Dir set, Vert defaults to none
+                    entry["face_angle"] = fa_dir   # single digit: Dir set, Vert defaults to none
                     changed = True
             if _needs_cs and shot_tag:
                 cs_shot = _SHOT_TO_CS_SHOT.get(shot_tag)
                 if cs_shot:
-                    entry["cs"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
+                    entry["camera_shot"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
                     changed = True
 
     # Audio detection — probe at most once per file. The audio value itself
@@ -5201,14 +5429,14 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
 
     # Ratio (O) / Resolution (R) / FPS (K) — always-on
     _fa = detect_file_attrs(path)
-    if _fa.get("o") and not entry.get("cf_o"):
-        entry["cf_o"] = _fa["o"]
+    if _fa.get("orientation") and not entry.get("cf_o"):
+        entry["cf_o"] = _fa["orientation"]
         changed = True
-    if _fa.get("r") and not entry.get("cf_r"):
-        entry["cf_r"] = _fa["r"]
+    if _fa.get("resolution") and not entry.get("cf_r"):
+        entry["cf_r"] = _fa["resolution"]
         changed = True
-    if _fa.get("k") and not entry.get("cf_k"):
-        entry["cf_k"] = _fa["k"]
+    if _fa.get("frame_rate") and not entry.get("cf_k"):
+        entry["cf_k"] = _fa["frame_rate"]
         changed = True
 
     # Filename-based tags + enforce rules

@@ -107,7 +107,12 @@ class AttributeManager:
         if filename and os.path.exists(filename):
             try:
                 with open(filename, encoding="utf-8") as f:
-                    self.data = json.load(f)
+                    raw = json.load(f)
+                # Translate long-form disk keys ("posture_motion00") back to
+                # short prefixes ("PM00") for in-memory use. Idempotent: a
+                # legacy short-keyed file still loads as-is.
+                from aisearch_attrs import workspace_data_from_disk
+                self.data = workspace_data_from_disk(raw)
             except Exception:
                 self.data = {}
 
@@ -116,8 +121,12 @@ class AttributeManager:
     # ------------------------------------------------------------------
     def save_data(self, data: dict):
         self.data = data
+        # Translate short prefixes ("PM00") to long human-readable form
+        # ("posture_motion00") on disk so attribute_workspace.json is
+        # readable. Memory copy stays short.
+        from aisearch_attrs import workspace_data_to_disk
         with open(self.filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(workspace_data_to_disk(data), f, indent=2, ensure_ascii=False)
 
     # ------------------------------------------------------------------
     # Export to TAG_GROUPS format → attrs_tags.json

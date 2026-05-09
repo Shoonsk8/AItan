@@ -1,898 +1,898 @@
 {
-  "PM00": {
+  "posture_motion00": {
     "motion_1st": "Still / 静止",
     "posture_2nd": "Standing / 立つ"
   },
-  "PM01": {
+  "posture_motion01": {
     "motion_1st": "Pose / 格好つける",
     "posture_2nd": "Standing in style / 格好つけ立ち"
   },
-  "PM02": {
+  "posture_motion02": {
     "motion_1st": "Walking / 歩く",
     "posture_2nd": "Sitting / 座る"
   },
-  "PM03": {
+  "posture_motion03": {
     "motion_1st": "Running / 走る",
     "posture_2nd": "Kneeling / 膝立ち"
   },
-  "PM04": {
+  "posture_motion04": {
     "motion_1st": "Dancing / 踊る",
     "posture_2nd": "Lying / 横になる"
   },
-  "PM05": {
+  "posture_motion05": {
     "motion_1st": "Looking at Camera / カメラ目線",
     "posture_2nd": "Leaning / もたれる"
   },
-  "PM06": {
+  "posture_motion06": {
     "motion_1st": "Talking / 話す",
     "posture_2nd": "Crouching / しゃがむ"
   },
-  "PM07": {
+  "posture_motion07": {
     "motion_1st": "Gesturing / 身振り",
     "posture_2nd": "Handstand / 逆立ち"
   },
-  "PM08": {
+  "posture_motion08": {
     "motion_1st": "Fighting / 戦う",
     "posture_2nd": "Spreading legs / 脚を広げる"
   },
-  "PM09": {
+  "posture_motion09": {
     "motion_1st": "Fingering / フィンガリング",
     "posture_2nd": ""
   },
-  "PM0a": {
+  "posture_motion0a": {
     "motion_1st": "Jumping / 跳躍",
     "posture_2nd": ""
   },
-  "A00": {
+  "animal00": {
     "expression": "(no animal)"
   },
-  "A01": {
+  "animal01": {
     "expression": "Capybara"
   },
-  "E00": {
+  "eyes00": {
     "colors_1st": "Closed / No eyes / 閉じている／目なし",
     "additional_2nd": "Naked eye / 裸眼"
   },
-  "E01": {
+  "eyes01": {
     "colors_1st": "Brown / 茶",
     "additional_2nd": "Glasses / 眼鏡"
   },
-  "E02": {
+  "eyes02": {
     "colors_1st": "Blue / 青",
     "additional_2nd": "Neon / ネオン"
   },
-  "E03": {
+  "eyes03": {
     "colors_1st": "Hazel / ヘーゼル",
     "additional_2nd": "Glasses + Neon / 眼鏡＋ネオン"
   },
-  "E04": {
+  "eyes04": {
     "colors_1st": "Amber / 琥珀",
     "additional_2nd": ""
   },
-  "E05": {
+  "eyes05": {
     "colors_1st": "Gray / 灰",
     "additional_2nd": ""
   },
-  "E06": {
+  "eyes06": {
     "colors_1st": "Green / 緑",
     "additional_2nd": ""
   },
-  "E07": {
+  "eyes07": {
     "colors_1st": "Violet / 紫",
     "additional_2nd": ""
   },
-  "E08": {
+  "eyes08": {
     "colors_1st": "Red / 赤",
     "additional_2nd": ""
   },
-  "E09": {
+  "eyes09": {
     "colors_1st": "Silver / 銀",
     "additional_2nd": ""
   },
-  "E0a": {
+  "eyes0a": {
     "colors_1st": "Black / 黒",
     "additional_2nd": ""
   },
-  "E0b": {
+  "eyes0b": {
     "colors_1st": "Heterochromia (Complete) / 虹彩異色（完全）",
     "additional_2nd": "Bad / 不良"
   },
-  "E0c": {
+  "eyes0c": {
     "colors_1st": "Heterochromia (Sectoral) / 虹彩異色（部分）",
     "additional_2nd": ""
   },
-  "E0d": {
+  "eyes0d": {
     "colors_1st": "Heterochromia (Central) / 虹彩異色（中心）",
     "additional_2nd": ""
   },
-  "E0e": {
+  "eyes0e": {
     "colors_1st": "Aniridia / 無虹彩症",
     "additional_2nd": ""
   },
-  "E0f": {
+  "eyes0f": {
     "colors_1st": "",
     "additional_2nd": "Detail / 詳細"
   },
-  "HC000": {
+  "hair000": {
     "colors_1st": "No hair / 髪なし",
     "style_2nd": "(none) / （なし）",
     "length_3rd": "(none) / （なし）"
   },
-  "HC001": {
+  "hair001": {
     "colors_1st": "Black / 黒",
     "style_2nd": "Straight / ストレート",
     "length_3rd": "Very Short / ごく短い"
   },
-  "HC002": {
+  "hair002": {
     "colors_1st": "Dark Brown / 黒髪",
     "style_2nd": "Wavy / ウェーブ",
     "length_3rd": "Short / 短い"
   },
-  "HC003": {
+  "hair003": {
     "colors_1st": "Light Brown / 茶髪",
     "style_2nd": "Curly / カール",
     "length_3rd": "Medium / 中くらい"
   },
-  "HC004": {
+  "hair004": {
     "colors_1st": "Blonde / 金髪",
     "style_2nd": "Voluminous / ボリューム",
     "length_3rd": "Long / 長い"
   },
-  "HC005": {
+  "hair005": {
     "colors_1st": "Platinum Blonde / プラチナブロンド",
     "style_2nd": "Bob / ボブ",
     "length_3rd": "Very Long / 非常に長い"
   },
-  "HC006": {
+  "hair006": {
     "colors_1st": "Red / 赤",
     "style_2nd": "Ponytail / ポニーテール",
     "length_3rd": "Bald"
   },
-  "HC007": {
+  "hair007": {
     "colors_1st": "Pink / ピンク",
     "style_2nd": "Braid / 三つ編み",
     "length_3rd": "Partially Bald"
   },
-  "HC008": {
+  "hair008": {
     "colors_1st": "Ginger / 赤毛",
     "style_2nd": "Tied / 結び髪",
     "length_3rd": ""
   },
-  "HC009": {
+  "hair009": {
     "colors_1st": "Gray / 灰",
     "style_2nd": "Buzz / 坊主",
     "length_3rd": ""
   },
-  "HC00a": {
+  "hair00a": {
     "colors_1st": "White / 白",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "HC00b": {
+  "hair00b": {
     "colors_1st": "Blue / 青",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "HC00c": {
+  "hair00c": {
     "colors_1st": "Yellow / 黄",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "HC00d": {
+  "hair00d": {
     "colors_1st": "Green / 緑",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "HC00e": {
+  "hair00e": {
     "colors_1st": "Rainbow / レインボー",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "HC00f": {
+  "hair00f": {
     "colors_1st": "Neon / ネオン",
     "style_2nd": "",
     "length_3rd": ""
   },
-  "SK0": {
+  "skin0": {
     "type_1st": "Type I — Very Fair / タイプI — 非常に白い"
   },
-  "SK1": {
+  "skin1": {
     "type_1st": "Type II — Fair / タイプII — 白い"
   },
-  "SK2": {
+  "skin2": {
     "type_1st": "Type III — Medium / タイプIII — 普通"
   },
-  "SK3": {
+  "skin3": {
     "type_1st": "Type IV — Olive / タイプIV — オリーブ"
   },
-  "SK4": {
+  "skin4": {
     "type_1st": "Type V — Dark Brown / タイプV — 濃褐色"
   },
-  "SK5": {
+  "skin5": {
     "type_1st": "Type VI — Deeply Pigmented / タイプVI — 極濃色素"
   },
-  "X00": {
+  "expression00": {
     "expression": "Neutral ニュートラル"
   },
-  "X01": {
+  "expression01": {
     "expression": "Deadpan 無表情"
   },
-  "X02": {
+  "expression02": {
     "expression": "Resting 休憩顔"
   },
-  "X03": {
+  "expression03": {
     "expression": "Vacant 虚ろ"
   },
-  "X04": {
+  "expression04": {
     "expression": "Composed 落ち着いた"
   },
-  "X05": {
+  "expression05": {
     "expression": "Masked 仮面"
   },
-  "X06": {
+  "expression06": {
     "expression": "Serene 穏やか"
   },
-  "X07": {
+  "expression07": {
     "expression": "Impassive 無感動"
   },
-  "X10": {
+  "expression10": {
     "expression": "Smile 笑顔"
   },
-  "X11": {
+  "expression11": {
     "expression": "Grin 満面の笑み"
   },
-  "X12": {
+  "expression12": {
     "expression": "Laugh 笑い"
   },
-  "X13": {
+  "expression13": {
     "expression": "Giggle くすくす笑い"
   },
-  "X14": {
+  "expression14": {
     "expression": "Smirky Snicker にやにや笑い"
   },
-  "X15": {
+  "expression15": {
     "expression": "Beaming 満面笑顔"
   },
-  "X16": {
+  "expression16": {
     "expression": "Playful Glee 無邪気な喜び"
   },
-  "X17": {
+  "expression17": {
     "expression": "Wink ウィンク"
   },
-  "X18": {
+  "expression18": {
     "expression": "Exultant 歓喜"
   },
-  "X19": {
+  "expression19": {
     "expression": "Tender Smile 優しい笑顔"
   },
-  "X20": {
+  "expression20": {
     "expression": "Sneer せせら笑い"
   },
-  "X21": {
+  "expression21": {
     "expression": "Smug 自己満足"
   },
-  "X22": {
+  "expression22": {
     "expression": "Disgusted 嫌悪"
   },
-  "X23": {
+  "expression23": {
     "expression": "Disdain 軽蔑"
   },
-  "X24": {
+  "expression24": {
     "expression": "Condescending 見下す"
   },
-  "X25": {
+  "expression25": {
     "expression": "Eye Roll 白目"
   },
-  "X26": {
+  "expression26": {
     "expression": "Bitter 苦い"
   },
-  "X27": {
+  "expression27": {
     "expression": "Withering 冷たい視線"
   },
-  "X28": {
+  "expression28": {
     "expression": "Repulsed 嫌悪感"
   },
-  "X30": {
+  "expression30": {
     "expression": "Cry 泣く"
   },
-  "X31": {
+  "expression31": {
     "expression": "Pout 拗ねる"
   },
-  "X32": {
+  "expression32": {
     "expression": "Whimper すすり泣き"
   },
-  "X33": {
+  "expression33": {
     "expression": "Wistful 物悲しい"
   },
-  "X34": {
+  "expression34": {
     "expression": "Melancholy 憂鬱"
   },
-  "X35": {
+  "expression35": {
     "expression": "Dejected 落胆"
   },
-  "X36": {
+  "expression36": {
     "expression": "Grief 悲嘆"
   },
-  "X37": {
+  "expression37": {
     "expression": "Despairing 絶望"
   },
-  "X38": {
+  "expression38": {
     "expression": "Forlorn わびしい"
   },
-  "X40": {
+  "expression40": {
     "expression": "Frown しかめっ面"
   },
-  "X41": {
+  "expression41": {
     "expression": "Stern 厳しい"
   },
-  "X42": {
+  "expression42": {
     "expression": "Scowl にらみつける"
   },
-  "X43": {
+  "expression43": {
     "expression": "Glare 睨む"
   },
-  "X44": {
+  "expression44": {
     "expression": "Furious 激怒"
   },
-  "X45": {
+  "expression45": {
     "expression": "Brooding 沈思"
   },
-  "X46": {
+  "expression46": {
     "expression": "Seething 煮えたぎる怒り"
   },
-  "X47": {
+  "expression47": {
     "expression": "Outraged 憤慨"
   },
-  "X48": {
+  "expression48": {
     "expression": "Cold Fury 冷たい怒り"
   },
-  "X50": {
+  "expression50": {
     "expression": "Surprised 驚き"
   },
-  "X51": {
+  "expression51": {
     "expression": "Shocked ショック"
   },
-  "X52": {
+  "expression52": {
     "expression": "Amazed 唖然"
   },
-  "X53": {
+  "expression53": {
     "expression": "Startled びっくり"
   },
-  "X54": {
+  "expression54": {
     "expression": "Bewildered 困惑"
   },
-  "X55": {
+  "expression55": {
     "expression": "Astonished 驚愕"
   },
-  "X56": {
+  "expression56": {
     "expression": "Dumbfounded 茫然"
   },
-  "X57": {
+  "expression57": {
     "expression": "Aghast 青ざめた"
   },
-  "X60": {
+  "expression60": {
     "expression": "Scared 怖い"
   },
-  "X61": {
+  "expression61": {
     "expression": "Nervous 緊張"
   },
-  "X62": {
+  "expression62": {
     "expression": "Anxious 不安"
   },
-  "X63": {
+  "expression63": {
     "expression": "Horrified 恐怖"
   },
-  "X64": {
+  "expression64": {
     "expression": "On-Guard 警戒"
   },
-  "X65": {
+  "expression65": {
     "expression": "Panicked パニック"
   },
-  "X66": {
+  "expression66": {
     "expression": "Frozen 凍りついた"
   },
-  "X67": {
+  "expression67": {
     "expression": "Cowering おびえる"
   },
-  "X70": {
+  "expression70": {
     "expression": "Sleepy 眠い"
   },
-  "X71": {
+  "expression71": {
     "expression": "Drowsy うとうと"
   },
-  "X72": {
+  "expression72": {
     "expression": "Relaxed リラックス"
   },
-  "X73": {
+  "expression73": {
     "expression": "Dazed ぼんやり"
   },
-  "X74": {
+  "expression74": {
     "expression": "Content 満足"
   },
-  "X75": {
+  "expression75": {
     "expression": "Peaceful 平和"
   },
-  "X76": {
+  "expression76": {
     "expression": "Languid 気だるい"
   },
-  "X77": {
+  "expression77": {
     "expression": "Bored 退屈"
   },
-  "X78": {
+  "expression78": {
     "expression": "Zoned Out ぼーっとした"
   },
-  "X80": {
+  "expression80": {
     "expression": "Flirty 色っぽい"
   },
-  "X81": {
+  "expression81": {
     "expression": "Sultry セクシー"
   },
-  "X82": {
+  "expression82": {
     "expression": "Bedroom Eyes 流し目"
   },
-  "X83": {
+  "expression83": {
     "expression": "Biting Lip 唇を噛む"
   },
-  "X84": {
+  "expression84": {
     "expression": "Inviting 誘う"
   },
-  "X85": {
+  "expression85": {
     "expression": "Smoldering 燃えるような目"
   },
-  "X86": {
+  "expression86": {
     "expression": "Yearning 切望"
   },
-  "X87": {
+  "expression87": {
     "expression": "Possessive 独占欲"
   },
-  "X88": {
+  "expression88": {
     "expression": "Alluring 魅惑的"
   },
-  "X90": {
+  "expression90": {
     "expression": "Shy 恥ずかしい"
   },
-  "X91": {
+  "expression91": {
     "expression": "Embarrassed 照れ"
   },
-  "X92": {
+  "expression92": {
     "expression": "Blushing 頬を染める"
   },
-  "X93": {
+  "expression93": {
     "expression": "Bashful 内気"
   },
-  "X94": {
+  "expression94": {
     "expression": "Timid 臆病"
   },
-  "X95": {
+  "expression95": {
     "expression": "Flustered あわてる"
   },
-  "X96": {
+  "expression96": {
     "expression": "Self-Conscious 自意識過剰"
   },
-  "X97": {
+  "expression97": {
     "expression": "Meek おとなしい"
   },
-  "Xa0": {
+  "expressiona0": {
     "expression": "Mischievous いたずら"
   },
-  "Xa1": {
+  "expressiona1": {
     "expression": "Teasing からかう"
   },
-  "Xa2": {
+  "expressiona2": {
     "expression": "Cheeky 生意気"
   },
-  "Xa3": {
+  "expressiona3": {
     "expression": "Devious Grin したたかな笑み"
   },
-  "Xa4": {
+  "expressiona4": {
     "expression": "Tongue Out 舌を出す"
   },
-  "Xa5": {
+  "expressiona5": {
     "expression": "Conspiratorial 共謀"
   },
-  "Xa6": {
+  "expressiona6": {
     "expression": "Sly ずる賢い"
   },
-  "Xa7": {
+  "expressiona7": {
     "expression": "Impudent 図々しい"
   },
-  "Xb0": {
+  "expressionb0": {
     "expression": "Grimace 苦悶"
   },
-  "Xb1": {
+  "expressionb1": {
     "expression": "Cringe 縮み上がる"
   },
-  "Xb2": {
+  "expressionb2": {
     "expression": "Anguish 苦悩"
   },
-  "Xb3": {
+  "expressionb3": {
     "expression": "Exhausted Pain 疲弊した痛み"
   },
-  "Xb4": {
+  "expressionb4": {
     "expression": "Wince 顔をしかめる"
   },
-  "Xb5": {
+  "expressionb5": {
     "expression": "Agony 苦痛"
   },
-  "Xb6": {
+  "expressionb6": {
     "expression": "Suffering 苦しみ"
   },
-  "Xb7": {
+  "expressionb7": {
     "expression": "Tearful Pain 涙の痛み"
   },
-  "Xc0": {
+  "expressionc0": {
     "expression": "Intense Stare 強い視線"
   },
-  "Xc1": {
+  "expressionc1": {
     "expression": "Fierce 激しい"
   },
-  "Xc2": {
+  "expressionc2": {
     "expression": "Stoic ストイック"
   },
-  "Xc3": {
+  "expressionc3": {
     "expression": "Determined 決意"
   },
-  "Xc4": {
+  "expressionc4": {
     "expression": "Resolute 断固"
   },
-  "Xc5": {
+  "expressionc5": {
     "expression": "Commanding 威圧的"
   },
-  "Xc6": {
+  "expressionc6": {
     "expression": "Piercing 鋭い"
   },
-  "Xc7": {
+  "expressionc7": {
     "expression": "Formidable 恐るべき"
   },
-  "Xd0": {
+  "expressiond0": {
     "expression": "Feels good 気持ちいい"
   },
-  "Xd1": {
+  "expressiond1": {
     "expression": "Moan 喘ぎ声"
   },
-  "FA00": {
+  "face_angle00": {
     "direction_1st": "Front / 正面",
     "vertical_2nd": "Horizontal / 水平"
   },
-  "FA01": {
+  "face_angle01": {
     "direction_1st": "Right / 右",
     "vertical_2nd": "Upward / 上向き"
   },
-  "FA02": {
+  "face_angle02": {
     "direction_1st": "Right 3/4 / 右斜め",
     "vertical_2nd": "Downward / 下向き"
   },
-  "FA03": {
+  "face_angle03": {
     "direction_1st": "Left / 左",
     "vertical_2nd": ""
   },
-  "FA04": {
+  "face_angle04": {
     "direction_1st": "Left 3/4 / 左斜め",
     "vertical_2nd": ""
   },
-  "FA05": {
+  "face_angle05": {
     "direction_1st": "Back / 後ろ",
     "vertical_2nd": ""
   },
-  "CL0000": {
+  "clothing0000": {
     "top_color_4th": "Unknown",
     "top_type_3rd": "Unknown",
     "bot_color_2nd": "Unknown",
     "bot_type_1st": "Unknown"
   },
-  "CL0001": {
+  "clothing0001": {
     "top_color_4th": "None / Skin",
     "top_type_3rd": "None / Topless",
     "bot_color_2nd": "None / Skin",
     "bot_type_1st": "None / Bare"
   },
-  "CL0002": {
+  "clothing0002": {
     "top_color_4th": "Black",
     "top_type_3rd": "T-shirt",
     "bot_color_2nd": "Black",
     "bot_type_1st": "Jeans"
   },
-  "CL0003": {
+  "clothing0003": {
     "top_color_4th": "White",
     "top_type_3rd": "Blouse / Shirt",
     "bot_color_2nd": "White",
     "bot_type_1st": "Trousers"
   },
-  "CL0004": {
+  "clothing0004": {
     "top_color_4th": "Red",
     "top_type_3rd": "Sweater / Knit",
     "bot_color_2nd": "Red",
     "bot_type_1st": "Shorts"
   },
-  "CL0005": {
+  "clothing0005": {
     "top_color_4th": "Blue",
     "top_type_3rd": "Tank / Crop",
     "bot_color_2nd": "Blue",
     "bot_type_1st": "Skirt (Mini)"
   },
-  "CL0006": {
+  "clothing0006": {
     "top_color_4th": "Green",
     "top_type_3rd": "Hoodie",
     "bot_color_2nd": "Green",
     "bot_type_1st": "Skirt (Long)"
   },
-  "CL0007": {
+  "clothing0007": {
     "top_color_4th": "Yellow",
     "top_type_3rd": "Jacket",
     "bot_color_2nd": "Yellow",
     "bot_type_1st": "Leggings"
   },
-  "CL0008": {
+  "clothing0008": {
     "top_color_4th": "Pink",
     "top_type_3rd": "Coat",
     "bot_color_2nd": "Pink",
     "bot_type_1st": "Sweatpants"
   },
-  "CL0009": {
+  "clothing0009": {
     "top_color_4th": "Purple",
     "top_type_3rd": "Dress (upper)",
     "bot_color_2nd": "Purple",
     "bot_type_1st": "Dress (full)"
   },
-  "CL000a": {
+  "clothing000a": {
     "top_color_4th": "Orange",
     "top_type_3rd": "Lingerie / Bra",
     "bot_color_2nd": "Orange",
     "bot_type_1st": "Panties"
   },
-  "CL000b": {
+  "clothing000b": {
     "top_color_4th": "Brown",
     "top_type_3rd": "Swimsuit Top",
     "bot_color_2nd": "Brown",
     "bot_type_1st": "Bikini Bottom"
   },
-  "CL000c": {
+  "clothing000c": {
     "top_color_4th": "Gray",
     "top_type_3rd": "Kimono",
     "bot_color_2nd": "Gray",
     "bot_type_1st": "Hakama / Kimono"
   },
-  "CL000d": {
+  "clothing000d": {
     "top_color_4th": "Beige",
     "top_type_3rd": "School Uniform",
     "bot_color_2nd": "Beige",
     "bot_type_1st": "School Skirt"
   },
-  "CL000e": {
+  "clothing000e": {
     "top_color_4th": "Multi",
     "top_type_3rd": "Costume",
     "bot_color_2nd": "Multi",
     "bot_type_1st": "Stockings"
   },
-  "CL000f": {
+  "clothing000f": {
     "top_color_4th": "Custom",
     "top_type_3rd": "Custom",
     "bot_color_2nd": "Custom",
     "bot_type_1st": "Custom"
   },
-  "Tool00": {
+  "toolool00": {
     "expression": "Nothing / なし"
   },
-  "Tool10": {
+  "toolool10": {
     "expression": "Sword / 刀"
   },
-  "Tool20": {
+  "toolool20": {
     "expression": "Magnifier"
   },
-  "B00": {
+  "bust00": {
     "shape_1st": "(undefined) / （未定義）",
     "size_2nd": "(none) / （なし）"
   },
-  "B01": {
+  "bust01": {
     "shape_1st": "Square (Pecs) / スクエア（胸筋）",
     "size_2nd": "Flat / Male / Neutral / フラット"
   },
-  "B02": {
+  "bust02": {
     "shape_1st": "Round / 丸型",
     "size_2nd": "Athletic / Pectorals / アスレチック"
   },
-  "B03": {
+  "bust03": {
     "shape_1st": "Teardrop / しずく",
     "size_2nd": "Petite / AAA-A / 小さめ"
   },
-  "B04": {
+  "bust04": {
     "shape_1st": "Broad / 広い",
     "size_2nd": "Small / B-C / 小"
   },
-  "B05": {
+  "bust05": {
     "shape_1st": "Side Set / サイドセット",
     "size_2nd": "Medium / D-E / 中"
   },
-  "B06": {
+  "bust06": {
     "shape_1st": "Slender / 細い",
     "size_2nd": "Large / F-G / 大"
   },
-  "B07": {
+  "bust07": {
     "shape_1st": "",
     "size_2nd": "Extra Large / H+ / 特大"
   },
-  "B08": {
+  "bust08": {
     "shape_1st": "",
     "size_2nd": "Enhanced / 豊胸"
   },
-  "Background00": {
+  "bustackground00": {
     "expression": "Solid BG / 単色背景"
   },
-  "Background01": {
+  "bustackground01": {
     "expression": "Black BG / 黒背景"
   },
-  "Background02": {
+  "bustackground02": {
     "expression": "White BG / 白背景"
   },
-  "Background03": {
+  "bustackground03": {
     "expression": "Green BG / 緑背景"
   },
-  "Background10": {
+  "bustackground10": {
     "expression": "Indoor / 屋内"
   },
-  "Background11": {
+  "bustackground11": {
     "expression": "Bedroom / 寝室"
   },
-  "Background12": {
+  "bustackground12": {
     "expression": "Living Room / リビング"
   },
-  "Background13": {
+  "bustackground13": {
     "expression": "GymRoom"
   },
-  "Background20": {
+  "bustackground20": {
     "expression": "Outdoor / 屋外"
   },
-  "Background21": {
+  "bustackground21": {
     "expression": "Outside of House / 家の外"
   },
-  "Background22": {
+  "bustackground22": {
     "expression": "Swimming pool / プール"
   },
-  "Background30": {
+  "bustackground30": {
     "expression": "Commercial / 商業施設"
   },
-  "Background31": {
+  "bustackground31": {
     "expression": "Store / Shop / 店舗"
   },
-  "Background32": {
+  "bustackground32": {
     "expression": "Restaurant / Cafe / 飲食店"
   },
-  "Background33": {
+  "bustackground33": {
     "expression": "Office / オフィス"
   },
-  "Background34": {
+  "bustackground34": {
     "expression": "Hospital / 病院"
   },
-  "Background35": {
+  "bustackground35": {
     "expression": "School / 学校"
   },
-  "Background36": {
+  "bustackground36": {
     "expression": "Commercial Gym"
   },
-  "Background40": {
+  "bustackground40": {
     "expression": "Nature / 自然"
   },
-  "Background41": {
+  "bustackground41": {
     "expression": "Beach / 浜辺"
   },
-  "Background42": {
+  "bustackground42": {
     "expression": "Ocean / 海"
   },
-  "Background43": {
+  "bustackground43": {
     "expression": "Lake / 湖"
   },
-  "Background44": {
+  "bustackground44": {
     "expression": "Forest / 森"
   },
-  "Background45": {
+  "bustackground45": {
     "expression": "Mountain / 山"
   },
-  "Background50": {
+  "bustackground50": {
     "expression": "City / 街"
   },
-  "Background51": {
+  "bustackground51": {
     "expression": "Street / 通り"
   },
-  "Background52": {
+  "bustackground52": {
     "expression": "Park / 公園"
   },
-  "Background60": {
+  "bustackground60": {
     "expression": "Space / 宇宙"
   },
-  "Background61": {
+  "bustackground61": {
     "expression": "Stars / 星"
   },
-  "Background62": {
+  "bustackground62": {
     "expression": "Moon Surface / 月面"
   },
-  "WH00": {
+  "waist_hip00": {
     "hip_1st": "Normal / 普通",
     "waist_2nd": "Normal / 普通"
   },
-  "WH01": {
+  "waist_hip01": {
     "hip_1st": "Thin / 細い",
     "waist_2nd": "Flat / Thin / 細い"
   },
-  "WH02": {
+  "waist_hip02": {
     "hip_1st": "Athletic / Firm / 引き締まった",
     "waist_2nd": "Athletic / Firm / 引き締まった"
   },
-  "WH03": {
+  "waist_hip03": {
     "hip_1st": "Average / 普通",
     "waist_2nd": "Average / 普通"
   },
-  "WH04": {
+  "waist_hip04": {
     "hip_1st": "Curvy / Full / 豊満",
     "waist_2nd": "Curvy / Full / 豊満"
   },
-  "WH05": {
+  "waist_hip05": {
     "hip_1st": "Large / Wide / 大きい",
     "waist_2nd": "Large / Wide / 大きい"
   },
-  "WH06": {
+  "waist_hip06": {
     "hip_1st": "Extra Large / 特大",
     "waist_2nd": "Extra Large / 特大"
   },
-  "WH07": {
+  "waist_hip07": {
     "hip_1st": "Sticks out / 突き出し",
     "waist_2nd": "Pregnant / 妊婦"
   },
-  "CS000": {
+  "camera_shot000": {
     "lighting_1st": "Natural / 自然光",
     "angle_2nd": "Eye Level / 目線",
     "shot_3rd": "(none) / （なし）"
   },
-  "CS001": {
+  "camera_shot001": {
     "lighting_1st": "Sunshine / 日光",
     "angle_2nd": "Low Angle / ローアングル",
     "shot_3rd": "Extreme Close-Up / 超クローズアップ"
   },
-  "CS002": {
+  "camera_shot002": {
     "lighting_1st": "Sunset / 夕焼け",
     "angle_2nd": "High Angle / ハイアングル",
     "shot_3rd": "Face Close-Up / フェイスアップ"
   },
-  "CS003": {
+  "camera_shot003": {
     "lighting_1st": "Studio / スタジオ",
     "angle_2nd": "Over-Shoulder / 肩越し",
     "shot_3rd": "Big Close-Up / ビッグクローズアップ"
   },
-  "CS004": {
+  "camera_shot004": {
     "lighting_1st": "Cinematic / シネマ調",
     "angle_2nd": "Dutch Angle / ダッチアングル",
     "shot_3rd": "Close-Up / クローズアップ"
   },
-  "CS005": {
+  "camera_shot005": {
     "lighting_1st": "Anime / アニメ調",
     "angle_2nd": "Bird's Eye / 俯瞰",
     "shot_3rd": "Bust Shot / バストショット"
   },
-  "CS006": {
+  "camera_shot006": {
     "lighting_1st": "Night / 夜",
     "angle_2nd": "",
     "shot_3rd": "Medium Close-Up / ミディアムクローズアップ"
   },
-  "CS007": {
+  "camera_shot007": {
     "lighting_1st": "",
     "angle_2nd": "",
     "shot_3rd": "Medium Shot / ミディアムショット"
   },
-  "CS008": {
+  "camera_shot008": {
     "lighting_1st": "",
     "angle_2nd": "",
     "shot_3rd": "Cowboy Shot / カウボーイショット"
   },
-  "CS009": {
+  "camera_shot009": {
     "lighting_1st": "",
     "angle_2nd": "",
     "shot_3rd": "Full Shot / フルショット"
   },
-  "CS00a": {
+  "camera_shot00a": {
     "lighting_1st": "",
     "angle_2nd": "",
     "shot_3rd": "Wide Shot / ワイドショット"
   },
-  "CS00b": {
+  "camera_shot00b": {
     "lighting_1st": "",
     "angle_2nd": "",
     "shot_3rd": "Extreme Wide / 超ワイド"

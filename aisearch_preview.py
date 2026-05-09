@@ -800,8 +800,8 @@ class PreviewWindow(QWidget):
         self._code_combos = {}  # letter.lower() → [(sub_group, pos, QComboBox), ...]
 
         # Friendly display names for coded field letters (from CODED_FIELDS)
-        _field_names  = {ltr: lbl for ltr, lbl, _ in attrs_mod.CODED_FIELDS}
-        _field_digits = {ltr: dig for ltr, _, dig in attrs_mod.CODED_FIELDS if dig > 0}
+        _field_names  = {ltr: lbl for ltr, lbl, _, *_ in attrs_mod.CODED_FIELDS}
+        _field_digits = {ltr: dig for ltr, _, dig, *_ in attrs_mod.CODED_FIELDS if dig > 0}
 
         # Per-field combo specs: letter → [(sub_group, digit_pos, short_label), ...]
         # digit_pos: 1 = rightmost (1st), 2 = middle (2nd), 3 = leftmost (3rd)
@@ -994,7 +994,7 @@ class PreviewWindow(QWidget):
                     " font-family:monospace; padding:1px 3px;")
                 fe.setPlaceholderText(_t("auto / 自動"))
                 fe.setToolTip(_t("Julian date — set automatically / ユリウス日 — 自動設定"))
-                self._code_edits["j"] = fe
+                self._code_edits["timestamp"] = fe
                 vb.addWidget(fe)
                 sec_layout.addWidget(box)
                 return fe
@@ -1014,7 +1014,7 @@ class PreviewWindow(QWidget):
 
         # Create boolean flag checkboxes dynamically from CODED_FIELDS (digits==0)
         self._bool_flag_checks = {}  # letter.lower() -> QCheckBox
-        for _ltr, _lbl, _digs in attrs_mod.CODED_FIELDS:
+        for _ltr, _lbl, _digs, *_ in attrs_mod.CODED_FIELDS:
             if _digs == 0:
                 _lk = _ltr.lower()
                 _cb = QCheckBox(_ltr)
@@ -1023,8 +1023,8 @@ class PreviewWindow(QWidget):
                 self._bool_flag_checks[_lk] = _cb
                 self._code_edits[_lk] = _cb
         # Backward-compat refs (used by legacy code paths)
-        self._w_check  = self._bool_flag_checks.get("wm",  QCheckBox("WM"))
-        self._ed_check = self._bool_flag_checks.get("ed",  QCheckBox("ED"))
+        self._w_check  = self._bool_flag_checks.get("watermark_flag",  QCheckBox("WM"))
+        self._ed_check = self._bool_flag_checks.get("editable_flag",  QCheckBox("ED"))
         self._btn_normalize = QPushButton("Fix"); self._btn_normalize.setVisible(False)
         self._btn_normalize.clicked.connect(self._on_normalize_filename)
 
@@ -1126,7 +1126,7 @@ class PreviewWindow(QWidget):
         # Ensures new fields added to CODED_FIELDS appear automatically without
         # needing manual section configuration in attrs_tags.json.
         _unrendered = [
-            (ltr, lbl, dig) for ltr, lbl, dig in attrs_mod.CODED_FIELDS
+            (ltr, lbl, dig) for ltr, lbl, dig, *_ in attrs_mod.CODED_FIELDS
             if ltr.lower() not in self._code_edits and dig > 0
         ]
         if _unrendered:
@@ -1165,7 +1165,7 @@ class PreviewWindow(QWidget):
         self._x_hint.setStyleSheet("color:#888; font-size:8pt;")
 
         # Keep _name_edit as hidden alias so existing code doesn't break
-        self._name_edit = self._code_edits.get("b", QLineEdit())
+        self._name_edit = self._code_edits.get("bust", QLineEdit())
 
         # Seed edit kept as orphan (referenced by _refresh_attrs/_save_attrs)
         self._seed_edit = QLineEdit()
@@ -1374,7 +1374,7 @@ class PreviewWindow(QWidget):
                 if _clip_mode == "never" and _face_mode == "never":
                     return
                 _entry = attrs_mod.get(self.handler.app.attrs_data, _p)
-                _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
+                _clip_fields = ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing")
                 _skip = set()
                 if _clip_mode == "when_empty":
                     _skip |= {f for f in _clip_fields if _entry.get(f)}
@@ -1715,7 +1715,7 @@ class PreviewWindow(QWidget):
         elif _mode == "never":
             # CLIP off, face on → skip every CLIP field, only face fires.
             _entry_skip = attrs_mod.get(self.handler.app.attrs_data, path)
-            _clip_fields_skip = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
+            _clip_fields_skip = ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing")
             _skip_face_only = set(_clip_fields_skip)
             # Don't skip face detection just because person_id is set —
             # _auto_apply_face's confidence check will decide whether
@@ -1723,7 +1723,7 @@ class PreviewWindow(QWidget):
             self._schedule_inspect(skip_fields=_skip_face_only)
         elif _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
-            _clip_fields = ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl")
+            _clip_fields = ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing")
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
                 # (for matrix fields like X, Background). Read X_Table /
@@ -1854,7 +1854,7 @@ class PreviewWindow(QWidget):
                     if getattr(_w, "key", None) in ("O", "R", "K"):
                         _ork_opts[_w.key] = {k for k, _ in (_w.options or [])}
                 _cur_tags = set(entry.get("tags", []))
-                _extra = [_fv for _fk, _fv in [("O", _det.get("o")), ("R", _det.get("r")), ("K", _det.get("k"))]
+                _extra = [_fv for _fk, _fv in [("O", _det.get("orientation")), ("R", _det.get("resolution")), ("K", _det.get("frame_rate"))]
                           if _fv and _ork_opts.get(_fk) and not (_cur_tags & _ork_opts[_fk])]
                 if _extra:
                     entry = dict(entry)
@@ -2097,7 +2097,7 @@ class PreviewWindow(QWidget):
 
         # Populate coded fields — prefer attrs_data value (manual input) over filename
         _fts = getattr(self, "_field_to_section", {})
-        for letter, _, digits in attrs_mod.CODED_FIELDS:
+        for letter, _, digits, *_ in attrs_mod.CODED_FIELDS:
             _sec = _fts.get(letter.lower())
             if _sec and not _sec.is_expanded():
                 continue   # section is collapsed — will refresh when opened
@@ -2139,8 +2139,10 @@ class PreviewWindow(QWidget):
                 self._set_field_combos(_dk, _dv)
 
         # J field: decode base-36 → date string; fall back to file date if not in filename
-        fe_j = self._code_edits.get("j")
+        fe_j = self._code_edits.get("timestamp")
         if fe_j:
+            # parse_coded_filename returns SHORT lowercase letter keys ("j"),
+            # not long storage keys.
             j_val = parsed.get("j", "") if parsed else ""
             if not j_val:
                 j_val = attrs_mod.julian_id_for_file(path)
@@ -2236,9 +2238,9 @@ class PreviewWindow(QWidget):
                             _ork_option_keys[_w.key] = {k for k, _ in (_w.options or [])}
                     _cur_tags = set(entry.get("tags", []))
                     _extra_ork = []
-                    for _fk, _fv in [("O", _detected_ork.get("o")),
-                                      ("R", _detected_ork.get("r")),
-                                      ("K", _detected_ork.get("k"))]:
+                    for _fk, _fv in [("O", _detected_ork.get("orientation")),
+                                      ("R", _detected_ork.get("resolution")),
+                                      ("K", _detected_ork.get("frame_rate"))]:
                         if not _fv:
                             continue
                         _opts = _ork_option_keys.get(_fk, set())
@@ -2257,7 +2259,7 @@ class PreviewWindow(QWidget):
 
             # If key CLIP fields are absent, run detection in background and refresh canvas.
             # Skip entirely in "No inspection" mode — the user chose never to run AI.
-            _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg", "cl"}
+            _clip_fields = {"hair", "face_angle", "skin", "eyes", "bust", "waist_hip", "posture_motion", "camera_shot", "background", "clothing"}
             _inspect_mode = self.handler.app.config.get("clip_inspect_mode", "never")
             if _inspect_mode != "never" and not any(entry.get(f) for f in _clip_fields):
                 import threading as _thr
@@ -2305,9 +2307,9 @@ class PreviewWindow(QWidget):
                                     continue
                                 _winner = _sp.get("winner")
                                 _lmap = {c: l for c, l, _ in _sp["options"]}
-                                _wlbl = _lmap.get(_winner, "—") if _winner else "below threshold"
+                                _wlbl = _lmap.get(_winner, "—") if _winner else "—"
                                 _flines = _field_txt.setdefault(_fk, [])
-                                _flines.append(f"pos={_sp['pos']}  thr={_sp['threshold']:.2f}")
+                                _flines.append(f"pos={_sp['pos']}")
                                 _flines.append(f"  -> {_winner or '—'}  {_wlbl}")
                                 for _c, _l, _s in _sp["options"][:6]:
                                     _flines.append(f"  {'*' if _c == _winner else ' '} {_c}: {_s:.4f}  {_l[:52]}")
@@ -3001,9 +3003,16 @@ class PreviewWindow(QWidget):
             # promise. Detection then writes only what it actually finds.
             if overwrite:
                 _entry_pre = attrs_mod.get(app.attrs_data, path)
+                # Pop both legacy short keys ("hc") and current long
+                # storage keys ("hair") — half-migrated entries can
+                # have either or both.
                 for _cf in _CLIP_CANVAS_FIELDS:
-                    _entry_pre.pop(_cf.lower(), None)
-                    _entry_pre.pop(f"cf_{_cf.lower()}", None)
+                    _short = _cf.lower()
+                    _long = attrs_mod._STORAGE_KEY_MAP.get(_short, _short)
+                    _entry_pre.pop(_short, None)
+                    _entry_pre.pop(_long, None)
+                    _entry_pre.pop(f"cf_{_short}", None)
+                    _entry_pre.pop(f"cf_{_long}", None)
             _clip_specs = []
             try:
                 import aisearch_logic as _lg
@@ -3022,19 +3031,22 @@ class PreviewWindow(QWidget):
                 if _clip_specs:
                     _shown_skip_label = set()   # don't repeat "ignored" per spec position
                     for sp in _clip_specs:
-                        _f_lc_top = sp["field"].lower()
+                        # storage_key is the long form ("hair") that lives in
+                        # skip_fields; sp["field"] is the filename letter ("HC")
+                        # used for the debug-tile name (CLIP_HC).
+                        _storage = sp.get("storage_key") or sp["field"].lower()
                         # Summary debug box: collapse skipped fields into a one-line
                         # "(ignored — already set)" instead of dumping full scores.
-                        if skip_fields and _f_lc_top in skip_fields:
-                            if _f_lc_top not in _shown_skip_label:
+                        if skip_fields and _storage in skip_fields:
+                            if _storage not in _shown_skip_label:
                                 clip_txt.append(f"{sp['field'].upper()}  (ignored — already set)")
                                 clip_txt.append("")
-                                _shown_skip_label.add(_f_lc_top)
+                                _shown_skip_label.add(_storage)
                         else:
                             winner = sp["winner"]
                             label_map = {code: lbl for code, lbl, _ in sp["options"]}
-                            win_label = label_map.get(winner, "—") if winner else "below threshold"
-                            clip_txt.append(f"{sp['field']} pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                            win_label = label_map.get(winner, "—") if winner else "—"
+                            clip_txt.append(f"{sp['field']} pos={sp['pos']}")
                             clip_txt.append(f"  -> {winner or '—'}  {win_label}")
                             for code, lbl, score in sp["options"][:6]:
                                 mark = "*" if code == winner else " "
@@ -3044,14 +3056,13 @@ class PreviewWindow(QWidget):
                         # field is already set, so we don't show verbose scores
                         # that the user will override anyway.
                         _fk = sp["field"].upper()
-                        _f_lc = sp["field"].lower()
                         if _fk in _CLIP_CANVAS_FIELDS:
-                            if skip_fields and _f_lc in skip_fields:
+                            if skip_fields and _storage in skip_fields:
                                 if _fk not in clip_field_txt:
                                     clip_field_txt[_fk] = ["(ignored — already set)"]
                             else:
                                 _flines = clip_field_txt.setdefault(_fk, [])
-                                _flines.append(f"pos={sp['pos']}  thr={sp['threshold']:.2f}")
+                                _flines.append(f"pos={sp['pos']}")
                                 _flines.append(f"  -> {winner or '—'}  {win_label}")
                                 for code, lbl, score in sp["options"][:6]:
                                     mark = "*" if code == winner else " "
@@ -3070,16 +3081,19 @@ class PreviewWindow(QWidget):
                                          Q_ARG(str, _clip_full))
             # Apply CLIP results to attrs_data
             if _clip_specs and emb is not None:
-                # Build multi-digit field values by combining all positions
-                # e.g. HC pos1=5, pos2=none, pos3=none → "hc": "005" not "5"
-                _field_digits = {cf[0].lower(): cf[2]
+                # Build long-storage-key → total digits map. inspect_clip_scores
+                # exposes both `field` (filename letter for tile naming) and
+                # `storage_key` (the actual long key entries are saved at).
+                # Use the long key throughout so writes land in the same slot
+                # the canvas reads from.
+                _field_digits = {(cf[3] if len(cf) >= 4 else cf[0].lower()): cf[2]
                                  for cf in attrs_mod.CODED_FIELDS if cf[2] > 0}
                 _working = {}
                 # Track which (field, digit_index) had an actual winner (incl. "0")
                 _detected_indices = {}
                 _entry_pre = attrs_mod.get(app.attrs_data, path)
                 for sp in _clip_specs:
-                    _f = sp["field"].lower()
+                    _f = sp.get("storage_key") or sp["field"].lower()
                     _pos = sp.get("pos", 1)
                     _winner = sp.get("winner")
                     if _f not in _working:
@@ -3096,7 +3110,7 @@ class PreviewWindow(QWidget):
                 _corrections = attrs_mod.load_corrections(getattr(app, "current_project", None))
                 if _corrections and emb is not None:
                     for sp in _clip_specs:
-                        _f = sp["field"].lower()
+                        _f = sp.get("storage_key") or sp["field"].lower()
                         _pos = sp.get("pos", 1)
                         if _f not in _working:
                             continue
@@ -3542,11 +3556,14 @@ class PreviewWindow(QWidget):
     def _auto_apply_face(self, path: str, pid: str, top_sim: float = 0.0,
                          stored_sim: float = 0.0):
         """Slot called from _on_inspect thread to auto-apply detected person_id.
-        Only fills in when the entry has no real pid yet — "000" counts
-        as empty. Existing pids are NEVER auto-overridden by this path:
-        the user explicitly clicks the manual Apply button if they want
-        to flip a stored value. (The earlier confidence-gated override
-        flipped too many unrelated faces.)"""
+
+        Fills empty entries (pid missing or "000") unconditionally.
+        Overrides an existing pid when the top match BOTH:
+          - clears a minimum absolute-confidence floor (top_sim >= 0.50,
+            below which face_recognition is just noise), AND
+          - beats the stored match by any positive gap.
+        Always logs what it decided via aisearch_debug.dbg so the user
+        can see why an override did or didn't fire."""
         if not path or not pid or pid == "000":
             return
         app = self.handler.app
@@ -3554,10 +3571,29 @@ class PreviewWindow(QWidget):
             return  # user navigated away
         entry = attrs_mod.get(app.attrs_data, path)
         old_pid = (entry.get("person_id") or "").strip().lower()
-        if old_pid and old_pid != "000":
-            return  # respect existing — manual Apply is the way to override
         if old_pid == pid.strip().lower():
             return  # already same — nothing to do
+        if old_pid and old_pid != "000":
+            # Existing pid — override when the top match BOTH beats the
+            # stored one AND clears a minimum absolute-confidence floor.
+            # face_recognition similarity below ~0.50 is the noise floor
+            # (similar-looking but unrelated faces sit there); above that
+            # the model is at least making a real distinction.
+            _MIN_TOP = 0.50
+            _gap = top_sim - stored_sim
+            try:
+                from aisearch_debug import dbg as _dbg
+            except Exception:
+                _dbg = lambda *a, **kw: None
+            if not (top_sim >= _MIN_TOP and _gap > 0):
+                _dbg(f"_auto_apply_face SKIP {old_pid!r} -> {pid!r} "
+                     f"(top_sim={top_sim:.3f}, stored_sim={stored_sim:.3f}, "
+                     f"gap={_gap:.3f}, MIN_TOP={_MIN_TOP}) — "
+                     f"top didn't beat stored or under noise floor")
+                return  # top match isn't actually beating the stored one
+            _dbg(f"_auto_apply_face OVERRIDE {old_pid!r} -> {pid!r} "
+                 f"(top_sim={top_sim:.3f}, stored_sim={stored_sim:.3f}, "
+                 f"gap={_gap:.3f})")
         entry["person_id"] = pid
         # Patch the cached FACE display text so the "Stored:" line shows
         # the new pid instead of the old one (the snapshot was taken
@@ -3691,40 +3727,43 @@ class PreviewWindow(QWidget):
         runs through detection and silently gets overwritten. Tested
         in tests/test_clip_threshold.py.
 
-        `key` may be the canvas section name like "Background" rather
-        than the storage/CLIP key — resolve through _SECTION_KEY_TO_FIELD."""
-        from aisearch_attrs import CLIP_AUTO_DETECT
+        `key` may be the canvas section name ("HC", "Background"), the
+        storage key ("hair"), or "p"/"pw". CLIP_AUTO_DETECT specs use
+        the long storage key, so resolution stops there — no further
+        translation needed."""
+        from aisearch_attrs import CLIP_AUTO_DETECT, _STORAGE_KEY_REVERSE
         from attr_viewer import _SECTION_KEY_TO_FIELD
         _ALL = {s["field"] for s in CLIP_AUTO_DETECT}
+        # Section key → long storage key: "HC" → "hair", "Background" → "background"
         _target = _SECTION_KEY_TO_FIELD.get(key, key.lower())
         _skip = set()
-        if _target == "p" or _target == "pw":
-            # Person / persons-with: skip all CLIP fields, only run face detection
-            # (PW shares the face-detection pipeline — secondaries come from
-            # the same call as primary).
+        if _target in ("p", "pw"):
+            # Person / persons-with: skip all CLIP fields, only run face detection.
             _skip = set(_ALL)
         elif _target in _ALL:
             _skip = _ALL - {_target}
             _skip.add("person_id")
         else:
             return
-        # Clear stored value for this field so the detect actually runs
+        # Clear stored value for this field so the detect actually runs.
+        # Pop legacy short-key form too in case any half-migrated entry
+        # still carries it.
         _path = getattr(self, "_attr_path", None)
-        if _path:
+        if _path and _target not in ("p", "pw"):
             _entry = self.handler.app.attrs_data.setdefault(_path, {})
-            if _target not in ("p", "pw"):
-                _entry.pop(_target, None)
-                _entry.pop(f"cf_{_target}", None)
-        # Reveal the debug tile ahead of the detect so the user sees it populate.
-        # Reposition flush under its parent — Auto Grid may have disconnected
-        # and dragged it elsewhere.
+            _legacy_short = _STORAGE_KEY_REVERSE.get(_target, _target)
+            for _k in (_target, f"cf_{_target}", _legacy_short, f"cf_{_legacy_short}"):
+                _entry.pop(_k, None)
+        # Reveal the debug tile (named CLIP_<filename letter>, e.g. CLIP_HC)
+        # ahead of the detect so the user sees it populate.
         _sc = getattr(self, "_soft_canvas", None)
         if _target == "p":
             _dbg_key = "FACE"
         elif _target == "pw":
             _dbg_key = "FACE_PW"
         else:
-            _dbg_key = f"CLIP_{_target.upper()}"
+            _short = _STORAGE_KEY_REVERSE.get(_target, _target)
+            _dbg_key = f"CLIP_{_short.upper()}"
         if _sc:
             widgets = getattr(_sc, "widgets", [])
             _parent = next((w for w in widgets if w.key == key), None)
@@ -3850,7 +3889,7 @@ class PreviewWindow(QWidget):
             return
         # Map option_key (lowercase label) → uppercase letter for digits=0 fields
         _bool_opt_map = {lbl.lower(): letter
-                         for letter, lbl, digits in attrs_mod.CODED_FIELDS if digits == 0}
+                         for letter, lbl, digits, *_ in attrs_mod.CODED_FIELDS if digits == 0}
         for w in _sc.widgets:
             if w.style not in ("radio", "boolean"):
                 continue
@@ -3901,7 +3940,7 @@ class PreviewWindow(QWidget):
         if fe is None:
             return
         parts[lk] = letter if fe.isChecked() else ""
-        _date_first = bool(parts.get("j")) and not parts.get("persons")
+        _date_first = bool(parts.get("timestamp")) and not parts.get("persons")
         _fo = attrs_mod.get_sync_field_order(getattr(self.handler.app, "current_project", None))
         new_stem = attrs_mod.build_coded_filename(parts, date_first=_date_first, field_order=_fo)
         if not new_stem or new_stem == stem:
@@ -3948,12 +3987,14 @@ class PreviewWindow(QWidget):
             return
         persons_with = [pwe.text().strip().lower() for pwe in self._pw_edits if pwe.text().strip()]
         parts = {"persons": persons, "persons_with": persons_with}
-        # Preserve J from existing coded filename; fall back to file creation time
+        # Preserve J from existing coded filename; fall back to file creation time.
+        # parse_coded_filename returns short keys ("j"); build_coded_filename
+        # also expects short keys via parts.get(letter.lower(), "").
         _stem_now = os.path.splitext(os.path.basename(path))[0]
         _parsed_now = attrs_mod.parse_coded_filename(_stem_now)
         parts["j"] = (_parsed_now.get("j", "") if _parsed_now else "") or \
                      attrs_mod.julian_id_for_file(path)
-        for letter, _, digits in attrs_mod.CODED_FIELDS:
+        for letter, _, digits, *_ in attrs_mod.CODED_FIELDS:
             if letter == "J":
                 continue   # J already set above — skip display-decoded text
             fe = self._code_edits.get(letter.lower())
@@ -4047,7 +4088,7 @@ class PreviewWindow(QWidget):
             return
         if not attrs_mod.is_editable(self.handler.app.attrs_data, path):
             return
-        fe_fa = self._code_edits.get("fa")
+        fe_fa = self._code_edits.get("face_angle")
         pose_tag = fe_fa.text().strip() if fe_fa else ""
         new_path = attrs_mod.apply_pose_to_filename(path, pose_tag)
         if new_path and new_path != path:
@@ -4210,7 +4251,7 @@ class PreviewWindow(QWidget):
             # Also include complement keys from any radio widget that has a positive coded-bool btn.
             # Build opt_key → letter map (e.g. "watermark" → "wm") from CODED_FIELDS labels.
             _cb_label_map = {lbl.lower(): letter.lower()
-                             for letter, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+                             for letter, lbl, d, *_ in attrs_mod.CODED_FIELDS if d == 0}
             _coded_bool_opts = set(_cb_label_map)
             for _cw in _sc.widgets:
                 if _cw.style == "radio":
@@ -4310,13 +4351,13 @@ class PreviewWindow(QWidget):
         # to the canonical key. For matrix sections that map to a CODED_FIELDS
         # letter (X→x, Tool→t, Background→bg, A→a) we MUST write to the
         # lowercase letter so the value lands in the same key parse_coded
-        # _filename uses; otherwise entry["X"]="11" and entry["x"]="80" can
+        # _filename uses; otherwise entry["X"]="11" and entry["expression"]="80" can
         # both exist after a rename round-trip and the filename builder picks
         # the wrong one. Other matrix sections (ModelImage, ModelVideo,
         # Variant) keep their full section name as the storage key.
         if _matrix_vals and path in app.attrs_data:
             _section_to_letter = {}
-            for _l, _lbl, _d in attrs_mod.CODED_FIELDS:
+            for _l, _lbl, _d, *_ in attrs_mod.CODED_FIELDS:
                 _section_to_letter[_l] = _l.lower()
                 _section_to_letter[_lbl] = _l.lower()
             for _mk, _mv in _matrix_vals.items():
@@ -4336,13 +4377,13 @@ class PreviewWindow(QWidget):
         # picked something else); selecting the same value as P is the
         # placeholder fallback, not real provenance data.
         if "pi" in _text_vals and path in app.attrs_data:
-            _pi_val = (_text_vals.get("pi") or "").strip().lower()
+            _pi_val = (_text_vals.get("person_inhrt") or "").strip().lower()
             _entry_now = app.attrs_data[path]
             _cur_pid = (_entry_now.get("person_id") or "").strip().lower()
             if _pi_val and _pi_val != _cur_pid:
-                _entry_now["pi"] = _pi_val
+                _entry_now["person_inhrt"] = _pi_val
             else:
-                _entry_now.pop("pi", None)
+                _entry_now.pop("person_inhrt", None)
         # PW (persons_with) — companions actually present in the frame.
         # Auto-filled by face detection, editable by user. Canvas widget
         # default-displays the P value when blank, so only persist as a real
@@ -4367,7 +4408,7 @@ class PreviewWindow(QWidget):
             if app.config.get("clip_inspect_mode", "never") != "never":
                 _saved = attrs_mod.get(app.attrs_data, path)
                 _has_coded = any(_saved.get(f) for f in
-                                 ("hc", "fa", "sk", "e", "pm", "cs", "bg", "x", "cl"))
+                                 ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing"))
                 if _has_coded:
                     _data = getattr(app, "data", None)
                     _emb = None
@@ -4797,7 +4838,7 @@ class PreviewWindow(QWidget):
                 if _sc:
                     try:
                         _cb_map = {lbl.lower(): letter.lower()
-                                   for letter, lbl, d in attrs_mod.CODED_FIELDS if d == 0}
+                                   for letter, lbl, d, *_ in attrs_mod.CODED_FIELDS if d == 0}
                         _bool_flags = {}
                         for _cw in _sc.widgets:
                             if _cw.style == "radio":

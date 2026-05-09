@@ -269,7 +269,7 @@ class _FilenameMixin:
         self.check_auto_rename.toggled.connect(_on_auto_rename_toggled)
 
         # ── Attribute helpers ─────────────────────────────────────────────────
-        _coded_prefixes = set(_FIELD_DEFS.keys()) | {l for l, _, _ in _am.CODED_FIELDS}
+        _coded_prefixes = set(_FIELD_DEFS.keys()) | {l for l, _, _, *_ in _am.CODED_FIELDS}
 
         # Load project-specific tag groups so MDL, Audio, etc. appear with correct options
         _proj      = getattr(self.app, 'current_project', None)
@@ -314,7 +314,10 @@ class _FilenameMixin:
             if not (grp.endswith("_Table") and grp[:-6] in _tag_groups_raw)
         )
 
-        _ALL_FIELDS = [("P", "Person", 3)] + list(_am.CODED_FIELDS)
+        # P (Person) isn't in CODED_FIELDS but the filename rules need it.
+        # Include the storage_key as the 4th element so the dropdown shows
+        # the long form like every other entry ("person_id (Person)").
+        _ALL_FIELDS = [("P", "Person", 3, "person_id")] + list(_am.CODED_FIELDS)
 
         _FIELD_TAG_GROUP = {
             "E": "E_Color", "HC": "HC_Color", "FA": "FA_Dir",
@@ -325,7 +328,7 @@ class _FilenameMixin:
 
         def _attr_is_boolean(key):
             if key.startswith("TAG:"): return False
-            for l, _, d in _am.CODED_FIELDS:
+            for l, _, d, *_ in _am.CODED_FIELDS:
                 if l == key: return d == 0
             return False
 
@@ -408,8 +411,16 @@ class _FilenameMixin:
             # ── Coded Fields group ──
             attr_cb.addItem("── Coded Fields ──", "__hdr__")
             attr_cb.model().item(attr_cb.count() - 1).setEnabled(False)
-            for l, lb, d in _ALL_FIELDS:
-                disp = lb if d == 0 else f"{l}  {lb}"
+            for l, lb, d, *_rest in _ALL_FIELDS:
+                # Display the storage key (long form — "hair", "background")
+                # since that's what the user sees everywhere else after the
+                # rename. The combo data stays as the filename letter ("HC")
+                # because rules match against filenames which use letters.
+                storage = _rest[0] if _rest else l.lower()
+                if d == 0:
+                    disp = lb            # boolean flags — just the label
+                else:
+                    disp = f"{storage}  ({lb})"
                 attr_cb.addItem(disp, l)
             # ── Tag Groups ──
             if _tag_groups_flat:
@@ -429,7 +440,7 @@ class _FilenameMixin:
                 # exist in TAG_GROUPS for this prefix; if more than one, use
                 # multi mode so each digit position gets its own picker.
                 _coded_digits = 0
-                for _l, _, _d in _am.CODED_FIELDS:
+                for _l, _, _d, *_ in _am.CODED_FIELDS:
                     if _l == key:
                         _coded_digits = _d
                         break
@@ -661,7 +672,7 @@ class _FilenameMixin:
 
 
         def _auto_assign():
-            available = [(l, lb, d) for l, lb, d in _ALL_FIELDS if d > 0]
+            available = [(l, lb, d) for l, lb, d, *_ in _ALL_FIELDS if d > 0]
             existing_pats = {pat_e.text() for pat_e, *_ in self._fn_rows}
 
             dlg = QDialog(self)
@@ -904,7 +915,7 @@ class _FilenameMixin:
                         extracted = _am.parse_filename_rules(stem, rules)
                         parts = {"persons": [extracted.get("P", "000").zfill(3)]}
                         fname_lower = _os.path.basename(p).lower()
-                        for letter, _, digits in _am.CODED_FIELDS:
+                        for letter, _, digits, *_ in _am.CODED_FIELDS:
                             if letter in ("P", "J"):
                                 continue
                             if digits == 0:
@@ -926,7 +937,7 @@ class _FilenameMixin:
                         for dk, dv in _am.detect_file_attrs(p).items():
                             if dk not in parts:
                                 parts[dk] = dv
-                        parts["j"] = _am.julian_id_for_file(p)
+                        parts["timestamp"] = _am.julian_id_for_file(p)
 
                         _fo = _am.get_sync_field_order(getattr(self.app, "current_project", None))
                         new_stem = _am.build_coded_filename(parts, field_order=_fo)

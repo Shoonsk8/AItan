@@ -29,8 +29,12 @@ _CANVAS_SUBPOS = {
 
 
 def _clip_specs_for(field):
-    """Return CLIP_AUTO_DETECT entries for `field` (lowercase) keyed by pos."""
-    return {s["pos"]: s for s in CLIP_AUTO_DETECT if s.get("field") == field.lower()}
+    """Return CLIP_AUTO_DETECT entries for `field` keyed by pos.
+    Accepts either short letter ("hc") or long storage key ("hair") —
+    translates short to long since spec["field"] is the long form."""
+    from aisearch_attrs import _STORAGE_KEY_MAP
+    long = _STORAGE_KEY_MAP.get(field.lower(), field.lower())
+    return {s["pos"]: s for s in CLIP_AUTO_DETECT if s.get("field") == long}
 
 
 def test_subpos_mirrors_attr_viewer():
@@ -103,13 +107,13 @@ def test_hc_length_at_pos_1():
         "HC pos 1 prompts don't look like length prompts."
 
 
-def test_background_alias_resolves_to_bg():
-    """Canvas section "Background" must resolve to storage key "bg".
-    Without this, the matrix widget reads/writes entry["background"]
-    while CLIP detection writes entry["bg"] — same data, two slots,
-    never met."""
+def test_background_alias_resolves_to_storage_key():
+    """Canvas section "Background" must resolve to the long storage
+    key "background" — same convention all other sections follow
+    after the storage-key rename. Earlier this resolved to the short
+    "bg" and the Update entry-clear was popping the wrong slot."""
     from attr_viewer import _SECTION_KEY_TO_FIELD
-    assert _SECTION_KEY_TO_FIELD.get("Background") == "bg"
+    assert _SECTION_KEY_TO_FIELD.get("Background") == "background"
 
 
 def test_alias_map_is_minimal():

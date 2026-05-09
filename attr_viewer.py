@@ -47,7 +47,7 @@ def _lang_label(text: str) -> str:
 def _build_coded_labels():
     try:
         import aisearch_attrs as _am
-        return {letter: label for letter, label, _ in _am._DEFAULT_CODED_FIELDS}
+        return {letter: label for letter, label, _, *_ in _am._DEFAULT_CODED_FIELDS}
     except Exception:
         return {}
 
@@ -64,17 +64,27 @@ _CODED_LABELS = _build_coded_labels()
 # to the storage key `bg` so reads/writes hit the right slot. This is
 # the ONLY direction (section → storage); never add the inverse.
 _HUMAN_LABEL_ALIASES = {
-    "Background": "bg",
+    # value is the LONG storage key, matching the convention that
+    # _SECTION_KEY_TO_FIELD returns storage keys post-rename. Earlier
+    # this mapped to "bg" (short clip-field name) and the entry-clear
+    # in _update_clip_for_field cleared the wrong slot.
+    "Background": "background",
 }
 
 def _build_section_to_field_key():
+    """Section key (e.g. "HC", "Background") → storage key (e.g. "hair",
+    "background"). Storage key comes from the 4th element of each
+    CODED_FIELDS entry — that's the on-disk JSON key, the canonical
+    name. Without this, the canvas widget looks up entry["hc"] while
+    data lives at entry["hair"] and the tile shows empty."""
     try:
         import aisearch_attrs as _am
         _map = {}
-        for letter, _, digits in _am.CODED_FIELDS:
+        for letter, _label, digits, *rest in _am.CODED_FIELDS:
             if digits == 0:
                 continue
-            _map[letter] = letter.lower()
+            storage = rest[0] if rest else letter.lower()
+            _map[letter] = storage
         _map.update(_HUMAN_LABEL_ALIASES)
         return _map
     except Exception:
@@ -852,8 +862,19 @@ class FieldWidget(QGroupBox):
             self._cb.setMinimumWidth(160)
             # Sort/mode label. For matrix fields it cycles grid → freq →
             # alpha; for plain combos it cycles freq → alpha.
+            # The label is also a clickable affordance — left-click on it
+            # cycles the mode, since right-clicking the combo wasn't
+            # discoverable. Cursor changes to a hand pointer over it.
             self._sort_lbl = QLabel(self._sort_label_text())
             self._sort_lbl.setStyleSheet("color:#888;font-size:9pt;")
+            self._sort_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._sort_lbl.setToolTip(_lang_label(
+                "Click to cycle sort mode / クリックで並び順切替"))
+            def _lbl_press(ev, _w=self):
+                if ev.button() == Qt.MouseButton.LeftButton:
+                    _w._toggle_sort()
+                    ev.accept()
+            self._sort_lbl.mousePressEvent = _lbl_press
             self._fill_combo()
             self._cb.currentIndexChanged.connect(self._on_select)
             self._cb.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -995,6 +1016,13 @@ class FieldWidget(QGroupBox):
             self._sort_lbl.setStyleSheet(
                 "color:#888;font-size:9pt;" if self._sort_freq
                 else "color:#8ab;font-size:9pt;font-style:italic;")
+        # Re-fill the combo and any sub-combos so the dropdown actually
+        # reflects the new sort order. Without this the label flipped
+        # but the items kept their old order — "freq menu is dead".
+        if self.options and hasattr(self, "_cb") and self._cb is not None:
+            self._fill_combo(preserve=True)
+        for cb, opts in getattr(self, "_sub_combos", []):
+            self._fill_sub_combo(cb, opts)
 
     def _popup_mode_token(self):
         """One-word serialization of (matrix_mode, sort_freq) for the
@@ -1035,7 +1063,7 @@ class FieldWidget(QGroupBox):
         try:
             import aisearch_attrs as _am
             return {lbl.lower(): letter.lower()
-                    for letter, lbl, digits in _am.CODED_FIELDS if digits == 0}
+                    for letter, lbl, digits, *_ in _am.CODED_FIELDS if digits == 0}
         except Exception:
             return {}
 
@@ -1088,21 +1116,30 @@ class FieldWidget(QGroupBox):
                             btn.blockSignals(False)
                             break
         elif self.style == "matrix" or (self.options and self.style not in ("text", "1dig", "2dig", "3dig", "4dig", "id")):
-            # Matrix value lives at the canonical lowercase letter key for
-            # CODED_FIELDS sections (X→x, Tool→t, Background→bg, A→a) and at
-            # the section name for non-coded matrix sections (ModelImage,
-            # ModelVideo, Variant). Try canonical first, then fall back to
-            # the legacy uppercase/section-name key for unmigrated entries.
+            # Matrix value lives at the LONG storage key for CODED_FIELDS
+            # sections (X→expression, Tool→tool, Background→background,
+            # A→animal) and at the section name for non-coded matrix
+            # sections (ModelImage, ModelVideo, Variant). Try the storage
+            # key first, then the section name, then legacy short letter
+            # ("bg") as a fallback so half-migrated entries still display.
             try:
                 import aisearch_attrs as _am_codedfields
-                _section_to_letter = {}
-                for _l, _lbl, _d in _am_codedfields.CODED_FIELDS:
-                    _section_to_letter[_l] = _l.lower()
-                    _section_to_letter[_lbl] = _l.lower()
-                _canon = _section_to_letter.get(self.key, self.key)
+                _section_to_storage = {}    # "BG"/"Background" → "background"
+                _section_to_short    = {}    # "BG"/"Background" → "bg"
+                for _l, _lbl, _d, *_rest in _am_codedfields.CODED_FIELDS:
+                    _storage = _rest[0] if _rest else _l.lower()
+                    _section_to_storage[_l] = _storage
+                    _section_to_storage[_lbl] = _storage
+                    _section_to_short[_l] = _l.lower()
+                    _section_to_short[_lbl] = _l.lower()
+                _canon       = _section_to_storage.get(self.key, self.key)
+                _legacy_short = _section_to_short.get(self.key, self.key.lower())
             except Exception:
                 _canon = self.key
-            val = entry.get(_canon, "") or entry.get(self.key, "")
+                _legacy_short = self.key.lower()
+            val = (entry.get(_canon, "")
+                   or entry.get(self.key, "")
+                   or entry.get(_legacy_short, ""))
             if val and not any(k == val for k, _ in self.options):
                 val = ""
             if not val:
@@ -1147,7 +1184,7 @@ class FieldWidget(QGroupBox):
             lbl = getattr(self, "_date_lbl", None)
             if lbl:
                 coded = entry.get("coded", {})
-                j_val = coded.get("j", "") if isinstance(coded, dict) else ""
+                j_val = coded.get("timestamp", "") if isinstance(coded, dict) else ""
                 if not j_val:
                     _path = entry.get("path", "")
                     if _path:
@@ -1177,7 +1214,7 @@ class FieldWidget(QGroupBox):
                 # (the placeholder reads "— (same as P)" so this is obvious).
                 _pe = getattr(self, "_pid_edit", None)
                 if _pe:
-                    _pi  = (entry.get("pi") or "").strip().lower()
+                    _pi  = (entry.get("person_inhrt") or "").strip().lower()
                     _pid = (entry.get("person_id") or "").strip().lower()
                     val = _pi if _pi and _pi != _pid else ""
                     _pe.blockSignals(True)
@@ -1339,10 +1376,13 @@ class FieldWidget(QGroupBox):
             return ("text", "person_id", _pe.text().strip() if _pe else "")
         elif self.style == "id" and self.key == "PI":
             _pe = getattr(self, "_pid_edit", None)
-            return ("text", "pi", _pe.text().strip() if _pe else "")
+            # Storage key matches CODED_FIELDS storage_key for PI.
+            return ("text", "person_inhrt", _pe.text().strip() if _pe else "")
         elif self.style == "id" and self.key == "PW":
             _pe = getattr(self, "_pid_edit", None)
-            return ("text", "pw", _pe.text().strip() if _pe else "")
+            # The rest of the codebase reads PW data from "persons_with"
+            # — keep the storage key consistent.
+            return ("text", "persons_with", _pe.text().strip() if _pe else "")
         elif self.style == "text":
             db_key = _TEXT_KEY_MAP.get(self.key, self.key)
             te = getattr(self, "_te", None)
@@ -1623,14 +1663,20 @@ class FieldWidget(QGroupBox):
         # the same detection (P = primary face, PW = secondary faces). PI is
         # provenance-only and stays manual; assigned via the 👤 button →
         # Settings → Persons card buttons.
-        # Show / Update show for any widget whose key resolves to a
-        # CLIP/face field — direct keys (E, HC, …) AND human-label
-        # sections like "Background" → "bg".
-        _CLIP_TARGETS = {"e", "hc", "fa", "sk", "pm", "cs", "bg", "x", "cl",
-                         "p", "pw"}
-        _resolved = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
+        # Show / Update appear for any widget whose key resolves to a
+        # CLIP/face target. CLIP_AUTO_DETECT now uses long storage keys
+        # ("hair", "background") — the same keys _SECTION_KEY_TO_FIELD
+        # returns — so no translation is needed.
+        try:
+            from aisearch_attrs import CLIP_AUTO_DETECT
+            _CLIP_TARGETS = {s["field"] for s in CLIP_AUTO_DETECT} | {"p", "pw"}
+        except Exception:
+            _CLIP_TARGETS = {"eyes", "hair", "face_angle", "skin",
+                             "posture_motion", "camera_shot", "background",
+                             "expression", "clothing", "p", "pw"}
+        _menu_target = _SECTION_KEY_TO_FIELD.get(self.key, self.key.lower())
         act_show = act_update = None
-        if _resolved in _CLIP_TARGETS:
+        if _menu_target in _CLIP_TARGETS:
             act_show   = menu.addAction(_lang_label("👁 Show / 👁 表示"))
             act_update = menu.addAction(_lang_label("🔄 Update / 🔄 更新"))
 
@@ -2254,7 +2300,13 @@ class AttrViewerWidget(QWidget):
                     options = preset
             if style == "text":
                 label = text_fields.get(key, {}).get("label", key.replace("_", " ").title())
-            elif style == "matrix" and key in col_names and col_names[key]:
+            elif (style == "matrix" and key in col_names and col_names[key]
+                    and col_names[key][0] != key):
+                # Use the project's col_names label, but only if it's a
+                # real human label — not a placeholder where the column
+                # name is just the section key (e.g. col_names["A"]=["A"]).
+                # Such placeholders should fall through to the CODED_FIELDS
+                # label so the user sees "Animal" not "A".
                 label = col_names[key][0]
             elif key in _CODED_LABELS and _CODED_LABELS[key]:
                 label = _CODED_LABELS[key]

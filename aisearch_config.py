@@ -200,7 +200,10 @@ class FolderPickerDialog(QDialog):
         self.path_entry.setText(path)
         parent_path = os.path.dirname(path)
         if parent_path != path:
-            item = QListWidgetItem("  .. (up)")
+            # No leading whitespace — Qt's built-in keyboardSearch matches
+            # against the displayed text, so spaces at the start make
+            # type-ahead impossible.
+            item = QListWidgetItem(".. (up)")
             item.setData(Qt.ItemDataRole.UserRole, "__up__")
             self.list_widget.addItem(item)
         try:
@@ -209,7 +212,7 @@ class FolderPickerDialog(QDialog):
                 key=lambda e: e.name.lower()
             )
             for e in entries:
-                item = QListWidgetItem(f"  {e.name}")
+                item = QListWidgetItem(e.name)
                 item.setData(Qt.ItemDataRole.UserRole, e.path)
                 self.list_widget.addItem(item)
         except PermissionError:

@@ -168,25 +168,27 @@ class _MetadataMixin:
             " padding:2px 4px; border-radius:2px;")
         vbox.addWidget(_auto_hdr)
 
+        # Targets are the storage keys (the on-disk JSON keys) — same
+        # naming used everywhere else after the rename.
         _AUTO_ROWS = [
             # (category_label, category_fg, category_bg, [(source, arrow, target, target_fg), ...])
             ("CLIP",      "#cc99ff", "#2a1a4a", [
-                ("E",  "→", "Eye Color",    "#cc99ff"),
-                ("HC", "→", "Hair",         "#cc99ff"),
-                ("FA", "→", "Face Dir",     "#cc99ff"),
-                ("SK", "→", "Skin Type",    "#cc99ff"),
-                ("PM", "→", "Pose/Motion",  "#cc99ff"),
-                ("CS", "→", "Camera Shot",  "#cc99ff"),
-                ("BG", "→", "Background",   "#cc99ff"),
+                ("E",  "→", "eyes",            "#cc99ff"),
+                ("HC", "→", "hair",            "#cc99ff"),
+                ("FA", "→", "face_angle",      "#cc99ff"),
+                ("SK", "→", "skin",            "#cc99ff"),
+                ("PM", "→", "posture_motion",  "#cc99ff"),
+                ("CS", "→", "camera_shot",     "#cc99ff"),
+                ("BG", "→", "background",      "#cc99ff"),
             ]),
             ("MediaPipe", "#88ffcc", "#1a3a2a", [
-                ("Pose", "→", "FA Dir",   "#88ffcc"),
-                ("Shot", "→", "CS Shot",  "#88ffcc"),
+                ("Pose", "→", "face_angle",   "#88ffcc"),
+                ("Shot", "→", "camera_shot",  "#88ffcc"),
             ]),
             ("File Det.", "#ffcc88", "#3a2a10", [
-                ("Audio", "→", "audio",   "#ffcc88"),
-                ("Ratio", "→", "code: O", "#ffcc88"),
-                ("FPS",   "→", "code: K", "#ffcc88"),
+                ("Audio", "→", "audio",       "#ffcc88"),
+                ("Ratio", "→", "orientation", "#ffcc88"),
+                ("FPS",   "→", "frame_rate",  "#ffcc88"),
             ]),
         ]
 
@@ -409,12 +411,25 @@ class _MetadataMixin:
             existing_lower.add(fk.lower())
             txt_insert += 1
 
-        # ── Person ID (internal key for the P coded field, displayed on Canvas) ──
+        # ── Coded fields — let users target hair, background, etc. directly ──
+        # Each entry uses the storage key as the data (what gets written to
+        # entry[storage_key]) and "<storage>  (<Label>)" as the display, the
+        # same format the Filename Rules dropdown uses.
+        tags_hdr = next((i for i, (lbl, d) in enumerate(fields)
+                         if d is None and "Tags" in lbl), len(fields))
         if "person_id" not in existing_lower:
-            tags_hdr = next((i for i, (lbl, d) in enumerate(fields)
-                             if d is None and "Tags" in lbl), len(fields))
-            fields.insert(tags_hdr, ("Person ID  (person_id)", "person_id"))
+            fields.insert(tags_hdr, ("person_id  (Person)", "person_id"))
             existing_lower.add("person_id")
+            tags_hdr += 1
+        # Insert every CODED_FIELDS entry that isn't already in the list,
+        # immediately before the "── Tags ──" header.
+        for letter, label, digits, *_rest in _am.CODED_FIELDS:
+            storage = _rest[0] if _rest else letter.lower()
+            if storage in existing_lower or digits == 0:
+                continue
+            fields.insert(tags_hdr, (f"{storage}  ({label})", storage))
+            existing_lower.add(storage)
+            tags_hdr += 1
 
         # ── All non-coded, non-text sections from project section_order ──────
         insert_after = next((i for i, (_, d) in enumerate(fields) if d == "tag:Resolution"),
@@ -552,19 +567,34 @@ class _MetadataMixin:
             if w.widget(): w.widget().deleteLater()
         self._clip_label_rows.clear()
 
+        # Keys are (long_storage_key, pos). spec["field"] in
+        # CLIP_AUTO_DETECT is still the short code ("hc"), so translate
+        # via _STORAGE_KEY_MAP at lookup. The dict itself stays in the
+        # canonical long form everything else uses.
         _SECTION_NAMES = {
-            ("hc", 1): "HC  Hair color",  ("hc", 2): "HC  Hair style",
-            ("hc", 3): "HC  Hair length", ("fa", 1): "FA  Face direction",
-            ("fa", 2): "FA  Face tilt",   ("sk", 1): "SK  Skin type",
-            ("pm", 2): "PM  Posture",     ("pm", 1): "PM  Motion",
-            ("cs", 3): "CS  Shot type",   ("cs", 2): "CS  Camera angle",
-            ("cs", 1): "CS  Lighting",    ("bg", 3): "BG  Background",
-            ("e",  1): "E   Eye color",
+            ("hair", 1): "HC  Hair length", ("hair", 2): "HC  Hair style",
+            ("hair", 3): "HC  Hair color",
+            ("face_angle", 1): "FA  Face direction",
+            ("face_angle", 2): "FA  Face tilt",
+            ("skin", 1): "SK  Skin type",
+            ("posture_motion", 1): "PM  Motion",
+            ("posture_motion", 2): "PM  Posture",
+            ("camera_shot", 1): "CS  Lighting",
+            ("camera_shot", 2): "CS  Camera angle",
+            ("camera_shot", 3): "CS  Shot type",
+            ("background", 2): "BG  Background",
+            ("expression", 2): "X   Expression",
+            ("eyes", 1): "E   Eye color",
+            ("clothing", 1): "CL  Bottom type",
+            ("clothing", 2): "CL  Bottom color",
+            ("clothing", 3): "CL  Top type",
+            ("clothing", 4): "CL  Top color",
         }
 
         for si, spec in enumerate(_am.CLIP_AUTO_DETECT):
-            key = (spec["field"], spec["pos"])
-            sec_name = _SECTION_NAMES.get(key, f"{spec['field'].upper()} pos={spec['pos']}")
+            _long = _am._STORAGE_KEY_MAP.get(spec["field"], spec["field"])
+            key = (_long, spec["pos"])
+            sec_name = _SECTION_NAMES.get(key, f"{_long} pos={spec['pos']}")
 
             # Section header with threshold spinbox
             hdr = QHBoxLayout(); hdr.setSpacing(6)

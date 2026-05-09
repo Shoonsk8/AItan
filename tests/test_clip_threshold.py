@@ -88,8 +88,8 @@ def test_auto_detect_writes_argmax_no_threshold_gate():
     if not res:
         return  # model not available
     # For any field with default_is_zero=True at every pos, "00" should
-    # be present (PM, FA, SK).
-    for f in ("fa", "sk"):
+    # be present. auto_detect now returns long storage keys.
+    for f in ("face_angle", "skin"):
         if f in res:
             assert res[f] != "", \
                 f"{f} should be written even at all-default value"
@@ -101,11 +101,11 @@ def test_auto_detect_skips_existing_non_zero():
     emb = _zero_emb()
     # Set HC pos 1 to "5" (length=Very Long); auto-detect should leave
     # it alone even though the model would produce something different.
-    existing = {"hc": "005"}   # pos 1 = "5"
+    existing = {"hair": "005"}   # pos 1 = "5"
     res = auto_detect_clip_attrs(emb, existing_entry=existing)
-    if "hc" in res:
-        assert res["hc"][-1] == "5", \
-            "auto_detect_clip_attrs overwrote a manually-set HC pos 1"
+    if "hair" in res:
+        assert res["hair"][-1] == "5", \
+            "auto_detect_clip_attrs overwrote a manually-set hair pos 1"
 
 
 def test_clip_specs_lowercase_field_keys():
@@ -129,6 +129,33 @@ def test_clip_specs_no_duplicate_pos_per_field():
         assert key not in seen, \
             f"duplicate CLIP_AUTO_DETECT entry for {key}"
         seen.add(key)
+
+
+def test_update_clip_for_field_actually_resolves_to_clip_target():
+    """The right-click → Update flow now does just:
+      key → _SECTION_KEY_TO_FIELD → match _ALL
+    Since CLIP_AUTO_DETECT spec["field"] is the same long storage key
+    that _SECTION_KEY_TO_FIELD returns, no further translation is
+    needed. If any future change reintroduces a short/long mismatch,
+    Update silently no-ops (the 2026-05 regression class)."""
+    import os
+    os.environ.setdefault("AISEARCH_SKIP_MODEL", "1")
+    from aisearch_attrs import CLIP_AUTO_DETECT
+    from attr_viewer import _SECTION_KEY_TO_FIELD
+
+    _ALL = {s["field"] for s in CLIP_AUTO_DETECT}
+    # Every plausible section/canvas key the user could right-click on
+    # must resolve to a value that's in _ALL (or to "p"/"pw").
+    keys_to_check = ["E", "HC", "FA", "SK", "PM", "CS", "BG", "X", "CL",
+                     "P", "PW", "Background"]
+    for key in keys_to_check:
+        target = _SECTION_KEY_TO_FIELD.get(key, key.lower())
+        ok = target in _ALL or target in ("p", "pw")
+        assert ok, (
+            f"_update_clip_for_field({key!r}) resolves to {target!r} "
+            f"which is not in CLIP_AUTO_DETECT (_ALL = {sorted(_ALL)}). "
+            f"Update will silently no-op — same bug class as 2026-05."
+        )
 
 
 def test_update_clip_for_field_covers_every_clip_field():

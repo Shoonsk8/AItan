@@ -3079,7 +3079,7 @@ class AISearchApp(QMainWindow):
                 _ork = attrs_mod.detect_file_attrs(path)
                 if _ork:
                     _e = self.attrs_data.setdefault(path, {})
-                    for _fk in ("o", "r", "k"):
+                    for _fk in ("orientation", "r", "k"):
                         _fv = _ork.get(_fk, "")
                         if _fv and not _e.get(_fk):
                             _e[_fk] = _fv
@@ -3133,7 +3133,7 @@ class AISearchApp(QMainWindow):
                 try:
                     _entry = self.attrs_data.get(path) or {}
                     _cf = {k: _entry.get(f"cf_{k}", "")
-                           for k in ("o", "r", "k")}
+                           for k in ("orientation", "r", "k")}
                     _cf = {k: v for k, v in _cf.items() if v}
                     if _cf:
                         _stem, _ext = os.path.splitext(os.path.basename(path))

@@ -1,0 +1,4 @@
+{
+  "_comment": "List labeled images here. Each entry is { 'image': 'fixtures/images/<file>', 'clip': {short_field: code, ...}, 'face_pid': '<3-hex>' }. Both clip and face_pid are optional. Examples below — replace 'TODO' paths with real images you've labeled.",
+  "fixtures": []
+}

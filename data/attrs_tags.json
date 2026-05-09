@@ -1043,136 +1043,7 @@
       "Moan 喘ぎ声"
     ]
   ],
-  "Background_Table": [
-    [
-      "00",
-      "Solid BG / 単色背景"
-    ],
-    [
-      "01",
-      "Black BG / 黒背景"
-    ],
-    [
-      "02",
-      "White BG / 白背景"
-    ],
-    [
-      "03",
-      "Green BG / 緑背景"
-    ],
-    [
-      "04",
-      "Red BG / 赤背景"
-    ],
-    [
-      "10",
-      "Indoor / 屋内"
-    ],
-    [
-      "11",
-      "Bedroom / 寝室"
-    ],
-    [
-      "12",
-      "Living Room / リビング"
-    ],
-    [
-      "13",
-      "GymRoom"
-    ],
-    [
-      "20",
-      "Outdoor / 屋外"
-    ],
-    [
-      "21",
-      "Outside of House / 家の外"
-    ],
-    [
-      "22",
-      "Swimming pool / プール"
-    ],
-    [
-      "30",
-      "Commercial / 商業施設"
-    ],
-    [
-      "31",
-      "Store / Shop / 店舗"
-    ],
-    [
-      "32",
-      "Restaurant / Cafe / 飲食店"
-    ],
-    [
-      "33",
-      "Office / オフィス"
-    ],
-    [
-      "34",
-      "Hospital / 病院"
-    ],
-    [
-      "35",
-      "School / 学校"
-    ],
-    [
-      "36",
-      "Commercial Gym"
-    ],
-    [
-      "40",
-      "Nature / 自然"
-    ],
-    [
-      "41",
-      "Beach / 浜辺"
-    ],
-    [
-      "42",
-      "Ocean / 海"
-    ],
-    [
-      "43",
-      "Lake / 湖"
-    ],
-    [
-      "44",
-      "Forest / 森"
-    ],
-    [
-      "45",
-      "Mountain / 山"
-    ],
-    [
-      "50",
-      "City / 街"
-    ],
-    [
-      "51",
-      "Street / 通り"
-    ],
-    [
-      "52",
-      "Park / 公園"
-    ],
-    [
-      "60",
-      "Space / 宇宙"
-    ],
-    [
-      "61",
-      "Stars / 星"
-    ],
-    [
-      "62",
-      "Moon Surface / 月面"
-    ],
-    [
-      "70",
-      "Castle / 城"
-    ]
-  ],
+  "BG_Table": [],
   "A_Table": [
     [
       "00",
@@ -1603,6 +1474,136 @@
     [
       "f2",
       "Purple Dildo / 紫ディルド"
+    ]
+  ],
+  "Background_Table": [
+    [
+      "00",
+      "Solid BG / 単色背景"
+    ],
+    [
+      "01",
+      "Black BG / 黒背景"
+    ],
+    [
+      "02",
+      "White BG / 白背景"
+    ],
+    [
+      "03",
+      "Green BG / 緑背景"
+    ],
+    [
+      "04",
+      "Red BG / 赤背景"
+    ],
+    [
+      "10",
+      "Indoor / 屋内"
+    ],
+    [
+      "11",
+      "Bedroom / 寝室"
+    ],
+    [
+      "12",
+      "Living Room / リビング"
+    ],
+    [
+      "13",
+      "GymRoom"
+    ],
+    [
+      "20",
+      "Outdoor / 屋外"
+    ],
+    [
+      "21",
+      "Outside of House / 家の外"
+    ],
+    [
+      "22",
+      "Swimming pool / プール"
+    ],
+    [
+      "30",
+      "Commercial / 商業施設"
+    ],
+    [
+      "31",
+      "Store / Shop / 店舗"
+    ],
+    [
+      "32",
+      "Restaurant / Cafe / 飲食店"
+    ],
+    [
+      "33",
+      "Office / オフィス"
+    ],
+    [
+      "34",
+      "Hospital / 病院"
+    ],
+    [
+      "35",
+      "School / 学校"
+    ],
+    [
+      "36",
+      "Commercial Gym"
+    ],
+    [
+      "40",
+      "Nature / 自然"
+    ],
+    [
+      "41",
+      "Beach / 浜辺"
+    ],
+    [
+      "42",
+      "Ocean / 海"
+    ],
+    [
+      "43",
+      "Lake / 湖"
+    ],
+    [
+      "44",
+      "Forest / 森"
+    ],
+    [
+      "45",
+      "Mountain / 山"
+    ],
+    [
+      "50",
+      "City / 街"
+    ],
+    [
+      "51",
+      "Street / 通り"
+    ],
+    [
+      "52",
+      "Park / 公園"
+    ],
+    [
+      "60",
+      "Space / 宇宙"
+    ],
+    [
+      "61",
+      "Stars / 星"
+    ],
+    [
+      "62",
+      "Moon Surface / 月面"
+    ],
+    [
+      "70",
+      "Castle / 城"
     ]
   ],
   "ModelImage_Table": [
@@ -2047,7 +2048,7 @@
   ],
   "__col_names__": {
     "A": [
-      "A"
+      "Animal"
     ],
     "E": [
       "Eyes_color",
@@ -2165,6 +2166,7 @@
     "related": "related"
   },
   "__deleted_sections__": [
+    "BG",
     "CLIP",
     "Quality"
   ],
