@@ -1853,7 +1853,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
-_AITAN_VERSION = "2.5.3"  # stamped into every AItan{} block as "ver"
+_AITAN_VERSION = "2.5.4"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""
@@ -4228,7 +4228,7 @@ def inspect_clip_scores_subprocess(path, timeout=None):
         return out.get("specs") or []
 
 
-def inspect_face_detection_subprocess(path, project, timeout=120):
+def inspect_face_detection_subprocess(path, project, timeout=120, cancel_check=None):
     """Run inspect_face_detection in a worker subprocess.
     Isolates dlib/face_recognition leaks — each call gets a fresh process
     whose memory the OS fully reclaims on exit. The leak that was crashing
@@ -4239,27 +4239,46 @@ def inspect_face_detection_subprocess(path, project, timeout=120):
     fallback) before any face work begins. Without the headroom the
     user saw "worker timeout (30s)" on routine inspections.
 
+    `cancel_check` is an optional callable that returns True when the
+    caller has navigated away from `path` and the worker's result is no
+    longer wanted. Polled every 0.1 s; on True, the worker is terminated.
+
     AISEARCH_INPROC_FACE=1 forces the in-process call (debugging).
     """
     if os.environ.get("AISEARCH_INPROC_FACE"):
         return inspect_face_detection(path, project)
-    import subprocess as _sp
+    import subprocess as _sp, time as _time
     _worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_worker.py")
     if not os.path.exists(_worker):
         return inspect_face_detection(path, project)
     try:
         _py = sys.executable
-        r = _sp.run(
+        proc = _sp.Popen(
             [_py, _worker, "--path", path, "--project", str(project)],
-            capture_output=True, text=True, timeout=timeout)
-        if r.returncode != 0:
+            stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        _deadline = _time.time() + timeout
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.1)
+                break
+            except _sp.TimeoutExpired:
+                if cancel_check and cancel_check():
+                    proc.terminate()
+                    try: proc.wait(timeout=2)
+                    except _sp.TimeoutExpired: proc.kill()
+                    return {"face_found": False, "num_faces": 0, "matches": [],
+                            "assigned_id": None, "error": "cancelled"}
+                if _time.time() > _deadline:
+                    proc.terminate()
+                    try: proc.wait(timeout=2)
+                    except _sp.TimeoutExpired: proc.kill()
+                    return {"face_found": False, "num_faces": 0, "matches": [],
+                            "assigned_id": None, "error": f"worker timeout ({timeout}s)"}
+        if proc.returncode != 0:
             return {"face_found": False, "num_faces": 0, "matches": [],
                     "assigned_id": None,
-                    "error": f"worker rc={r.returncode}: {r.stderr.strip()[:200]}"}
-        return json.loads(r.stdout)
-    except _sp.TimeoutExpired:
-        return {"face_found": False, "num_faces": 0, "matches": [],
-                "assigned_id": None, "error": f"worker timeout ({timeout}s)"}
+                    "error": f"worker rc={proc.returncode}: {(stderr or '').strip()[:200]}"}
+        return json.loads(stdout)
     except Exception as e:
         return {"face_found": False, "num_faces": 0, "matches": [],
                 "assigned_id": None, "error": f"worker spawn failed: {e}"}

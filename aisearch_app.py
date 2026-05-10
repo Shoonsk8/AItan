@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.3"
+VERSION = "2.5.4"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -6406,8 +6406,15 @@ class AISearchApp(QMainWindow):
 
         sel_rows = self._selected_rows()
         rows_to_move = sorted([r for r in sel_rows if r != 0], reverse=True)  # high→low so removals don't shift
+        # Target the CURRENT row-0 path's directory, not query_path's.
+        # query_path tracks the original search anchor, which may already
+        # have been moved out of the result set; row 0 is whatever the
+        # table now shows at the top, which is what the user sees.
+        _row0_path = self.table.get_row_path(0) if self.table.rowCount() > 0 else None
+        _ref_path = _row0_path or self.query_path
+        _target_dir = os.path.dirname(os.path.abspath(_ref_path)) if _ref_path else None
         print(f"[RIGHT] sel_rows={sel_rows} rows_to_move={rows_to_move} "
-              f"target_dir={os.path.dirname(self.query_path)!r}",
+              f"target_dir={_target_dir!r} (row0={_row0_path!r}, query={self.query_path!r})",
               file=_sys.stderr, flush=True)
         multi = len(rows_to_move) > 1
         any_moved = False
@@ -6419,7 +6426,7 @@ class AISearchApp(QMainWindow):
             if not old_path:
                 continue
             new_path, self.data, err = front_page.move_file_physically(
-                old_path, self.query_path, self.data, self.current_project,
+                old_path, _ref_path, self.data, self.current_project,
                 mode=self.config.get("move_conflict", "size_check"), parent_win=self)
             if new_path:
                 if self.query_emb is not None and self.data and "paths" in self.data:
@@ -6427,8 +6434,7 @@ class AISearchApp(QMainWindow):
                         idx = self.data["paths"].index(old_path)
                         feedback.record(self.current_project, self.query_emb, self.data["embeddings"][idx])
                         needs_feedback_reload = True
-                dest_path = os.path.join(os.path.dirname(os.path.abspath(self.query_path)),
-                                         os.path.basename(old_path))
+                dest_path = os.path.join(_target_dir, os.path.basename(old_path))
                 self._update_row(r, old_path, new_path,
                                  new_path == dest_path,
                                  dest_path,

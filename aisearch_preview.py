@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.3"
+VERSION = "2.5.4"
 
 
 def _read_embedded_meta(path):
@@ -1562,67 +1562,66 @@ class PreviewWindow(QWidget):
         if (self._attr_path and self._attr_path != path
                 and os.path.exists(self._attr_path)
                 and getattr(self, "_last_autorenamed_path", None) != self._attr_path):
-            try:
-                _fn_cfg = attrs_mod.load_filename_config(_proj)
-            except Exception:
-                _fn_cfg = {}
-            _ar_on = bool(_fn_cfg.get("auto_rename", False))
-            _ar_dbg(f"autorename: leaving={os.path.basename(self._attr_path)} auto_rename={_ar_on}")
-            if _ar_on:
-                _old = self._attr_path
+            # Defer the entire rename to the next event-loop tick so
+            # the new file's preview paints first. ~500 ms of would_rename
+            # + load_filename_config + filesystem rename + table.set_row_path
+            # used to block navigation; deferring drops perceived latency
+            # to one frame.
+            _old = self._attr_path
+            self._last_autorenamed_path = _old   # claim ownership immediately to dedupe
+            def _do_autorename(_old=_old, _proj=_proj):
+                try:
+                    _fn_cfg = attrs_mod.load_filename_config(_proj)
+                except Exception:
+                    _fn_cfg = {}
+                _ar_on = bool(_fn_cfg.get("auto_rename", False))
+                _ar_dbg(f"autorename: leaving={os.path.basename(_old)} auto_rename={_ar_on}")
+                if not _ar_on:
+                    return
                 _wr = False
                 try:
                     _wr = attrs_mod.would_rename(_app.attrs_data, _old, _proj)
                 except Exception as e:
                     _ar_dbg(f"autorename: would_rename raised {e}")
                 _ar_dbg(f"autorename: would_rename={_wr}")
-                if _wr:
-                    self._last_autorenamed_path = _old
-                    try:
-                        _new = attrs_mod.rename_file_to_match_entry(
-                            _app.attrs_data, _old, project=_proj)
-                        _ar_dbg(f"autorename: rename returned {os.path.basename(_new) if _new else _new!r}")
-                    except Exception as e:
-                        _ar_dbg(f"autorename: rename raised {e}")
-                        _new = _old
-                    if _new and _new != _old:
-                        if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
-                            _app.data["paths"][_app.data["paths"].index(_old)] = _new
-                        # Keep dup-mode group data consistent so lookups
-                        # like `path in g_paths` keep matching after a
-                        # rename (otherwise the strip falls back to just
-                        # the top thumbnail).
-                        try:
-                            if hasattr(_app, "_replace_dup_display_path"):
-                                _app._replace_dup_display_path(_old, _new)
-                        except Exception:
-                            pass
-                        # Find the table row holding _old (not _current_row,
-                        # which may already have moved to the new file by
-                        # this point during navigation) and update it.
-                        try:
-                            for _r in range(_app.table.rowCount()):
-                                if _app.table.get_row_path(_r) == _old:
-                                    _app.table.set_row_path(_r, _new)
-                                    break
-                        except Exception:
-                            pass
-                        # Preserve the old filename in the entry's note —
-                        # mirrors the manual 🪪 Rename behavior so users
-                        # don't lose the original name when a rename fires
-                        # automatically. Skip if the last line of the note
-                        # is already the old basename to avoid dup lines on
-                        # chained renames.
-                        _entry_after = _app.attrs_data.get(_new) or _app.attrs_data.get(_old)
-                        if isinstance(_entry_after, dict):
-                            _old_bn = os.path.basename(_old)
-                            _note = (_entry_after.get("note") or "").rstrip()
-                            _last_line = _note.splitlines()[-1].strip() if _note else ""
-                            if _last_line != _old_bn:
-                                _appended = (_note + "\n" + _old_bn).lstrip("\n")
-                                _entry_after["note"] = _appended
-                        self._attr_path = _new
-                        self._last_autorenamed_path = _new
+                if not _wr:
+                    return
+                try:
+                    _new = attrs_mod.rename_file_to_match_entry(
+                        _app.attrs_data, _old, project=_proj)
+                    _ar_dbg(f"autorename: rename returned {os.path.basename(_new) if _new else _new!r}")
+                except Exception as e:
+                    _ar_dbg(f"autorename: rename raised {e}")
+                    _new = _old
+                if not _new or _new == _old:
+                    return
+                if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
+                    _app.data["paths"][_app.data["paths"].index(_old)] = _new
+                try:
+                    if hasattr(_app, "_replace_dup_display_path"):
+                        _app._replace_dup_display_path(_old, _new)
+                except Exception:
+                    pass
+                try:
+                    for _r in range(_app.table.rowCount()):
+                        if _app.table.get_row_path(_r) == _old:
+                            _app.table.set_row_path(_r, _new)
+                            break
+                except Exception:
+                    pass
+                _entry_after = _app.attrs_data.get(_new) or _app.attrs_data.get(_old)
+                if isinstance(_entry_after, dict):
+                    _old_bn = os.path.basename(_old)
+                    _note = (_entry_after.get("note") or "").rstrip()
+                    _last_line = _note.splitlines()[-1].strip() if _note else ""
+                    if _last_line != _old_bn:
+                        _appended = (_note + "\n" + _old_bn).lstrip("\n")
+                        _entry_after["note"] = _appended
+                # Don't update self._attr_path — the user has already
+                # moved on to a different file. _last_autorenamed_path
+                # was set earlier so we don't double-fire.
+                self._last_autorenamed_path = _new
+            QTimer.singleShot(0, _do_autorename)
         # Auto-bake the previous file when leaving it. Run in a background
         # thread — for videos, ffmpeg-copy can take 300ms+ and would block
         # navigation otherwise. Track the last path we baked so rapid arrow
@@ -3227,7 +3226,10 @@ class PreviewWindow(QWidget):
             face_txt = []
             _detected_pid = None
             # Skip face detection if (a) the AI mode has face turned off, or
-            # (b) person_id is in skip_fields (already set).
+            # (b) person_id is in skip_fields (already set), or
+            # (c) the user has already navigated away from this file (the
+            #     subprocess can take 30+ s, so let the new file's inspect
+            #     run instead of finishing a stale one).
             _face_mode = app.config.get("face_inspect_mode", "when_empty")
             if _face_mode == "never":
                 face_txt.append("(face inspect off)")
@@ -3235,12 +3237,20 @@ class PreviewWindow(QWidget):
             elif skip_fields and "person_id" in skip_fields:
                 face_txt.append("(ignored — already set)")
                 _dbg("      FACE skipped (person_id already set)")
+            elif self._attr_path != path:
+                face_txt.append("(navigated away)")
+                _dbg("      FACE skipped (user navigated away)")
             else:
                 try:
                     _stored_pid = (app.attrs_data.get(path) or {}).get("person_id", "")
                     # Use the subprocess worker — isolates dlib/face_recognition
                     # leaks so they don't accumulate in the main app.
-                    fi = attrs_mod.inspect_face_detection_subprocess(path, app.current_project)
+                    # cancel_check fires when the user has navigated away,
+                    # so the running face_worker subprocess gets killed
+                    # instead of finishing a stale 30-second detection.
+                    fi = attrs_mod.inspect_face_detection_subprocess(
+                        path, app.current_project,
+                        cancel_check=lambda: self._attr_path != path)
                     if fi.get("error"):
                         face_txt.append(f"ERROR: {fi['error']}")
                     else:
