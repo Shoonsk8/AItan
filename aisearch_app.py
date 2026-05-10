@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.2"
+VERSION = "2.5.3"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -6656,9 +6656,16 @@ class AISearchApp(QMainWindow):
             QMessageBox.warning(self, _t("Locked / ロック中"), _t("This file is locked and cannot be moved. / このファイルはロックされているため移動できません。"))
             return
 
-        # Start the picker at the file's own folder so moving to a sibling
-        # directory is one step instead of navigating from the last target.
-        _start = os.path.dirname(old_path) if old_path and os.path.isdir(os.path.dirname(old_path)) else self.last_move_dir
+        # Start the picker at the LAST move target so consecutive moves to
+        # the same folder are zero-click. Fall back to the file's own
+        # folder when last_move_dir is unset / no longer a directory.
+        _last = getattr(self, "last_move_dir", None)
+        if _last and os.path.isdir(_last):
+            _start = _last
+        elif old_path and os.path.isdir(os.path.dirname(old_path)):
+            _start = os.path.dirname(old_path)
+        else:
+            _start = os.path.expanduser("~")
         new_path, self.data, err, chosen_dir = front_page.select_and_move_file(
             self, old_path, self.data, self.current_project, _start,
             mode=self.config.get("move_conflict", "size_check"))

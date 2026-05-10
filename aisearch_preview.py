@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.2"
+VERSION = "2.5.3"
 
 
 def _read_embedded_meta(path):
@@ -5244,7 +5244,15 @@ class PreviewHandler:
         # Start the picker at the current file's folder so the user can move
         # to a sibling directory in one step instead of navigating from the
         # last-used target each time.
-        _start = os.path.dirname(src) if src and os.path.isdir(os.path.dirname(src)) else self.app.last_move_dir
+        # Prefer last move target so consecutive copies to the same
+        # folder are zero-click; fall back to the file's own folder.
+        _last = getattr(self.app, "last_move_dir", None)
+        if _last and os.path.isdir(_last):
+            _start = _last
+        elif src and os.path.isdir(os.path.dirname(src)):
+            _start = os.path.dirname(src)
+        else:
+            _start = os.path.expanduser("~")
         target_dir = FolderPickerDialog(self.window, initialdir=_start, title="Copy to...").result
         if not target_dir: return
         try:
@@ -5258,7 +5266,13 @@ class PreviewHandler:
         row = self.app._current_row()
         if row < 0: return
         old_path   = self.app.table.get_row_path(row)
-        _start = os.path.dirname(old_path) if old_path and os.path.isdir(os.path.dirname(old_path)) else self.app.last_move_dir
+        _last = getattr(self.app, "last_move_dir", None)
+        if _last and os.path.isdir(_last):
+            _start = _last
+        elif old_path and os.path.isdir(os.path.dirname(old_path)):
+            _start = os.path.dirname(old_path)
+        else:
+            _start = os.path.expanduser("~")
         target_dir = FolderPickerDialog(self.window, initialdir=_start, title="Move to...").result
         if not target_dir: return
         dest_path  = os.path.join(target_dir, os.path.basename(old_path))
