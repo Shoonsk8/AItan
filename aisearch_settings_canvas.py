@@ -1,5 +1,5 @@
 """Canvas tab — embeds AttrViewerWidget (the free-canvas attr panel editor)."""
-import os, shutil
+import os, shutil, json
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QPushButton
 import aisearch_config as cfg
 from attr_viewer import _lang_label as _t
@@ -180,7 +180,40 @@ class _CanvasMixin:
                 if _cb.isChecked():
                     self._canvas_overwrite_skip_warn = True
             if os.path.exists(src):
-                shutil.copy2(src, dst)
+                # Protection-aware merge: read target's existing
+                # __protected__ list and preserve those keys' data.
+                # Without this, a raw copy wipes destination's
+                # protected sections (the user's "you overwrite
+                # unprotected over protected" bug).
+                try:
+                    with open(src, encoding="utf-8") as _sf:
+                        _src_data = json.load(_sf)
+                    _dst_protected = []
+                    _dst_data = {}
+                    if os.path.exists(dst):
+                        with open(dst, encoding="utf-8") as _df:
+                            _dst_data = json.load(_df)
+                        _dst_protected = list(_dst_data.get("__protected__") or [])
+                    if _dst_protected:
+                        # Keep target's __protected__ list and target's
+                        # data for each protected key (and its _Table
+                        # sibling for matrix fields).
+                        _src_data["__protected__"] = sorted(set(_dst_protected))
+                        for _pk in _dst_protected:
+                            if _pk in _dst_data:
+                                _src_data[_pk] = _dst_data[_pk]
+                            _pkt = f"{_pk}_Table"
+                            if _pkt in _dst_data:
+                                _src_data[_pkt] = _dst_data[_pkt]
+                        with open(dst, "w", encoding="utf-8") as _of:
+                            json.dump(_src_data, _of, ensure_ascii=False, indent=2)
+                    else:
+                        # No protection on target — plain copy as before.
+                        shutil.copy2(src, dst)
+                except Exception:
+                    # If merge fails for any reason, fall back to the
+                    # original copy so the action isn't blocked.
+                    shutil.copy2(src, dst)
             # Also copy the per-project SQLite DB (positions, sizes, connections)
             from attr_viewer import _db_file_for_config
             src_db = _db_file_for_config(src)

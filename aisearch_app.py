@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5"
+VERSION = "2.5.1"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -1435,6 +1435,12 @@ class AISearchApp(QMainWindow):
             pw._attr_scroll.setWidget(pw.attr_widget)
             if old_widget:
                 try:
+                    # Hide before detach: a parentless QWidget shows as
+                    # a top-level window with the script's filename
+                    # ("aisearch_main.py") between setParent(None) and
+                    # deleteLater() — the "ghost" the user sees flash
+                    # after Overwrite. hide() suppresses that.
+                    old_widget.hide()
                     old_widget.setParent(None)
                     old_widget.deleteLater()
                 except RuntimeError:

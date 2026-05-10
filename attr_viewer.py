@@ -2063,6 +2063,16 @@ class AnchorBox(QWidget):
         else:
             super().setGeometry(*args)
 
+    def setParent(self, parent=None, *args):
+        """Override: a parentless QWidget is shown as a top-level window
+        with title "aisearch_main.py" — the "ghost app" the user sees
+        flash when the canvas rebuilds. Hide ourselves before detaching
+        so Qt's window manager never gets a chance to render the box
+        as its own window between setParent(None) and deleteLater()."""
+        if parent is None:
+            self.hide()
+        super().setParent(parent, *args)
+
 
 # ── Anchor canvas ─────────────────────────────────────────────────────────────
 
@@ -2394,6 +2404,11 @@ class AttrViewerWidget(QWidget):
     def reload(self, config_path):
         """Destroy current panels and rebuild from a new config file."""
         for w in self.widgets:
+            # Hide first — Qt makes a parentless QWidget a top-level
+            # window, so without this AnchorBox briefly flashes as its
+            # own window titled "aisearch_main.py" until deleteLater()
+            # actually runs.
+            w.hide()
             w.setParent(None)
             w.deleteLater()
         self.widgets.clear()

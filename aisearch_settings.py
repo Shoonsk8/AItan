@@ -12,7 +12,7 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "2.5"
+VERSION = "2.5.1"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):

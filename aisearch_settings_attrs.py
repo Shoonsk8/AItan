@@ -64,6 +64,11 @@ class _AttrsMixin:
         al.addWidget(_hsep())
 
         self._attr_current_project = self._attr_proj_cb.currentText().strip() or "default"
+        # Tracks which project the editor's CURRENTLY LOADED data came
+        # from. Updated by the Load button. _save_attr_groups uses this
+        # to detect cross-project Overwrite and read protection from
+        # the target file instead of the editor's checkbox state.
+        self._attr_editing_proj = self._attr_current_project
 
         def _tags_file_for_current():
             p = self._attr_proj_cb.currentText().strip() or "default"
@@ -139,7 +144,13 @@ class _AttrsMixin:
             # Re-add the stretch that was cleared above
             self._attr_aw_vbox.addStretch()
 
-        btn_proj_load.clicked.connect(_reload_attr_sections)
+        def _on_load_clicked():
+            # Mark editor as showing the dropdown's project so
+            # _save_attr_groups treats a same-target save as the regular
+            # case (editor checkbox state is authoritative).
+            self._attr_editing_proj = self._attr_proj_cb.currentText().strip() or "default"
+            _reload_attr_sections()
+        btn_proj_load.clicked.connect(_on_load_clicked)
         self._reload_attr_sections = _reload_attr_sections  # expose so set_project() can call it
 
 
@@ -262,7 +273,7 @@ class _AttrsMixin:
                 for sec in list(g.sections()):
                     self._attr_aw_vbox.addWidget(sec)
                 self._attr_groups.pop(n, None)
-                g.setParent(None); g.deleteLater()
+                g.hide(); g.setParent(None); g.deleteLater()
             grp._del_btn.clicked.connect(_on_del_group)
             return grp
 
@@ -347,8 +358,49 @@ class _AttrsMixin:
             else:
                 _sec_title_prefix = prefix
 
+            # Yellow rows are user-editable → show 🔒 checkbox.
+            # Blue / readonly rows hide it (protection is moot — values
+            # are locked).
+            _is_editable = not (is_blue_prefix(prefix) or readonly)
+
+            def _wire_protected_autosave(_sec, _pfx=prefix):
+                """Save 🔒 toggle independently to disk so user doesn't
+                have to remember Overwrite for it. Writes only the
+                __protected__ field of the currently-loaded project's
+                tag file."""
+                cb = getattr(_sec, "_protected_cb", None)
+                if cb is None:
+                    return
+                def _on_toggled(checked, p=_pfx):
+                    proj = self._attr_proj_cb.currentText().strip() or "default"
+                    proj_arg = None if proj == "default" else proj
+                    fpath = _am_ref.tags_save_path_for_project(proj_arg)
+                    data = {}
+                    try:
+                        if os.path.exists(fpath):
+                            with open(fpath, encoding="utf-8") as f:
+                                data = json.load(f)
+                    except Exception:
+                        data = {}
+                    cur = set(data.get("__protected__") or [])
+                    if checked: cur.add(p)
+                    else:       cur.discard(p)
+                    if cur: data["__protected__"] = sorted(cur)
+                    else:   data.pop("__protected__", None)
+                    try:
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        # Keep our in-memory mirror in sync
+                        self._attr_protected_set = cur
+                    except Exception:
+                        pass
+                cb.toggled.connect(_on_toggled)
+
             if style == "id":
-                sec = _WsSec(f"{_sec_title_prefix}   │   ID", prefix=prefix, color=_sec_color)
+                sec = _WsSec(f"{_sec_title_prefix}   │   ID", prefix=prefix,
+                             color=_sec_color, editable=_is_editable)
+                sec.set_protected(prefix in getattr(self, "_attr_protected_set", set()))
+                _wire_protected_autosave(sec)
                 _add_to_target(sec)
                 bl = QVBoxLayout(sec.content)
                 # Title text box — same human-readable label field every
@@ -379,7 +431,7 @@ class _AttrsMixin:
                 bl.addWidget(blank_lbl)
                 def _on_del_id(checked=False, pfx=prefix, s=sec):
                     self._attr_ws_loaded.discard(pfx)
-                    s.setParent(None); s.deleteLater()
+                    s.hide(); s.setParent(None); s.deleteLater()
                 sec._del_btn.clicked.connect(_on_del_id)
                 return
 
@@ -390,7 +442,10 @@ class _AttrsMixin:
             _format_hint = ("16×16 matrix" if style == "matrix"
                             else _style_names.get(style, style))
             _sec_title = f"{_sec_title_prefix}   │   {_format_hint}"
-            sec = _WsSec(_sec_title, prefix=prefix, color=_sec_color)
+            sec = _WsSec(_sec_title, prefix=prefix, color=_sec_color,
+                         editable=_is_editable)
+            sec.set_protected(prefix in getattr(self, "_attr_protected_set", set()))
+            _wire_protected_autosave(sec)
             sec._section_style = style   # authoritative style stored on the widget
             _add_to_target(sec)
 
@@ -406,7 +461,7 @@ class _AttrsMixin:
                 self._attr_text_fields.pop(pfx, None)
                 self._attr_col_names.pop(pfx, None)
                 self._attr_parent_names.pop(pfx, None)
-                s.setParent(None); s.deleteLater()
+                s.hide(); s.setParent(None); s.deleteLater()
             if readonly:
                 sec._del_btn.setVisible(False)
             else:
@@ -568,7 +623,7 @@ class _AttrsMixin:
                         if not _readonly:
                             def _del_row(checked=False, e=entry, g=grp):
                                 self._attr_tag_groups[g].remove(e)
-                                e[2].setParent(None); e[2].deleteLater()
+                                e[2].hide(); e[2].setParent(None); e[2].deleteLater()
                             btn_x.clicked.connect(_del_row)
                         return entry
 
@@ -760,6 +815,8 @@ class _AttrsMixin:
             _section_styles = _tags_raw.get("__section_styles__", {})
             _deleted_set = set(_tags_raw.get("__deleted_sections__", []))
             self._attr_deleted_sections = _deleted_set
+            # Per-section "🔒 protected" flag — only meaningful on yellow rows.
+            self._attr_protected_set = set(_tags_raw.get("__protected__", []))
             # group_map: prefix → group_name (or None)
             _group_map = {}
             _saved_groups = _tags_raw.get("__section_groups__", {})
@@ -790,10 +847,30 @@ class _AttrsMixin:
                     if _fd_key not in _loaded_set and _fd_key not in _deleted_set:
                         _section_order.append(_fd_key)
                 # Append any TAG_GROUPS keys (taglist/boolean) not yet in order
-                # Sub-table keys: end in _Table, or start with any existing section prefix + "_"
+                # Sub-table keys: end in _Table, start with any existing
+                # section prefix + "_", OR are listed in FIELD_DEFS /
+                # __col_defs__ as a matrix column source (the 3rd element
+                # of each column tuple). After v2.5 layer-key rename
+                # those keys are flat names like "eye_color"/"hair_style"/
+                # "camera_shot" that don't follow the legacy "<key>_"
+                # prefix pattern, so without this they leaked into the
+                # editor as orphan Tag List rows.
+                _layer_keys = set()
+                for _fd_entry in FIELD_DEFS.values():
+                    if _fd_entry and len(_fd_entry) >= 2:
+                        for _col in (_fd_entry[1] or []):
+                            if len(_col) >= 3 and _col[2]:
+                                _layer_keys.add(_col[2])
+                _col_defs_all = _tags_raw.get("__col_defs__") or {}
+                if isinstance(_col_defs_all, dict):
+                    for _entries in _col_defs_all.values():
+                        for _col in (_entries or []):
+                            if len(_col) >= 3 and _col[2]:
+                                _layer_keys.add(_col[2])
                 _loaded_prefixes = set(_section_order)
                 def _is_subtable(k):
                     if k.endswith("_Table"): return True
+                    if k in _layer_keys: return True
                     for _p in _loaded_prefixes:
                         if k.startswith(_p + "_") and len(k) > len(_p) + 1:
                             return True
@@ -915,6 +992,7 @@ class _AttrsMixin:
     def _remove_attr_row(self, entry):
         name_e, tags_e, row_w = entry
         self._attr_rows.remove(entry)
+        row_w.hide()
         row_w.setParent(None)
         row_w.deleteLater()
 
@@ -1133,6 +1211,29 @@ class _AttrsMixin:
             result["__section_groups__"] = section_groups
             result["__group_order__"] = list(section_groups.keys())
 
+        # Protected sections — protection is OWNED BY THE TARGET, not by
+        # the editor's currently-loaded source. When the user has loaded
+        # AIX into the editor and clicks Overwrite onto "default", the
+        # source of truth for which keys to preserve is default's own
+        # __protected__ list, not the editor's checkbox state.
+        # Editor's checkbox state is only authoritative when target ==
+        # currently-loaded project (the regular save case).
+        _editor_proj_text = (_proj.currentText().strip() or "default") if _proj else "default"
+        _editing_proj = getattr(self, "_attr_editing_proj", _editor_proj_text)
+        _editor_owns_target = (_editing_proj == _editor_proj_text)
+        if _editor_owns_target:
+            _editor_protected = []
+            for _pfx, _w in _pfx_sec_map.items():
+                if hasattr(_w, "is_protected") and _w.is_protected():
+                    _editor_protected.append(_save_key(_pfx))
+            self._attr_protected_set = set(_editor_protected)
+            if _editor_protected:
+                result["__protected__"] = sorted(set(_editor_protected))
+        else:
+            # Cross-project Overwrite: keep target's existing protection
+            # list and preserve target's existing data for those keys.
+            self._attr_protected_set = set()   # decided from disk below
+
         # 5. Collect per-digit column names and parent names for coded fields
         col_names = {}
         for pfx, col_edits in self._attr_col_names.items():
@@ -1188,10 +1289,40 @@ class _AttrsMixin:
             final_json = {}
             for k, v in result.items():
                 final_json[k] = v
+            # 🔒 Protected: source of truth depends on whether this save
+            # is to the same project the editor is showing.
+            #   - Same project (regular save): editor's checkbox state is
+            #     authoritative, written to __protected__.
+            #   - Cross-project Overwrite (e.g. AIX editor → default
+            #     target): TARGET owns its own protection list. Read
+            #     it from the existing target file, keep it intact, and
+            #     preserve target's data for those protected keys.
+            _target_protected_set = self._attr_protected_set or set()
+            if not _editor_owns_target:
+                _target_protected_set = set(existing.get("__protected__", []) or [])
+                if _target_protected_set:
+                    final_json["__protected__"] = sorted(_target_protected_set)
+                else:
+                    final_json.pop("__protected__", None)
+            # Track which protected sections actually overrode the
+            # editor's edits so we can warn the user — they likely
+            # intended changes that won't land on disk.
+            _protected_overrides = []
+            for _pk in _target_protected_set:
+                if _pk in existing and isinstance(existing[_pk], list):
+                    if final_json.get(_pk) != existing[_pk]:
+                        _protected_overrides.append(_pk)
+                    final_json[_pk] = list(existing[_pk])
+                _pkt = f"{_pk}_Table"
+                if _pkt in existing and isinstance(existing[_pkt], list):
+                    if final_json.get(_pkt) != existing[_pkt] and _pk not in _protected_overrides:
+                        _protected_overrides.append(_pk)
+                    final_json[_pkt] = list(existing[_pkt])
+            self._attr_protected_overrides = _protected_overrides
             _internal = {"__text_fields__", "__field_names__", "__col_names__",
                          "__section_order__", "__section_styles__", "__section_groups__",
                          "__group_order__", "__parent_names__", "__col_defs__",
-                         "__deleted_sections__"}
+                         "__deleted_sections__", "__protected__"}
             # Persist deleted sections — merge with any previously saved ones
             _prev_deleted = set(existing.get("__deleted_sections__", []))
             _all_deleted  = _prev_deleted | self._attr_deleted_sections
@@ -1266,3 +1397,15 @@ class _AttrsMixin:
             print(f"[attrs-save] _reload_fn_rules NOT FOUND on self")
         if hasattr(self, '_btn_attr_save'):
             self._flash_saved_btn(self._btn_attr_save)
+        # Warn when protected sections silently kept their disk data
+        # instead of the editor's edits — the user likely thought their
+        # changes saved.
+        _overrides = getattr(self, "_attr_protected_overrides", None) or []
+        if _overrides:
+            QMessageBox.information(
+                self,
+                _t("🔒 Protected sections kept / 🔒 保護セクションは維持"),
+                _t("These sections were NOT overwritten because they are protected:\n\n  • "
+                   + "\n  • ".join(_overrides)
+                   + "\n\nUncheck 🔒 if you want to update them."))
+            self._attr_protected_overrides = []

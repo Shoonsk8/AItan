@@ -1,15 +1,22 @@
 import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QToolButton, QScrollArea,
-                              QApplication, QStyle)
+                              QApplication, QStyle, QCheckBox)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QDrag, QPixmap
 from PyQt6.QtCore import QMimeData
 
 
 class _WsSec(QWidget):
-    """Collapsible workspace section for the Attributes tab with Drag and Drop."""
-    def __init__(self, title: str, prefix: str = "", parent=None, color: str = "#f0c040"):
+    """Collapsible workspace section for the Attributes tab with Drag and Drop.
+
+    `editable=True` (yellow rows) shows a 🔒 Protected checkbox in the
+    header; when checked, _save_attr_groups preserves the section's
+    existing tag-group entries instead of overwriting them with whatever
+    the editor currently shows. State persists in attrs_tags __protected__.
+    """
+    def __init__(self, title: str, prefix: str = "", parent=None,
+                 color: str = "#f0c040", editable: bool = True):
         super().__init__(parent)
         self.prefix = prefix
         self.setAcceptDrops(True)
@@ -40,6 +47,19 @@ class _WsSec(QWidget):
         self._title_lbl = QLabel(title)
         self._title_lbl.setStyleSheet(f"QLabel {{ color:{color}; font-weight:bold; font-size:9pt; }}")
         hdr_lay.addWidget(self._title_lbl, stretch=1)
+
+        # Protected checkbox — only on yellow / editable sections.
+        # Checked: _save_attr_groups keeps the existing tag-group data
+        # instead of overwriting with the editor's current rows.
+        self._protected_cb = None
+        if editable:
+            self._protected_cb = QCheckBox("🔒")
+            self._protected_cb.setToolTip(
+                "Protected: keep existing entries on save / overwrite")
+            self._protected_cb.setStyleSheet(
+                "QCheckBox { color:#cce; font-size:9pt; }"
+                "QCheckBox::indicator { width:12px; height:12px; }")
+            hdr_lay.addWidget(self._protected_cb)
 
         self._del_btn = QPushButton()
         self._del_btn.setIcon(QApplication.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
@@ -107,6 +127,22 @@ class _WsSec(QWidget):
         curr_idx = dst_lay.indexOf(self)
         dst_lay.insertWidget(curr_idx, source)
         event.acceptProposedAction()
+
+    def is_protected(self) -> bool:
+        """Yellow rows: True if user checked the 🔒 box. Blue / readonly
+        rows have no checkbox; treat as not protected."""
+        cb = self._protected_cb
+        return bool(cb is not None and cb.isChecked())
+
+    def set_protected(self, on: bool):
+        """Sync the 🔒 checkbox from saved __protected__ state.
+        Blocks signals so the auto-save toggle handler doesn't fire
+        during load (otherwise every section open writes the file)."""
+        cb = self._protected_cb
+        if cb is not None:
+            cb.blockSignals(True)
+            cb.setChecked(bool(on))
+            cb.blockSignals(False)
 
     def _on_toggle(self, checked: bool):
         # Lazy-build content on first expand
