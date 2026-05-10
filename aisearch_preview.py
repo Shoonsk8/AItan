@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.4.5"
+VERSION = "2.5"
 
 
 def _read_embedded_meta(path):
@@ -813,19 +813,21 @@ class PreviewWindow(QWidget):
         if not _combo_specs:
             # Fallback for installations without __field_combos__ in config
             _combo_specs = {
-                "E":  [("E_Color", 1, "Color"),    ("E_Additional", 2, "Add.")],
-                "HC": [("HC_Color", 1, "Color"),   ("HC_Style", 2, "Style"),  ("HC_Length", 3, "Length")],
-                "FA": [("FA_Dir", 1, "Dir"),        ("FA_Vert", 2, "Vert")],
-                "SK": [("SK_Type", 1, "Type")],
-                "B":  [("B_Shape", 1, "Shape"),    ("B_Size", 2, "Size")],
-                "WH": [("WH_Hip", 1, "Hip"),        ("WH_Waist", 2, "Waist")],
-                "PM": [("PM_Motion", 1, "Motion"),  ("PM_Posture", 2, "Posture")],
-                "CS": [("CS_Light", 1, "Light"),    ("CS_Angle", 2, "Angle"), ("CS_Shot", 3, "Shot")],
-                "BG": [("Background", 3, "Major")],
-                "CL": [("CL_TopColor", 4, "Top Color"),
-                       ("CL_Top",      3, "Top Type"),
-                       ("CL_BotColor", 2, "Bot. Color"),
-                       ("CL_Bot",      1, "Bot. Type")],
+                "Eyes":          [("eye_color", 1, "Color"),       ("eye_additional", 2, "Add.")],
+                "Hair":          [("hair_color", 1, "Color"),      ("hair_style", 2, "Style"),
+                                  ("hair_length", 3, "Length")],
+                "FaceAngle":     [("face_direction", 1, "Dir"),    ("face_vertical", 2, "Vert")],
+                "Skin":          [("Skin_Type", 1, "Type")],
+                "Bust":          [("bust_shape", 1, "Shape"),      ("bust_size", 2, "Size")],
+                "WaistHip":      [("hip_size", 1, "Hip"),          ("waist_size", 2, "Waist")],
+                "PostureMotion": [("motion", 1, "Motion"),         ("posture", 2, "Posture")],
+                "Camera":        [("camera_light", 1, "Light"),    ("camera_angle", 2, "Angle"),
+                                  ("camera_shot", 3, "Shot")],
+                "Background":    [("Background", 3, "Major")],
+                "Clothing":      [("top_color",    4, "Top Color"),
+                                  ("top_type",     3, "Top Type"),
+                                  ("bottom_color", 2, "Bot. Color"),
+                                  ("bottom_type",  1, "Bot. Type")],
             }
 
         # Helper: decode a coded field value to human-readable string
@@ -1101,7 +1103,7 @@ class PreviewWindow(QWidget):
                     if _sk.upper() != _ck:
                         self._code_edits[_ck.lower()] = _hid   # alias
                     _sec_w.register_clear(_add_combo_field(_sec_lay, _ck, _hid))
-                    if _ck == "CS":
+                    if _ck in ("CS", "Camera"):
                         _has_cs = True
                 else:
                     _sec_w.register_clear(_add_plain_field(_sec_lay, _sk.upper(), _extra))
@@ -1198,18 +1200,10 @@ class PreviewWindow(QWidget):
         self._wire_canvas_bool_flags()
         # Make CLIP and FACE canvas tiles auto-expand to show full detection text
         self._setup_clip_face_autoheight()
-        # Design and Drag Mode only available when Arrangement in preview is ON
-        _show_raw = self.handler.app.config.get("show_raw_data", False)
-        _snap_cb = getattr(self._soft_canvas, "_snap_cb", None)
-        _drag_cb = getattr(self._soft_canvas, "_drag_cb", None)
-        if not _show_raw:
-            if _snap_cb:
-                _snap_cb.setEnabled(False)
-                _snap_cb.setChecked(False)
-                self._soft_canvas._set_snap(False)
-            if _drag_cb:
-                _drag_cb.setEnabled(False)
-                _drag_cb.setChecked(False)
+        # Drag / Editable toggles stay enabled regardless of "Arrangement
+        # in preview" — they disabled themselves before because the old
+        # design hid the design controls outside arrangement mode, but
+        # users want them always available.
 
         # Bake row: always visible
         r_bake = QHBoxLayout()
@@ -2153,9 +2147,9 @@ class PreviewWindow(QWidget):
         # Update decode label
         _dec = getattr(self, "_decode_field_fn", None)
         if _dec:
-            _decode_keys = [("E","Eyes"), ("HC","Hair"), ("FA","Face"),
-                            ("SK","Skin"), ("B","Bust"), ("WH","W/H"),
-                            ("PM","Post/Mot"), ("CS","Camera")]
+            _decode_keys = [("Eyes","Eyes"), ("Hair","Hair"), ("FaceAngle","Face"),
+                            ("Skin","Skin"), ("Bust","Bust"), ("WaistHip","W/H"),
+                            ("PostureMotion","Post/Mot"), ("Camera","Camera")]
             parts = []
             for letter, name in _decode_keys:
                 fe = self._code_edits.get(letter.lower())

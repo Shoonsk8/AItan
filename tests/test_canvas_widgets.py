@@ -27,9 +27,9 @@ def _hc_sub_options():
     """Real HC sub-tables loaded from source — not duplicated in the test."""
     from aisearch_attrs import _DEFAULT_TAG_GROUPS
     return {
-        "HC_Color":  _DEFAULT_TAG_GROUPS["HC_Color"],
-        "HC_Style":  _DEFAULT_TAG_GROUPS["HC_Style"],
-        "HC_Length": _DEFAULT_TAG_GROUPS["HC_Length"],
+        "hair_color":  _DEFAULT_TAG_GROUPS["hair_color"],
+        "hair_style":  _DEFAULT_TAG_GROUPS["hair_style"],
+        "hair_length": _DEFAULT_TAG_GROUPS["hair_length"],
     }
 
 
@@ -116,8 +116,8 @@ def test_subpos_constants_sourced_consistently():
     This is a belt-and-suspenders check on top of the regex test."""
     import attr_viewer
     src = open(attr_viewer.__file__, encoding="utf-8").read()
-    # Color must be the leftmost (highest pos) for HC.
-    assert '"Color": 3' in src or '"Color":3' in src, \
-        "HC Color is no longer at pos 3 in attr_viewer.py — flipped back?"
-    # Length must be the rightmost (pos 1).
-    assert '"Length": 1' in src or '"Length":1' in src
+    # Hair color must be the leftmost (highest pos = 3) — the 2026-05 fix.
+    assert '"hair_color": 3' in src or '"hair_color":3' in src, \
+        "Hair color is no longer at pos 3 in attr_viewer.py — flipped back?"
+    # Hair length must be the rightmost (pos 1).
+    assert '"hair_length": 1' in src or '"hair_length":1' in src

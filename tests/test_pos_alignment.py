@@ -19,12 +19,14 @@ from aisearch_attrs import CLIP_AUTO_DETECT
 # Canvas truth — same dict from attr_viewer.py:_SUBPOS, mirrored here so
 # the test fails if either side drifts. Keep in sync with _SUBPOS.
 _CANVAS_SUBPOS = {
-    "CL": {"Bot": 1, "BotColor": 2, "Top": 3, "TopColor": 4},
-    "HC": {"Length": 1, "Style": 2, "Color": 3},
-    "FA": {"Direction": 1, "Vert": 2, "Vertical": 2},
-    "PM": {"Motion": 1, "Posture": 2},
-    "CS": {"Light": 1, "Lighting": 1, "Angle": 2, "Shot": 3},
-    "E":  {"Color": 1, "Additional": 2, "Modifier": 2},
+    "Clothing":      {"bottom_type": 1, "bottom_color": 2, "top_type": 3, "top_color": 4},
+    "Hair":          {"hair_length": 1, "hair_style": 2, "hair_color": 3},
+    "FaceAngle":     {"face_direction": 1, "face_vertical": 2},
+    "PostureMotion": {"motion": 1, "posture": 2},
+    "Camera":        {"camera_light": 1, "camera_angle": 2, "camera_shot": 3},
+    "Eyes":          {"eye_color": 1, "eye_additional": 2},
+    "Bust":          {"bust_shape": 1, "bust_size": 2},
+    "WaistHip":      {"hip_size": 1, "waist_size": 2},
 }
 
 

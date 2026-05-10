@@ -1233,7 +1233,13 @@ class _AttrsMixin:
                 if hasattr(self, '_do_build_tab'):
                     if hasattr(self, '_tabs_built'):
                         self._tabs_built.add(6)
+                    # _do_build_tab calls setCurrentIndex on the tab it builds —
+                    # would jump us off the Attributes tab right after Overwrite.
+                    # Snapshot + restore the current index across the build.
+                    _cur_tab = self.tabs.currentIndex() if hasattr(self, 'tabs') else None
                     self._do_build_tab(6)
+                    if _cur_tab is not None and _cur_tab != 6:
+                        self.tabs.setCurrentIndex(_cur_tab)
                     print(f"[attrs-save] force-built filename rules tab")
         except Exception as _e:
             print(f"[attrs-save] force-build failed: {_e}")

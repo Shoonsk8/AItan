@@ -12,7 +12,7 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "2.4.5"
+VERSION = "2.5"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
@@ -26,6 +26,8 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         self.app = app_instance
         self.setWindowTitle(_lang_label(f"Settings & DB Maintenance - Ver {VERSION} / 設定 & DBメンテナンス - Ver {VERSION}"))
         self.resize(1100, 850)
+        # Allow shrinking past whatever minimum the inner tabs imply.
+        self.setMinimumSize(600, 400)
 
         self._is_scanning = False
         self._stop_scan = False

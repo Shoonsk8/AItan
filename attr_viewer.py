@@ -7,7 +7,7 @@ import sys, json, sqlite3, os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QCheckBox, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QTextEdit, QPlainTextEdit, QGroupBox, QGridLayout, QScrollArea,
-    QColorDialog, QMenu, QLineEdit,
+    QColorDialog, QMenu, QLineEdit, QSizeGrip,
 )
 from PyQt6.QtGui import QColor, QAction, QPainter, QPen, QBrush
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint
@@ -220,6 +220,11 @@ def load_positions(conn):
     return {r[0]: (r[1], r[2]) for r in conn.execute("SELECT key,x,y FROM layout")}
 
 def save_position(conn, key, x, y):
+    # Anchor's TL is fixed at (0, 0); never persist a position for it,
+    # otherwise some peer-move path could save the box at e.g. (20, 1606)
+    # and the anchor would render off-corner on next launch.
+    if key == "__anchor__":
+        return
     conn.execute("INSERT OR REPLACE INTO layout VALUES (?,?,?)", (key,x,y))
     conn.commit()
 
@@ -688,19 +693,47 @@ class FieldWidget(QGroupBox):
             # Each entry is (sub_key, QComboBox, pos) where pos is the 1-based
             # digit position the combo controls (pos=1 = rightmost digit).
             self._coded_combos = []   # [(sub_key, QComboBox, pos), ...]
+            # First try the legacy convention: sub-tables keyed "<key>_<suffix>".
             sub_tables = [(k, v) for k, v in self._cfg.items()
                           if k.startswith(key + "_") and isinstance(v, list) and v]
+            # If none found, look up FIELD_DEFS or __col_defs__ — for renamed
+            # widgets the layer keys are arbitrary strings (e.g. "hair_color",
+            # "eye_color") that don't match the "<key>_" pattern. The 3rd
+            # element of each column tuple is the tag-table key.
+            if not sub_tables:
+                _col_sources = []
+                try:
+                    from attribute_manager import FIELD_DEFS as _FD
+                    _fd_entry = _FD.get(key)
+                    if _fd_entry and len(_fd_entry) >= 2:
+                        _col_sources = list(_fd_entry[1])
+                except Exception:
+                    pass
+                if not _col_sources:
+                    # User-customizable matrices (CL/B/WH) define their
+                    # columns in attrs_tags __col_defs__ instead of FIELD_DEFS.
+                    _col_defs_all = self._cfg.get("__col_defs__")
+                    if isinstance(_col_defs_all, dict):
+                        _col_sources = list(_col_defs_all.get(key) or [])
+                for _col in _col_sources:
+                    if len(_col) >= 3 and _col[2]:
+                        _lk = _col[2]
+                        _opts = self._cfg.get(_lk)
+                        if isinstance(_opts, list) and _opts:
+                            sub_tables.append((_lk, _opts))
             # Map sub-table suffix → digit position. Without this, combos were
             # indexed by config-iteration order, so a project that listed
             # CL_Top before CL_Bot would have the "Top" combo display the
             # bottom digit (pos 1) — confusing the user.
             _SUBPOS = {
-                "CL": {"Bot": 1, "BotColor": 2, "Top": 3, "TopColor": 4},
-                "HC": {"Length": 1, "Style": 2, "Color": 3},
-                "FA": {"Direction": 1, "Vert": 2, "Vertical": 2},
-                "PM": {"Motion": 1, "Posture": 2},
-                "CS": {"Light": 1, "Lighting": 1, "Angle": 2, "Shot": 3},
-                "E":  {"Color": 1, "Additional": 2, "Modifier": 2},
+                "Clothing":      {"bottom_type": 1, "bottom_color": 2, "top_type": 3, "top_color": 4},
+                "Hair":          {"hair_length": 1, "hair_style": 2, "hair_color": 3},
+                "FaceAngle":     {"face_direction": 1, "face_vertical": 2},
+                "PostureMotion": {"motion": 1, "posture": 2},
+                "Camera":        {"camera_light": 1, "camera_angle": 2, "camera_shot": 3},
+                "Eyes":          {"eye_color": 1, "eye_additional": 2},
+                "Bust":          {"bust_shape": 1, "bust_size": 2},
+                "WaistHip":      {"hip_size": 1, "waist_size": 2},
             }
             _pos_map = _SUBPOS.get(key, {})
             def _pos_for(sub_key):
@@ -723,7 +756,10 @@ class FieldWidget(QGroupBox):
                 # them all when the user flips freq ⇄ alpha sort.
                 self._sub_combos = []   # list of (combo, options)
                 for _idx, (sub_key, sub_opts) in enumerate(sub_tables):
-                    sub_lbl = sub_key[len(key)+1:].replace("_", " ")
+                    if sub_key.startswith(key + "_"):
+                        sub_lbl = sub_key[len(key)+1:].replace("_", " ")
+                    else:
+                        sub_lbl = sub_key.replace("_", " ")
                     row = QHBoxLayout(); row.setSpacing(4)
                     row.addWidget(QLabel(sub_lbl + ":", styleSheet="color:#aaa;font-size:9pt;"))
                     cb = QComboBox(); cb.setStyleSheet(_CB_SS)
@@ -1865,6 +1901,169 @@ class FieldWidget(QGroupBox):
             pass
 
 
+# ── AnchorBox ─────────────────────────────────────────────────────────────────
+
+class AnchorBox(QWidget):
+    """Fixed anchor pinned at canvas (0, 0). User-resizable from the
+    bottom-right grip; serves as a connection target so any FieldWidget
+    wired to it stays anchored across project switches. Has the same
+    4 corner ports as FieldWidget so the existing connection / snap
+    cascade machinery works without modification.
+
+    Stored as canvas-DB key "__anchor__"; only its size persists.
+    """
+    KEY = "__anchor__"
+    # FieldWidget-shaped signals so the canvas's `for w in self.widgets:`
+    # signal-connect loops don't AttributeError on the anchor.
+    moved            = pyqtSignal(str, int, int)
+    resized          = pyqtSignal(str)
+    action_triggered = pyqtSignal(str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.key      = self.KEY
+        self.style    = "anchor"
+        # FieldWidget-shaped fields the canvas/connection code touches.
+        self._cfg          = {}
+        self._group        = None
+        self._group_peers  = []
+        self._canvas_ref   = None
+        self._selected     = False
+        self._collapsed    = False
+        self._collapsible  = False
+        self._snapping     = False
+        self._snap         = False
+        self._hidden_for   = []
+        self._coded_combos = []
+        self._sub_combos   = []
+        self._btns         = {}
+        self._hex_grid_btns = {}
+        self._conditions   = []
+        self._cfg_path     = None
+        self._popup_mode   = "freq"
+        self._mode_token   = None
+        self.options       = []
+        self._te           = None
+        self._pid_edit     = None
+        self._collapsible  = False
+        # Drag/edit are disabled — anchor never moves. Resize is via grip.
+        self.drag_mode     = False
+        self.edit_mode     = False
+        self._drag_pos     = None
+        self._resize_pos   = None
+        self._resize_dir   = None
+        self._resize_start_size = None
+        # Visuals — blank box (no label), pinned at (0, 0).
+        self.setStyleSheet(
+            "background: rgba(60, 80, 110, 140);"
+            "border: 2px dashed #5588aa;")
+        self.setAutoFillBackground(False)
+        self.resize(40, 24)
+        self.move(0, 0)
+        # Edge-resize via mouse on the right/bottom edge — TL is pinned,
+        # only BR grows. Hover near right or bottom edge to see the
+        # resize cursor.
+        self.setMouseTracking(True)
+        self._resize_pos        = None
+        self._resize_start_size = None
+        self._resize_dir        = None
+
+    _GRIP = 8   # px edge thickness that activates resize
+
+    def _resize_mode(self, pos):
+        on_r = pos.x() >= self.width()  - self._GRIP
+        on_b = pos.y() >= self.height() - self._GRIP
+        if on_r and on_b: return "both"
+        if on_r:          return "h"
+        if on_b:          return "v"
+        return None
+
+    def resizeEvent(self, ev):
+        # TL stays pinned at (0, 0).
+        if self.x() != 0 or self.y() != 0:
+            self.move(0, 0)
+        super().resizeEvent(ev)
+        cv = getattr(self, "_canvas_ref", None)
+        if cv:
+            cv.update()
+            viewer = getattr(cv, "_viewer", None)
+            if viewer:
+                if hasattr(viewer, "_schedule_snap"):
+                    viewer._schedule_snap(self.key)
+                _conn = getattr(viewer, "conn", None)
+                if _conn:
+                    try:
+                        save_size(_conn, self.key, self.width(), self.height())
+                    except Exception:
+                        pass
+
+    def mousePressEvent(self, ev):
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = ev.position().toPoint()
+        m = self._resize_mode(pos)
+        if m:
+            self._resize_pos        = ev.globalPosition().toPoint()
+            self._resize_start_size = self.size()
+            self._resize_dir        = m
+            ev.accept()
+        else:
+            # Pass through so canvas can detect port-dot clicks just
+            # outside our box edges.
+            ev.ignore()
+
+    def mouseMoveEvent(self, ev):
+        if self._resize_pos is not None:
+            delta = ev.globalPosition().toPoint() - self._resize_pos
+            w = self._resize_start_size.width()
+            h = self._resize_start_size.height()
+            if self._resize_dir in ("h", "both"):
+                w = max(10, w + delta.x())
+            if self._resize_dir in ("v", "both"):
+                h = max(10, h + delta.y())
+            self.resize(int(w), int(h))
+            ev.accept()
+            return
+        # Update cursor when hovering an edge.
+        m = self._resize_mode(ev.position().toPoint())
+        if   m == "both": self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif m == "h":    self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif m == "v":    self.setCursor(Qt.CursorShape.SizeVerCursor)
+        else:             self.unsetCursor()
+        ev.ignore()
+
+    def mouseReleaseEvent(self, ev):
+        if self._resize_pos is not None:
+            self._resize_pos = None
+            self._resize_start_size = None
+            self._resize_dir = None
+            ev.accept()
+            return
+        ev.ignore()
+
+    def set_selected(self, on):  self._selected = bool(on)
+    def set_edit_mode(self, on): self.edit_mode = bool(on)
+
+    def move(self, *args):
+        """Anchor's TL is permanently pinned at (0, 0); ignore any
+        attempt to relocate it. _auto_grid_layout, _align_left/top,
+        undo, snap cascade — all bypassed for this widget."""
+        super().move(0, 0)
+
+    def setGeometry(self, *args):
+        """Same lock as move() but covers code paths that resize+move
+        in one call (Qt's setGeometry rect form)."""
+        from PyQt6.QtCore import QRect
+        if len(args) == 1 and isinstance(args[0], QRect):
+            r = args[0]
+            super().setGeometry(0, 0, r.width(), r.height())
+        elif len(args) == 4:
+            _x, _y, w, h = args
+            super().setGeometry(0, 0, int(w), int(h))
+        else:
+            super().setGeometry(*args)
+
+
 # ── Anchor canvas ─────────────────────────────────────────────────────────────
 
 class _AnchorCanvas(QWidget):
@@ -1917,6 +2116,7 @@ class _AnchorCanvas(QWidget):
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
 
         # Connection lines
         for _, ba, pa, bb, pb in self._connections:
@@ -2211,9 +2411,14 @@ class AttrViewerWidget(QWidget):
         load_usage(self.conn)
         self._build(load_positions(self.conn), load_group_colors(self.conn),
                     load_sizes(self.conn), load_collapsed(self.conn))
-        # Re-apply current mode and edit state after rebuild
+        # Re-apply current mode and edit state after rebuild — fresh
+        # widgets default to drag_mode=False/edit_mode=False, so without
+        # both lines below the toolbar checkboxes show ON but the new
+        # widgets don't respond until user unchecks/rechecks. Hits the
+        # Settings → Canvas "Load" path which calls reload().
         self._apply_mode(self._mode_cb.currentText())
         self._set_snap(self._snap_cb.isChecked())
+        self._set_drag(self._drag_cb.isChecked())
 
     def _build(self, positions, group_colors=None, sizes=None, collapsed_state=None):
         cfg         = self.cfg
@@ -2366,7 +2571,11 @@ class AttrViewerWidget(QWidget):
                         w._fill_combo(preserve=True)
                     except Exception:
                         pass
-            px, py = positions.get(key, (x, y))
+            # Anchor unsaved widgets at top-left (10, 10). Was a tiled
+            # fallback (x, y), but that hid orphans across the canvas
+            # whenever a project lost a saved position. Piling at the
+            # corner makes them obvious so the user can drag them out.
+            px, py = positions.get(key, (10, 10))
             px = max(0, min(px, 4000))   # clamp in case of corrupted saved position
             py = max(0, min(py, 4000))
             w.move(px, py)
@@ -2423,6 +2632,27 @@ class AttrViewerWidget(QWidget):
             w._group_peers = grp_map.get(w._group, [w])
             w._canvas_ref  = self   # so _resize_te can propagate
 
+        # ── Add the fixed AnchorBox at (0,0) so wired widgets can pin to it.
+        # Persisted size lives in the canvas DB under key "__anchor__".
+        self._anchor = AnchorBox(parent=self.canvas)
+        self._anchor._canvas_ref = self.canvas
+        # Restore saved size if any (positions table row x,y is ignored —
+        # anchor is always at 0,0; we hijack only the sizes row).
+        try:
+            _szrow = sizes.get(AnchorBox.KEY) if sizes else None
+            if _szrow:
+                self._anchor.resize(int(_szrow[0]), int(_szrow[1]))
+        except Exception:
+            pass
+        self._anchor.move(0, 0)
+        self._anchor.show()
+        # Sit behind other widgets so clicks on widgets that overlap the
+        # anchor (e.g. Person at top-left) reach the widget, not the anchor.
+        # Port-dot clicks still work because dots are drawn outside the
+        # anchor's body by _DOT_R px and the canvas paints them on top.
+        self._anchor.lower()
+        self.widgets.append(self._anchor)
+
         # Sync canvas refs
         self.canvas._widgets     = self.widgets
         self.canvas._connections = self._connections
@@ -2439,9 +2669,10 @@ class AttrViewerWidget(QWidget):
         # Only created if no connection already exists between the pair — user's
         # manual wiring is preserved.
         _DEBUG_PARENT = {
-            "CLIP_E":  "E",  "CLIP_HC": "HC", "CLIP_FA": "FA", "CLIP_SK": "SK",
-            "CLIP_PM": "PM", "CLIP_CS": "CS", "CLIP_BG": "Background",
-            "CLIP_X":  "X",  "CLIP_CL": "CL",
+            "CLIP_E":  "Eyes",     "CLIP_HC": "Hair",     "CLIP_FA": "FaceAngle",
+            "CLIP_SK": "Skin",     "CLIP_PM": "PostureMotion",
+            "CLIP_CS": "Camera",   "CLIP_BG": "Background",
+            "CLIP_X":  "Expression","CLIP_CL": "Clothing",
             "FACE":    "P",
             "FACE_PW": "PW",
         }
@@ -2559,6 +2790,10 @@ class AttrViewerWidget(QWidget):
     def _snap_child(self, conn_row):
         """Move child widget so its port aligns with parent's port."""
         _, parent_key, parent_port, child_key, child_port = conn_row
+        # Anchor is fixed at (0, 0) — never let the cascade move it,
+        # regardless of which end of the connection it sits on.
+        if child_key == AnchorBox.KEY:
+            return
         wmap = {w.key: w for w in self.widgets}
         pw = wmap.get(parent_key)
         cw = wmap.get(child_key)

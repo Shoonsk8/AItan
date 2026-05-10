@@ -33,15 +33,15 @@ _RESULT_FAIL = "FAIL"
 
 _CLIP_FIELDS    = {s["field"] for s in CLIP_AUTO_DETECT}
 _DEBUG_PARENTS  = {
-    "CLIP_E":  ["E", "Eyes"],
-    "CLIP_HC": ["HC", "Hair"],
-    "CLIP_FA": ["FA", "FaceAngle"],
-    "CLIP_SK": ["SK", "Skin"],
-    "CLIP_PM": ["PM", "PostureMotion"],
-    "CLIP_CS": ["CS", "CameraShot"],
-    "CLIP_BG": ["BG", "Background"],
-    "CLIP_X":  ["X",  "Expression"],
-    "CLIP_CL": ["CL", "Clothing"],
+    "CLIP_E":  ["Eyes"],
+    "CLIP_HC": ["Hair"],
+    "CLIP_FA": ["FaceAngle"],
+    "CLIP_SK": ["Skin"],
+    "CLIP_PM": ["PostureMotion"],
+    "CLIP_CS": ["Camera"],
+    "CLIP_BG": ["Background"],
+    "CLIP_X":  ["Expression"],
+    "CLIP_CL": ["Clothing"],
     "FACE":    ["P"],
     "FACE_PW": ["PW"],
 }

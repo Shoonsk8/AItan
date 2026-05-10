@@ -359,7 +359,7 @@ _DEFAULT_TAG_GROUPS = {
     ],
     # ── Eyes  E[additional][color]  ──────────────────────────────────────────
     # 1st digit (right) = color
-    "E_Color": [
+    "eye_color": [
         ["0", "Closed / No eyes"],   ["1", "Brown"],    ["2", "Blue"],
         ["3", "Hazel"],              ["4", "Amber"],    ["5", "Gray"],
         ["6", "Green"],              ["7", "Violet"],   ["8", "Red"],
@@ -374,7 +374,7 @@ _DEFAULT_TAG_GROUPS = {
     # HC stored value reads LEFT→RIGHT as Color, Style, Length.
     # Position numbering (used by CLIP_AUTO_DETECT and canvas _SUBPOS):
     # pos 1 = rightmost = Length, pos 2 = middle = Style, pos 3 = leftmost = Color.
-    "HC_Color": [
+    "hair_color": [
         ["0", "No hair"],            ["1", "Black"],          ["2", "Dark Brown"],
         ["3", "Light Brown"],        ["4", "Blonde"],         ["5", "Platinum Blonde"],
         ["6", "Red"],                ["7", "Pink"],           ["8", "Ginger"],
@@ -383,7 +383,7 @@ _DEFAULT_TAG_GROUPS = {
         ["f", "Neon"],
     ],
     # middle digit = style (pos 2)
-    "HC_Style": [
+    "hair_style": [
         ["0", "(none)"],         ["1", "Straight"],       ["2", "Wavy"],
         ["3", "Curly"],          ["4", "Voluminous"],     ["5", "Bob"],
         ["6", "Ponytail"],       ["7", "Braid"],          ["8", "Tied"],
@@ -398,7 +398,7 @@ _DEFAULT_TAG_GROUPS = {
         ["x", "Crew Cut"],       ["y", "Undercut"],       ["z", "Spiky"],
     ],
     # rightmost digit = length (pos 1)
-    "HC_Length": [
+    "hair_length": [
         ["0", "(none)"],      ["1", "Very Short"],  ["2", "Short"],
         ["3", "Medium"],      ["4", "Long"],        ["5", "Very Long"],
         ["6", "Bald"],        ["7", "Partially Bald"],
@@ -406,17 +406,17 @@ _DEFAULT_TAG_GROUPS = {
 
     # ── Face Angle  FA[vertical][direction]  ─────────────────────────────────
     # 1st digit = direction
-    "FA_Dir": [
+    "face_direction": [
         ["0", "Front"],        ["1", "Right"],       ["2", "Right 3/4"],
         ["3", "Left"],         ["4", "Left 3/4"],    ["5", "Back"],
     ],
     # 2nd digit = vertical tilt
-    "FA_Vert": [
+    "face_vertical": [
         ["0", "Horizontal"],   ["1", "Upward"],      ["2", "Downward"],
     ],
 
     # ── Skin  SK[reserved][type]  ────────────────────────────────────────────
-    "SK_Type": [
+    "Skin_Type": [
         ["0", "Type I — Very Fair"],       ["1", "Type II — Fair"],
         ["2", "Type III — Medium"],        ["3", "Type IV — Olive"],
         ["4", "Type V — Dark Brown"],      ["5", "Type VI — Deeply Pigmented"],
@@ -424,7 +424,7 @@ _DEFAULT_TAG_GROUPS = {
 
     # ── Bust  B[size][shape]  ────────────────────────────────────────────────
     # 2nd digit = size
-    "B_Size": [
+    "bust_size": [
         ["0", "(none)"],             ["1", "Flat / Male / Neutral"],
         ["2", "Athletic / Pectorals"],["3", "Petite / AAA-A"],
         ["4", "Small / B-C"],        ["5", "Medium / D-E"],
@@ -432,7 +432,7 @@ _DEFAULT_TAG_GROUPS = {
         ["8", "Enhanced"],
     ],
     # 1st digit = shape  (TBD — reserve f0 range)
-    "B_Shape": [
+    "bust_shape": [
         ["0", "(undefined)"],   ["1", "Square (Pecs)"],  ["2", "Round"],
         ["3", "Teardrop"],      ["4", "Broad"],          ["5", "Side Set"],
         ["6", "Slender"],
@@ -440,13 +440,13 @@ _DEFAULT_TAG_GROUPS = {
 
     # ── WaistHip  WH[waist][hip]  ────────────────────────────────────────────
     # 1st digit = hip
-    "WH_Hip": [
+    "hip_size": [
         ["0", "(none)"],          ["1", "Thin"],           ["2", "Athletic / Firm"],
         ["3", "Average"],         ["4", "Curvy / Full"],   ["5", "Large / Wide"],
         ["6", "Extra Large"],     ["7", "Sticks out"],
     ],
     # 2nd digit = waist
-    "WH_Waist": [
+    "waist_size": [
         ["0", "(none)"],          ["1", "Flat / Thin"],    ["2", "Athletic / Firm"],
         ["3", "Average"],         ["4", "Curvy / Full"],   ["5", "Large / Wide"],
         ["6", "Extra Large"],     ["7", "Pregnant"],
@@ -454,14 +454,14 @@ _DEFAULT_TAG_GROUPS = {
 
     # ── Posture+Motion  PM[posture][motion]  ─────────────────────────────────
     # 2nd digit = posture. Code 0 is the "Standing" default (default_is_zero).
-    "PM_Posture": [
+    "posture": [
         ["0", "Standing"],                ["1", "Standing in style"],
         ["2", "Sitting"],                 ["3", "Kneeling"],
         ["4", "Lying"],                   ["5", "Leaning"],
         ["6", "Crouching"],               ["7", "Handstand"],
     ],
     # 1st digit = motion. Code 0 is the "Still" default (default_is_zero).
-    "PM_Motion": [
+    "motion": [
         ["0", "Still"],       ["2", "Walking"],     ["3", "Running"],
         ["4", "Dancing"],     ["5", "Looking at Camera"],
         ["6", "Talking"],     ["7", "Gesturing"],   ["8", "Fighting"],
@@ -469,19 +469,19 @@ _DEFAULT_TAG_GROUPS = {
 
     # ── Camera/Shot  CS[shot][angle][lighting]  ──────────────────────────────
     # 3rd digit = shot area
-    "CS_Shot": [
+    "camera_shot": [
         ["0", "(none)"],             ["1", "Extreme Close-Up"],   ["2", "Face Close-Up"],
         ["3", "Big Close-Up"],       ["4", "Close-Up"],           ["5", "Bust Shot"],
         ["6", "Medium Close-Up"],    ["7", "Medium Shot"],        ["8", "Cowboy Shot"],
         ["9", "Full Shot"],          ["a", "Wide Shot"],          ["b", "Extreme Wide"],
     ],
     # 2nd digit = angle
-    "CS_Angle": [
+    "camera_angle": [
         ["0", "Eye Level"],    ["1", "Low Angle"],     ["2", "High Angle"],
         ["3", "Over-Shoulder"],["4", "Dutch Angle"],   ["5", "Bird's Eye"],
     ],
     # 1st digit = lighting. Code 0 is the "Natural" default (default_is_zero).
-    "CS_Light": [
+    "camera_light": [
         ["0", "Natural"],      ["1", "Sunshine"],      ["2", "Sunset"],
         ["3", "Studio"],       ["4", "Cinematic"],     ["5", "Anime"],
         ["6", "Night"],
@@ -586,23 +586,23 @@ SOURCE_TAGS       = _tag_keys("Source") or {"comfyui", "a1111", "aix", "other_sr
 AUDIO_TAGS        = (_tag_keys("audio") or _tag_keys("Audio")
                      or {"none", "aac", "mp3", "opus", "vorbis", "flac", "ac3", "eac3", "sound"})
 # Per-digit sub-table sets
-E_COLOR_TAGS      = _tag_keys("E_Color")
-E_ADDITIONAL_TAGS  = _tag_keys("E_Additional")
-HC_COLOR_TAGS     = _tag_keys("HC_Color")
-HC_STYLE_TAGS     = _tag_keys("HC_Style")
-HC_LENGTH_TAGS    = _tag_keys("HC_Length")
-FA_DIR_TAGS       = _tag_keys("FA_Dir")
-FA_VERT_TAGS      = _tag_keys("FA_Vert")
-SK_TYPE_TAGS      = _tag_keys("SK_Type")
-B_SIZE_TAGS       = _tag_keys("B_Size")
-B_SHAPE_TAGS      = _tag_keys("B_Shape")
-WH_HIP_TAGS       = _tag_keys("WH_Hip")
-WH_WAIST_TAGS     = _tag_keys("WH_Waist")
-PM_POSTURE_TAGS   = _tag_keys("PM_Posture")
-PM_MOTION_TAGS    = _tag_keys("PM_Motion")
-CS_SHOT_TAGS      = _tag_keys("CS_Shot")
-CS_ANGLE_TAGS     = _tag_keys("CS_Angle")
-CS_LIGHT_TAGS     = _tag_keys("CS_Light")
+E_COLOR_TAGS      = _tag_keys("eye_color")
+E_ADDITIONAL_TAGS  = _tag_keys("eye_additional")
+HC_COLOR_TAGS     = _tag_keys("hair_color")
+HC_STYLE_TAGS     = _tag_keys("hair_style")
+HC_LENGTH_TAGS    = _tag_keys("hair_length")
+FA_DIR_TAGS       = _tag_keys("face_direction")
+FA_VERT_TAGS      = _tag_keys("face_vertical")
+SK_TYPE_TAGS      = _tag_keys("Skin_Type")
+B_SIZE_TAGS       = _tag_keys("bust_size")
+B_SHAPE_TAGS      = _tag_keys("bust_shape")
+WH_HIP_TAGS       = _tag_keys("hip_size")
+WH_WAIST_TAGS     = _tag_keys("waist_size")
+PM_POSTURE_TAGS   = _tag_keys("posture")
+PM_MOTION_TAGS    = _tag_keys("motion")
+CS_SHOT_TAGS      = _tag_keys("camera_shot")
+CS_ANGLE_TAGS     = _tag_keys("camera_angle")
+CS_LIGHT_TAGS     = _tag_keys("camera_light")
 # Legacy empty stubs — functionality moved to coded fields (CS, FA, PM, R)
 RESOLUTION_TAGS   = set()
 SHOT_TAGS         = set()
@@ -1853,7 +1853,7 @@ def file_fingerprint(path):
         return None
 
 _AITAN_PREFIX = "AItan"
-_AITAN_VERSION = "2.4.5"  # stamped into every AItan{} block as "ver"
+_AITAN_VERSION = "2.5"  # stamped into every AItan{} block as "ver"
 
 def _extract_aitan_block(text: str) -> dict | None:
     """Parse AItan{...} from a metadata string. Returns dict or None."""

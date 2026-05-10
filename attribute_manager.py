@@ -17,29 +17,29 @@ TAG_GROUPS_FILE = os.path.join(_DATA_DIR, "attrs_tags.json")   # same as TAGS_FI
 #         columns ordered right-to-left (1st digit first, then 2nd, 3rd, 4th)
 # ---------------------------------------------------------------------------
 FIELD_DEFS = {
-    "E":  ("2dig",  [("Colors 1st",    "colors_1st",    "E_Color"),
-                     ("Additional 2nd","additional_2nd", "E_Additional")]),
-    "HC": ("3dig",  [("Colors 1st",    "colors_1st",    "HC_Color"),
-                     ("Style 2nd",     "style_2nd",      "HC_Style"),
-                     ("Length 3rd",    "length_3rd",     "HC_Length")]),
-    "FA": ("2dig",  [("Direction 1st", "direction_1st",  "FA_Dir"),
-                     ("Vertical 2nd",  "vertical_2nd",   "FA_Vert")]),
-    "SK": ("1dig",  [("Skin Type",     "type_1st",       "SK_Type")]),
-    "PM": ("2dig",  [("Motion 1st",    "motion_1st",     "PM_Motion"),
-                     ("Posture 2nd",   "posture_2nd",     "PM_Posture")]),
-    "CS": ("3dig",  [("Lighting 1st",  "lighting_1st",   "CS_Light"),
-                     ("Angle 2nd",     "angle_2nd",       "CS_Angle"),
-                     ("Shot 3rd",      "shot_3rd",        "CS_Shot")]),
+    "Eyes":          ("2dig",  [("Colors 1st",    "colors_1st",    "eye_color"),
+                                 ("Additional 2nd","additional_2nd", "eye_additional")]),
+    "Hair":          ("3dig",  [("Colors 1st",    "colors_1st",    "hair_color"),
+                                 ("Style 2nd",     "style_2nd",      "hair_style"),
+                                 ("Length 3rd",    "length_3rd",     "hair_length")]),
+    "FaceAngle":     ("2dig",  [("Direction 1st", "direction_1st",  "face_direction"),
+                                 ("Vertical 2nd",  "vertical_2nd",   "face_vertical")]),
+    "Skin":          ("1dig",  [("Skin Type",     "type_1st",       "Skin_Type")]),
+    "PostureMotion": ("2dig",  [("Motion 1st",    "motion_1st",     "motion"),
+                                 ("Posture 2nd",   "posture_2nd",    "posture")]),
+    "Camera":        ("3dig",  [("Lighting 1st",  "lighting_1st",   "camera_light"),
+                                 ("Angle 2nd",     "angle_2nd",       "camera_angle"),
+                                 ("Shot 3rd",      "shot_3rd",        "camera_shot")]),
     # CL (Clothing) is user-customizable (renders yellow) — its columns live in
     # __col_defs__ inside attrs_tags.json so users can edit the sub-tables.
-    "X":  ("matrix",[("Expression",   "expression",      None)]),
-    "BG": ("matrix",[("Background",   "background",      None)]),
+    "Expression":  ("matrix",[("Expression",   "expression",      None)]),
+    "Background": ("matrix",[("Background",   "background",      None)]),
     "Watermark":       ("radio",   []),
     "P":               ("id",      []),
     "J":               ("id",      []),
     "PI":              ("id",      []),
     "PW":              ("id",      []),
-    "A":               ("matrix",  [("Animal", "animal", None)]),
+    "Animal":          ("matrix",  [("Animal", "animal", None)]),
     "O":               ("taglist",  []),
     "R":               ("taglist",  []),
     "K":               ("taglist",  []),
@@ -68,14 +68,14 @@ _STYLE_PAD = {"1dig": 1, "2dig": 2, "3dig": 3, "4dig": 4, "matrix": 2, "id": 3}
 # Everything else is yellow.
 BLUE_PREFIXES = {
     # Universal physical / composition
-    "E",   # Eyes
-    "HC",  # Hair
-    "FA",  # Face Angle
-    "SK",  # Skin
-    "CS",  # Camera Shot
+    "Eyes",
+    "Hair",
+    "FaceAngle",
+    "Skin",
+    "Camera",
     # File-derived / fixed
     "O", "R", "K", "audio", "Watermark",
-    # ID structural markers — A removed (now a yellow user-editable matrix)
+    # ID structural markers — Animal removed (now a yellow user-editable matrix)
     "P", "J", "PI", "PW",
     # Per-file lineage list — universal/system attribute
     "related",

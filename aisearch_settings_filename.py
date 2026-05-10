@@ -320,9 +320,9 @@ class _FilenameMixin:
         _ALL_FIELDS = [("P", "Person", 3, "person_id")] + list(_am.CODED_FIELDS)
 
         _FIELD_TAG_GROUP = {
-            "E": "E_Color", "HC": "HC_Color", "FA": "FA_Dir",
-            "SK": "SK_Type", "B": "B_Size", "WH": "WH_Hip",
-            "PM": "PM_Motion", "CS": "CS_Shot", "BG": "Background",
+            "E": "eye_color", "HC": "hair_color", "FA": "face_direction",
+            "SK": "Skin_Type", "B": "bust_size", "WH": "hip_size",
+            "PM": "motion", "CS": "camera_shot", "BG": "Background",
             "O": "O_Preset", "R": "R_Preset", "K": "K_Preset",
         }
 
@@ -446,28 +446,24 @@ class _FilenameMixin:
                         break
                 _sub_specs = []
                 if _coded_digits >= 2 and not _attr_is_boolean(key) and not extract:
+                    # Map filename letter -> {tag_group_key: pos}
                     _SUBPOS = {
-                        "HC": {"Length": 1, "Style": 2, "Color": 3},
-                        "FA": {"Direction": 1, "Vert": 2, "Vertical": 2},
-                        "PM": {"Motion": 1, "Posture": 2},
-                        "CS": {"Light": 1, "Lighting": 1, "Angle": 2, "Shot": 3},
-                        "E":  {"Color": 1, "Additional": 2, "Modifier": 2},
-                        "B":  {"Shape": 1, "Size": 2},
-                        "WH": {"Hip": 1, "Waist": 2},
-                        "SK": {"Type": 1},
+                        "HC": {"hair_length": 1, "hair_style": 2, "hair_color": 3},
+                        "FA": {"face_direction": 1, "face_vertical": 2},
+                        "PM": {"motion": 1, "posture": 2},
+                        "CS": {"camera_light": 1, "camera_angle": 2, "camera_shot": 3},
+                        "E":  {"eye_color": 1, "eye_additional": 2},
+                        "B":  {"bust_shape": 1, "bust_size": 2},
+                        "WH": {"hip_size": 1, "waist_size": 2},
+                        "SK": {"Skin_Type": 1},
                     }
                     _pos_map = _SUBPOS.get(key, {})
-                    for _grp_key, _opts in _am.TAG_GROUPS.items():
-                        if not _grp_key.startswith(key + "_"):
-                            continue
+                    for _grp_key, _pos in _pos_map.items():
+                        _opts = _am.TAG_GROUPS.get(_grp_key)
                         if not isinstance(_opts, list) or not _opts:
                             continue
-                        _suffix = _grp_key[len(key)+1:]
-                        _pos = _pos_map.get(_suffix)
-                        if not _pos:
-                            continue
                         _opt_pairs = [(f"{lbl}  ({k})", k) for k, lbl in _opts]
-                        _sub_specs.append((_suffix, _opt_pairs, _pos))
+                        _sub_specs.append((_grp_key, _opt_pairs, _pos))
                 if _sub_specs:
                     val_cb.set_multi(_sub_specs)
                     val_cb.setEnabled(True)
