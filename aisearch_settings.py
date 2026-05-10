@@ -12,7 +12,7 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
@@ -104,10 +104,17 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         # then set the correct index before unblocking so the first repaint
         # already shows the right tab (avoids the MetaMap flash).
         self.tabs.blockSignals(True)
+        # Hide placeholder BEFORE removeTab so it doesn't briefly flash
+        # as a top-level "aisearch_main.py" ghost window between the
+        # tab-detach and deleteLater(). Same pattern as the other
+        # widget-tear-down sites.
+        if placeholder is not None:
+            placeholder.hide()
         self.tabs.removeTab(last)
         self.tabs.removeTab(index)
         self.tabs.insertTab(index, widget, lbl)
         if placeholder is not None:
+            placeholder.setParent(None)
             placeholder.deleteLater()
         self.tabs.setCurrentIndex(index)
         self.tabs.blockSignals(False)

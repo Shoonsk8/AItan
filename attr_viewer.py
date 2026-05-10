@@ -2043,6 +2043,9 @@ class AnchorBox(QWidget):
 
     def set_selected(self, on):  self._selected = bool(on)
     def set_edit_mode(self, on): self.edit_mode = bool(on)
+    def load_soft(self, tags_set, entry): pass   # no per-file data on the anchor
+    def get_soft_value(self):    return ("noop", "", "")
+    def clear_soft(self): pass
 
     def move(self, *args):
         """Anchor's TL is permanently pinned at (0, 0); ignore any

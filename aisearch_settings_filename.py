@@ -46,6 +46,7 @@ class _ValCombo(QWidget):
             it = self._lay.takeAt(0)
             w = it.widget()
             if w:
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
         self._combos = []
@@ -592,7 +593,7 @@ class _FilenameMixin:
 
             def _del(w=row_w):
                 self._fn_rows[:] = [r for r in self._fn_rows if r[4] is not w]
-                w.setParent(None); w.deleteLater()
+                w.hide(); w.setParent(None); w.deleteLater()
             btn_del.clicked.connect(lambda _=False, w=row_w: _del(w))
             return entry
 
@@ -743,9 +744,11 @@ class _FilenameMixin:
                 _col_names.update(_new_raw.get("__col_names__", {}))
             except Exception as _e:
                 print(f"[fn-reload] error: {_e}")
-            # Clear existing rows
+            # Clear existing rows — hide() before setParent(None) so the
+            # detached row doesn't briefly flash as a top-level
+            # "aisearch_main.py" window between detach and deleteLater().
             for _, _, _, _, rw in list(self._fn_rows):
-                rw.setParent(None); rw.deleteLater()
+                rw.hide(); rw.setParent(None); rw.deleteLater()
             self._fn_rows.clear()
             proj = _fn_selected_proj()
             # Reload auto_rename checkbox

@@ -14,7 +14,7 @@ from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 
 def _read_embedded_meta(path):
@@ -713,7 +713,11 @@ class PreviewWindow(QWidget):
             self.handler._render(self.handler.current_path, is_vid)
 
     def _build_attr_panel(self):
+        # Created parentless and reparented later via _attr_scroll.setWidget;
+        # hide immediately so it can't flash as a top-level "aisearch_main.py"
+        # ghost window between construction and the setWidget reparent.
         panel = QWidget()
+        panel.hide()
         _fs = self.handler.app.config.get("attr_font_size", 10)
         panel.setStyleSheet(f"background-color: #2e2e2e; font-size: {_fs}pt;")
         vbox = QVBoxLayout(panel)
@@ -1498,12 +1502,15 @@ class PreviewWindow(QWidget):
         old_panel = self._attr_scroll.takeWidget()
         self.attr_widget = self._build_attr_panel()
         self._attr_scroll.setWidget(self.attr_widget)
+        self.attr_widget.show()   # _build_attr_panel hid it; re-show after reparent
         if old_panel is not None:
+            old_panel.hide()
             old_panel.deleteLater()
 
     def _deferred_build_attr_panel(self):
         self.attr_widget = self._build_attr_panel()
         self._attr_scroll.setWidget(self.attr_widget)
+        self.attr_widget.show()   # _build_attr_panel hid it; re-show after reparent
         self._attr_panel_built = True
         if self._attr_panel_pending_path:
             path = self._attr_panel_pending_path

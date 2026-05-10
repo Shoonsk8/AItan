@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -1433,6 +1433,7 @@ class AISearchApp(QMainWindow):
             old_widget = pw._attr_scroll.widget()
             pw.attr_widget = pw._build_attr_panel()
             pw._attr_scroll.setWidget(pw.attr_widget)
+            pw.attr_widget.show()   # _build_attr_panel hid it to suppress ghost; re-show after reparent
             if old_widget:
                 try:
                     # Hide before detach: a parentless QWidget shows as
@@ -1466,6 +1467,7 @@ class AISearchApp(QMainWindow):
 
     def _build_attr_panel(self):
         panel = QWidget()
+        panel.hide()   # parented later via setWidget; suppress ghost window
         panel.setStyleSheet("background-color: #2e2e2e;")
         vbox = QVBoxLayout(panel)
         vbox.setContentsMargins(6, 4, 6, 4)
