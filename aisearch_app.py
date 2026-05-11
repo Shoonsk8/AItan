@@ -2977,7 +2977,18 @@ class AISearchApp(QMainWindow):
         for d in scan_dirs:
             if not os.path.isdir(d): continue
             for f in os.listdir(d):
-                if f.lower().endswith(exts):
+                # Skip transient bake-tmp files. embed_aitan_meta writes
+                # a sibling `.<orig>.<hash>.aitan_tmp.<ext>` then renames
+                # it into place, but on slow filesystems the watcher
+                # picked the tmp up first and the autorename+bake cycle
+                # restarted on it — an infinite loop where every preview
+                # spawned a new tmp file in the watch dir. Hidden dot-
+                # files are also skipped (Linux convention for transient
+                # state). Real user-named files don't start with a dot.
+                _fl = f.lower()
+                if f.startswith(".") or ".aitan_tmp." in _fl:
+                    continue
+                if _fl.endswith(exts):
                     fp = os.path.normpath(os.path.join(d, f))
                     if fp not in known:
                         new_files.append(fp)
@@ -5014,21 +5025,33 @@ class AISearchApp(QMainWindow):
 
     def _is_face_sample(self, full_path):
         """True if `full_path` is the source_path of any person in this
-        project's faces DB. Cheap because load_faces_db is mtime-cached
-        in attrs_mod."""
+        project's faces DB.
+
+        Caches the set of source paths per (project, db_object_id) so
+        bulk row-rim refreshes (Apply Rules, project switch) don't pay
+        O(persons) × O(rows) normpath work. load_faces_db is mtime-
+        cached and returns the same dict instance until the file
+        changes, so id(db) is a cheap "did the DB rotate" check."""
         try:
             proj = getattr(self, "current_project", None)
             if not proj or not full_path:
                 return False
             db = attrs_mod.load_faces_db(proj)
             faces = db.get("faces", {}) if isinstance(db, dict) else {}
-            np_target = os.path.normpath(full_path)
-            for _pid, _fdata in faces.items():
-                if not isinstance(_fdata, dict):
-                    continue
-                if os.path.normpath(_fdata.get("source_path", "")) == np_target:
-                    return True
-            return False
+            cache = getattr(self, "_face_sample_set_cache", None)
+            if cache is None or cache[:2] != (proj, id(faces)):
+                # Rebuild — flatten every person's source_path into a set
+                # of normpath strings for O(1) membership tests.
+                paths = set()
+                for _fdata in faces.values():
+                    if not isinstance(_fdata, dict):
+                        continue
+                    sp = _fdata.get("source_path", "")
+                    if sp:
+                        paths.add(os.path.normpath(sp))
+                cache = (proj, id(faces), paths)
+                self._face_sample_set_cache = cache
+            return os.path.normpath(full_path) in cache[2]
         except Exception:
             return False
 

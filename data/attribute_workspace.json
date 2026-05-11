@@ -39,8 +39,21 @@
     "motion_1st": "Jumping / 跳躍",
     "posture_2nd": ""
   },
+  "PostureMotion0a": {
+    "motion_1st": "Fingering / フィンガリング",
+    "posture_2nd": ""
+  },
   "Animal00": {
     "expression": "(no animal) / 動物なし"
+  },
+  "Animal01": {
+    "expression": "Capybarakun / カピバラくん"
+  },
+  "Animal02": {
+    "expression": "Whitebunny / ホワイトバニー"
+  },
+  "Animal03": {
+    "expression": "Alligatorkun / アリゲーターくん"
   },
   "Animal10": {
     "expression": "Dog / 犬"
@@ -180,77 +193,182 @@
   "Animal75": {
     "expression": "Chicken / ニワトリ"
   },
-  "Animal80": {
+  "Animal90": {
     "expression": "Wild mammal / 野生哺乳類"
   },
-  "Animal81": {
+  "Animal91": {
     "expression": "Lion / ライオン"
   },
-  "Animal82": {
+  "Animal92": {
     "expression": "Tiger / トラ"
   },
-  "Animal83": {
+  "Animal93": {
     "expression": "Bear / クマ"
   },
-  "Animal84": {
+  "Animal94": {
     "expression": "Wolf or Fox / オオカミ・キツネ"
   },
-  "Animal85": {
+  "Animal95": {
     "expression": "Deer / シカ"
   },
-  "Animal86": {
+  "Animal96": {
     "expression": "Elephant / ゾウ"
   },
-  "Animal87": {
+  "Animal97": {
     "expression": "Giraffe / キリン"
   },
-  "Animal88": {
+  "Animal98": {
     "expression": "Zebra / シマウマ"
   },
-  "Animal90": {
+  "Animala0": {
     "expression": "Small mammal / 小動物"
   },
-  "Animal91": {
+  "Animala1": {
     "expression": "Rabbit / ウサギ"
   },
-  "Animal92": {
+  "Animala2": {
     "expression": "Hamster or Guinea pig / ハムスター・モルモット"
   },
-  "Animal93": {
+  "Animala3": {
     "expression": "Capybara / カピバラ"
   },
-  "Animal94": {
+  "Animala4": {
     "expression": "Ferret / フェレット"
   },
-  "Animal95": {
+  "Animala5": {
     "expression": "Squirrel / リス"
   },
-  "Animala0": {
+  "Animalb0": {
     "expression": "Insect / 昆虫"
   },
-  "Animala1": {
+  "Animalb1": {
     "expression": "Butterfly / チョウ"
   },
-  "Animala2": {
+  "Animalb2": {
     "expression": "Bee / ハチ"
   },
-  "Animala3": {
+  "Animalb3": {
     "expression": "Spider / クモ"
   },
-  "Animalb0": {
+  "Animalc0": {
+    "expression": "Fish / 魚"
+  },
+  "Animalc1": {
+    "expression": "Goldfish / 金魚"
+  },
+  "Animalc2": {
+    "expression": "Koi / 鯉"
+  },
+  "Animalc3": {
+    "expression": "Salmon / サケ"
+  },
+  "Animalc4": {
+    "expression": "Tuna / マグロ"
+  },
+  "Animalc5": {
+    "expression": "Stingray / エイ"
+  },
+  "Animalc6": {
+    "expression": "Eel / ウナギ"
+  },
+  "Animalc7": {
+    "expression": "Pufferfish / フグ"
+  },
+  "Animalc8": {
+    "expression": "Clownfish / クマノミ"
+  },
+  "Animalc9": {
+    "expression": "Seahorse / タツノオトシゴ"
+  },
+  "Animald0": {
+    "expression": "Amphibian / 両生類"
+  },
+  "Animald1": {
+    "expression": "Frog / カエル"
+  },
+  "Animald2": {
+    "expression": "Toad / ヒキガエル"
+  },
+  "Animald3": {
+    "expression": "Salamander / サンショウウオ"
+  },
+  "Animald4": {
+    "expression": "Newt / イモリ"
+  },
+  "Animald5": {
+    "expression": "Axolotl / アホロートル"
+  },
+  "Animale0": {
+    "expression": "Primate / 霊長類"
+  },
+  "Animale1": {
+    "expression": "Monkey / サル"
+  },
+  "Animale2": {
+    "expression": "Chimpanzee / チンパンジー"
+  },
+  "Animale3": {
+    "expression": "Gorilla / ゴリラ"
+  },
+  "Animale4": {
+    "expression": "Orangutan / オランウータン"
+  },
+  "Animale5": {
+    "expression": "Macaque / ニホンザル"
+  },
+  "Animale6": {
+    "expression": "Baboon / ヒヒ"
+  },
+  "Animale7": {
+    "expression": "Lemur / キツネザル"
+  },
+  "Animalf0": {
     "expression": "Mythical creature / 幻獣"
   },
-  "Animalb1": {
-    "expression": "Dragon / ドラゴン"
+  "Animalf1": {
+    "expression": "Dragon (Western) / ドラゴン"
   },
-  "Animalb2": {
+  "Animalf2": {
     "expression": "Unicorn / ユニコーン"
   },
-  "Animalb3": {
-    "expression": "Phoenix / フェニックス"
+  "Animalf3": {
+    "expression": "Phoenix / 鳳凰"
   },
-  "Animalb4": {
+  "Animalf4": {
     "expression": "Mermaid / 人魚"
+  },
+  "Animalf5": {
+    "expression": "Pegasus / ペガサス"
+  },
+  "Animalf6": {
+    "expression": "Griffin / グリフィン"
+  },
+  "Animalf7": {
+    "expression": "Centaur / ケンタウロス"
+  },
+  "Animalf8": {
+    "expression": "Fairy / 妖精"
+  },
+  "Animalf9": {
+    "expression": "Elf / エルフ"
+  },
+  "Animalfa": {
+    "expression": "Angel / 天使"
+  },
+  "Animalfb": {
+    "expression": "Demon / 悪魔"
+  },
+  "Animalfc": {
+    "expression": "Eastern dragon / 龍"
+  },
+  "Animalfd": {
+    "expression": "Kitsune (fox spirit) / 狐霊"
+  },
+  "Animalfe": {
+    "expression": "Sphinx / スフィンクス"
+  },
+  "Animalff": {
+    "expression": "Kraken / クラーケン"
   },
   "Eyes00": {
     "colors_1st": "Closed / No eyes / 閉じている／目なし",

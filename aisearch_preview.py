@@ -3587,21 +3587,28 @@ class PreviewWindow(QWidget):
             return  # already same — nothing to do
         if old_pid and old_pid != "000":
             # Existing pid — override when the top match BOTH beats the
-            # stored one AND clears a minimum absolute-confidence floor.
-            # face_recognition similarity below ~0.50 is the noise floor
-            # (similar-looking but unrelated faces sit there); above that
-            # the model is at least making a real distinction.
-            _MIN_TOP = 0.50
+            # stored one with a meaningful margin AND clears the same
+            # confidence floor used by the detector to assign in the
+            # first place. Earlier the floor was 0.50 while detection
+            # already accepts at 0.35, leaving a dead band (0.35–0.50)
+            # where the detector picked a clear winner but auto-apply
+            # refused to overwrite stored. User reported: detector
+            # found 013, stored stayed 001. The new floor + margin gate
+            # lets the override fire when the detector is at least as
+            # confident as it was to assign, AND beats stored by a real
+            # gap (0.05) — random noise won't clear both bars.
+            _MIN_TOP = 0.35
+            _MIN_GAP = 0.05
             _gap = top_sim - stored_sim
             try:
                 from aisearch_debug import dbg as _dbg
             except Exception:
                 _dbg = lambda *a, **kw: None
-            if not (top_sim >= _MIN_TOP and _gap > 0):
+            if not (top_sim >= _MIN_TOP and _gap >= _MIN_GAP):
                 _dbg(f"_auto_apply_face SKIP {old_pid!r} -> {pid!r} "
                      f"(top_sim={top_sim:.3f}, stored_sim={stored_sim:.3f}, "
-                     f"gap={_gap:.3f}, MIN_TOP={_MIN_TOP}) — "
-                     f"top didn't beat stored or under noise floor")
+                     f"gap={_gap:.3f}, MIN_TOP={_MIN_TOP}, MIN_GAP={_MIN_GAP}) — "
+                     f"top didn't beat stored by margin or under floor")
                 return  # top match isn't actually beating the stored one
             _dbg(f"_auto_apply_face OVERRIDE {old_pid!r} -> {pid!r} "
                  f"(top_sim={top_sim:.3f}, stored_sim={stored_sim:.3f}, "
@@ -4127,25 +4134,64 @@ class PreviewWindow(QWidget):
         self._save_attrs()
 
     def _apply_protected_lock(self, locked):
-        """Disable all attribute editing widgets when file is protected."""
-        # Collect all editable widgets in the attr panel (except the lock checkbox itself)
-        editables = []
-        _sc = getattr(self, "_soft_canvas", None)
-        if _sc:
-            editables.append(_sc)
-        editables.append(self._quality_combo)
-        editables.append(self._seed_edit)
-        editables.append(self._project_edit)
-        editables.append(self._name_edit)
-        editables.append(self._person_id_combo)
-        editables.append(self._person_name_edit)
-        editables.append(self._btn_detect_person)
+        """Disable attribute editing when the file is protected, but keep
+        the panel itself scrollable so the user can still READ everything.
+        Earlier this disabled the whole soft_canvas widget, which is the
+        scroll-area's viewport — that blocked wheel events from reaching
+        the scroll bar and the user couldn't scroll while locked. Now we
+        disable each editor widget individually and leave their parent
+        containers enabled."""
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
 
-        for w in editables:
-            w.setEnabled(not locked)
+        def _set_input_locked(w, lock):
+            """Toggle just the editing behaviour, never the widget enable
+            flag, so the wheel-event chain to the parent scroll area is
+            never broken."""
+            try:
+                if isinstance(w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+                    w.setReadOnly(lock)
+                else:
+                    # Combos, buttons, list widgets — disabling these does
+                    # not break scroll on their parent (only disabling the
+                    # parent viewport does).
+                    w.setEnabled(not lock)
+            except Exception:
+                pass
+
+        # Per-widget editors on the soft canvas
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc is not None:
+            for w in getattr(_sc, "widgets", []):
+                # Text / pathlist tiles
+                _te = getattr(w, "_te", None)
+                if _te is not None:
+                    _set_input_locked(_te, locked)
+                _hex = getattr(w, "_hex_edit", None)
+                if _hex is not None:
+                    _set_input_locked(_hex, locked)
+                _pl = getattr(w, "_pathlist", None)
+                if _pl is not None:
+                    _set_input_locked(_pl, locked)
+                # Coded-digit / matrix sub-combos
+                for tup in getattr(w, "_coded_combos", []):
+                    if len(tup) >= 2 and tup[1] is not None:
+                        _set_input_locked(tup[1], locked)
+                for tup in getattr(w, "_sub_combos", []):
+                    if tup and tup[0] is not None:
+                        _set_input_locked(tup[0], locked)
+                # Tag/boolean/radio buttons
+                for btn in getattr(w, "_btns", {}).values():
+                    _set_input_locked(btn, locked)
+
+        # Editors outside the soft canvas
+        for w in (self._quality_combo, self._seed_edit, self._project_edit,
+                  self._name_edit, self._person_id_combo,
+                  self._person_name_edit, self._btn_detect_person):
+            if w is not None:
+                _set_input_locked(w, locked)
         for cb_list in getattr(self, '_code_combos', {}).values():
             for _, _, cb in cb_list:
-                cb.setEnabled(not locked)
+                _set_input_locked(cb, locked)
 
 
 

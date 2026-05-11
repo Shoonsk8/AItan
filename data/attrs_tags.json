@@ -439,6 +439,10 @@
     [
       "9",
       "Jumping / 跳躍"
+    ],
+    [
+      "a",
+      "Fingering / フィンガリング"
     ]
   ],
   "posture": [
@@ -1179,6 +1183,18 @@
       "(no animal) / 動物なし"
     ],
     [
+      "01",
+      "Capybarakun / カピバラくん"
+    ],
+    [
+      "02",
+      "Whitebunny / ホワイトバニー"
+    ],
+    [
+      "03",
+      "Alligatorkun / アリゲーターくん"
+    ],
+    [
       "10",
       "Dog / 犬"
     ],
@@ -1363,100 +1379,240 @@
       "Chicken / ニワトリ"
     ],
     [
-      "80",
+      "90",
       "Wild mammal / 野生哺乳類"
     ],
     [
-      "81",
+      "91",
       "Lion / ライオン"
     ],
     [
-      "82",
+      "92",
       "Tiger / トラ"
     ],
     [
-      "83",
+      "93",
       "Bear / クマ"
     ],
     [
-      "84",
+      "94",
       "Wolf or Fox / オオカミ・キツネ"
     ],
     [
-      "85",
+      "95",
       "Deer / シカ"
     ],
     [
-      "86",
+      "96",
       "Elephant / ゾウ"
     ],
     [
-      "87",
+      "97",
       "Giraffe / キリン"
     ],
     [
-      "88",
+      "98",
       "Zebra / シマウマ"
     ],
     [
-      "90",
+      "a0",
       "Small mammal / 小動物"
     ],
     [
-      "91",
+      "a1",
       "Rabbit / ウサギ"
     ],
     [
-      "92",
+      "a2",
       "Hamster or Guinea pig / ハムスター・モルモット"
     ],
     [
-      "93",
+      "a3",
       "Capybara / カピバラ"
     ],
     [
-      "94",
+      "a4",
       "Ferret / フェレット"
     ],
     [
-      "95",
+      "a5",
       "Squirrel / リス"
     ],
     [
-      "a0",
+      "b0",
       "Insect / 昆虫"
     ],
     [
-      "a1",
+      "b1",
       "Butterfly / チョウ"
     ],
     [
-      "a2",
+      "b2",
       "Bee / ハチ"
     ],
     [
-      "a3",
+      "b3",
       "Spider / クモ"
     ],
     [
-      "b0",
+      "c0",
+      "Fish / 魚"
+    ],
+    [
+      "c1",
+      "Goldfish / 金魚"
+    ],
+    [
+      "c2",
+      "Koi / 鯉"
+    ],
+    [
+      "c3",
+      "Salmon / サケ"
+    ],
+    [
+      "c4",
+      "Tuna / マグロ"
+    ],
+    [
+      "c5",
+      "Stingray / エイ"
+    ],
+    [
+      "c6",
+      "Eel / ウナギ"
+    ],
+    [
+      "c7",
+      "Pufferfish / フグ"
+    ],
+    [
+      "c8",
+      "Clownfish / クマノミ"
+    ],
+    [
+      "c9",
+      "Seahorse / タツノオトシゴ"
+    ],
+    [
+      "d0",
+      "Amphibian / 両生類"
+    ],
+    [
+      "d1",
+      "Frog / カエル"
+    ],
+    [
+      "d2",
+      "Toad / ヒキガエル"
+    ],
+    [
+      "d3",
+      "Salamander / サンショウウオ"
+    ],
+    [
+      "d4",
+      "Newt / イモリ"
+    ],
+    [
+      "d5",
+      "Axolotl / アホロートル"
+    ],
+    [
+      "e0",
+      "Primate / 霊長類"
+    ],
+    [
+      "e1",
+      "Monkey / サル"
+    ],
+    [
+      "e2",
+      "Chimpanzee / チンパンジー"
+    ],
+    [
+      "e3",
+      "Gorilla / ゴリラ"
+    ],
+    [
+      "e4",
+      "Orangutan / オランウータン"
+    ],
+    [
+      "e5",
+      "Macaque / ニホンザル"
+    ],
+    [
+      "e6",
+      "Baboon / ヒヒ"
+    ],
+    [
+      "e7",
+      "Lemur / キツネザル"
+    ],
+    [
+      "f0",
       "Mythical creature / 幻獣"
     ],
     [
-      "b1",
-      "Dragon / ドラゴン"
+      "f1",
+      "Dragon (Western) / ドラゴン"
     ],
     [
-      "b2",
+      "f2",
       "Unicorn / ユニコーン"
     ],
     [
-      "b3",
-      "Phoenix / フェニックス"
+      "f3",
+      "Phoenix / 鳳凰"
     ],
     [
-      "b4",
+      "f4",
       "Mermaid / 人魚"
+    ],
+    [
+      "f5",
+      "Pegasus / ペガサス"
+    ],
+    [
+      "f6",
+      "Griffin / グリフィン"
+    ],
+    [
+      "f7",
+      "Centaur / ケンタウロス"
+    ],
+    [
+      "f8",
+      "Fairy / 妖精"
+    ],
+    [
+      "f9",
+      "Elf / エルフ"
+    ],
+    [
+      "fa",
+      "Angel / 天使"
+    ],
+    [
+      "fb",
+      "Demon / 悪魔"
+    ],
+    [
+      "fc",
+      "Eastern dragon / 龍"
+    ],
+    [
+      "fd",
+      "Kitsune (fox spirit) / 狐霊"
+    ],
+    [
+      "fe",
+      "Sphinx / スフィンクス"
+    ],
+    [
+      "ff",
+      "Kraken / クラーケン"
     ]
   ],
   "top_color": [
@@ -1998,6 +2154,10 @@
       "label": "FACE",
       "placeholder": ""
     },
+    "CLIP_A": {
+      "label": "CLIP_A",
+      "placeholder": ""
+    },
     "FACE_PW": {
       "label": "FACE PW",
       "placeholder": ""
@@ -2153,6 +2313,7 @@
     "P",
     "FACE",
     "Animal",
+    "CLIP_A",
     "PI",
     "PW",
     "FACE_PW",
@@ -2196,6 +2357,7 @@
     "P": "id",
     "FACE": "text",
     "Animal": "matrix",
+    "CLIP_A": "text",
     "PI": "id",
     "PW": "id",
     "FACE_PW": "text",
@@ -2237,6 +2399,7 @@
       "P",
       "FACE",
       "Animal",
+      "CLIP_A",
       "PI",
       "PW",
       "FACE_PW",
@@ -2309,7 +2472,7 @@
       "hair_length"
     ],
     "Skin": [
-      "SkinColor_skin"
+      "Skin_Type"
     ],
     "Expression": [
       "Expression / 表情"

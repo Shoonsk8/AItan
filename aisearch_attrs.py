@@ -2020,10 +2020,32 @@ def _has_real_data(entry: dict) -> bool:
     return False
 
 
+_aitan_block_cache = {}   # (path, mtime) -> parsed AItan dict | None
+
 def _read_embedded_aitan_block(path: str) -> dict | None:
-    """Return parsed AItan dict from file's embedded metadata, or None if absent/empty."""
+    """Return parsed AItan dict from file's embedded metadata, or None if
+    absent/empty. Cached by (path, mtime): for video files this avoids a
+    ~300-500 ms ffprobe call on every preview refresh — user reported
+    refresh_attrs_inner = 1167ms on the first .mp4 nav, dropping to 427ms
+    only after extract_metadata's separate cache warmed; the aitan-block
+    read was the un-cached half. Cache stays small because the (path,
+    mtime) key invalidates on any file change."""
     _PREFIX = "AItan"
     ext = os.path.splitext(path)[1].lower()
+    try:
+        _mt = os.path.getmtime(path)
+    except Exception:
+        _mt = 0
+    _ck = (path, _mt)
+    if _ck in _aitan_block_cache:
+        return _aitan_block_cache[_ck]
+    def _store(result):
+        # Trim cache when it grows past a bound — large libraries shouldn't
+        # accumulate unbounded entries during a long session.
+        if len(_aitan_block_cache) > 2048:
+            _aitan_block_cache.clear()
+        _aitan_block_cache[_ck] = result
+        return result
     try:
         if ext in (".jpg", ".jpeg"):
             import piexif, piexif.helper
@@ -2031,7 +2053,7 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
             with Image.open(path) as img:
                 raw_exif = img.info.get("exif", b"")
             if not raw_exif:
-                return None
+                return _store(None)
             exif = piexif.load(raw_exif)
             uc_raw = exif.get("Exif", {}).get(piexif.ExifIFD.UserComment, b"")
             try:
@@ -2040,9 +2062,9 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
                 uc = uc_raw.decode("utf-8", errors="replace") if uc_raw else ""
             if uc.startswith(_PREFIX):
                 try:
-                    return json.loads(uc[len(_PREFIX):])
+                    return _store(json.loads(uc[len(_PREFIX):]))
                 except Exception:
-                    return None
+                    return _store(None)
         elif ext in (".png", ".webp"):
             from PIL import Image
             with Image.open(path) as img:
@@ -2065,21 +2087,21 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
             desc = str(aitan_text or "")
             if desc.startswith(_PREFIX):
                 try:
-                    return json.loads(desc[len(_PREFIX):])
+                    return _store(json.loads(desc[len(_PREFIX):]))
                 except Exception:
-                    return None
+                    return _store(None)
         else:
             raw = read_raw_embedded_text(path)
             for line in raw.split("\n"):
                 line = line.strip()
                 if line.startswith(_PREFIX):
                     try:
-                        return json.loads(line[len(_PREFIX):])
+                        return _store(json.loads(line[len(_PREFIX):]))
                     except Exception:
                         pass
     except Exception:
         pass
-    return None
+    return _store(None)
 
 
 def migrate_aitan_video(path: str) -> bool:
