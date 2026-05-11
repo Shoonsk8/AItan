@@ -691,7 +691,18 @@ class _AttrsMixin:
                                 le = QLineEdit()
                                 le.setFixedSize(100, 20)
                                 le.setStyleSheet(_les + " font-size:8pt;")
-                                le.setText(stored.get("expression", ""))
+                                _val = stored.get("expression", "")
+                                le.setText(_val)
+                                # After setText() Qt parks the cursor at the
+                                # END of the text, so when the string is wider
+                                # than the cell the user sees the tail and the
+                                # start gets clipped ("Large breed dog" →
+                                # "reed dog"). Reset to position 0 and expose
+                                # the full string in a tooltip so long labels
+                                # remain legible without enlarging the grid.
+                                le.setCursorPosition(0)
+                                if _val:
+                                    le.setToolTip(_val)
                                 gl.addWidget(le, _r + 1, _c + 1)
                                 self._attr_ws_entries[json_key] = {"expression": le}
                     else:

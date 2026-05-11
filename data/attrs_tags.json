@@ -1,5 +1,5 @@
 {
-  "E_Color": [
+  "eye_color": [
     [
       "0",
       "Closed / No eyes / 閉じている／目なし"
@@ -61,7 +61,7 @@
       "Aniridia / 無虹彩症"
     ]
   ],
-  "E_Additional": [
+  "eye_additional": [
     [
       "0",
       "Naked eye / 裸眼"
@@ -87,7 +87,7 @@
       "Detail / 詳細"
     ]
   ],
-  "HC_Color": [
+  "hair_color": [
     [
       "0",
       "No hair / 髪なし"
@@ -153,7 +153,7 @@
       "Neon / ネオン"
     ]
   ],
-  "HC_Style": [
+  "hair_style": [
     [
       "0",
       "(none) / （なし）"
@@ -299,7 +299,7 @@
       "Spiky / スパイキー"
     ]
   ],
-  "HC_Length": [
+  "hair_length": [
     [
       "0",
       "(none) / （なし）"
@@ -333,7 +333,7 @@
       "Partially Bald"
     ]
   ],
-  "FA_Dir": [
+  "face_direction": [
     [
       "0",
       "Front / 正面"
@@ -359,7 +359,7 @@
       "Back / 後ろ"
     ]
   ],
-  "FA_Vert": [
+  "face_vertical": [
     [
       "0",
       "Horizontal / 水平"
@@ -373,7 +373,7 @@
       "Downward / 下向き"
     ]
   ],
-  "SK_Type": [
+  "Skin_Type": [
     [
       "0",
       "Type I — Very Fair / タイプI — 非常に白い"
@@ -399,7 +399,7 @@
       "Type VI — Deeply Pigmented / タイプVI — 極濃色素"
     ]
   ],
-  "PM_Motion": [
+  "motion": [
     [
       "0",
       "Still / 静止"
@@ -438,14 +438,10 @@
     ],
     [
       "9",
-      "Fingering / フィンガリング"
-    ],
-    [
-      "a",
       "Jumping / 跳躍"
     ]
   ],
-  "PM_Posture": [
+  "posture": [
     [
       "0",
       "Standing / 立つ"
@@ -483,7 +479,7 @@
       "Spreading legs / 脚を広げる"
     ]
   ],
-  "CS_Light": [
+  "camera_light": [
     [
       "0",
       "Natural / 自然光"
@@ -513,7 +509,7 @@
       "Night / 夜"
     ]
   ],
-  "CS_Angle": [
+  "camera_angle": [
     [
       "0",
       "Eye Level / 目線"
@@ -539,7 +535,7 @@
       "Bird's Eye / 俯瞰"
     ]
   ],
-  "CS_Shot": [
+  "camera_shot": [
     [
       "0",
       "(none) / （なし）"
@@ -589,7 +585,7 @@
       "Extreme Wide / 超ワイド"
     ]
   ],
-  "X_Table": [
+  "Expression_Table": [
     [
       "00",
       "Neutral ニュートラル"
@@ -1043,439 +1039,6 @@
       "Moan 喘ぎ声"
     ]
   ],
-  "BG_Table": [],
-  "A_Table": [
-    [
-      "00",
-      "(no animal)"
-    ],
-    [
-      "01",
-      "Capybara"
-    ]
-  ],
-  "CL_TopColor": [
-    [
-      "0",
-      "Unknown / 不明"
-    ],
-    [
-      "1",
-      "None / Skin / なし・肌"
-    ],
-    [
-      "2",
-      "Black / 黒"
-    ],
-    [
-      "3",
-      "White / 白"
-    ],
-    [
-      "4",
-      "Red / 赤"
-    ],
-    [
-      "5",
-      "Blue / 青"
-    ],
-    [
-      "6",
-      "Green / 緑"
-    ],
-    [
-      "7",
-      "Yellow / 黄"
-    ],
-    [
-      "8",
-      "Pink / ピンク"
-    ],
-    [
-      "9",
-      "Purple / 紫"
-    ],
-    [
-      "a",
-      "Orange / オレンジ"
-    ],
-    [
-      "b",
-      "Brown / 茶"
-    ],
-    [
-      "c",
-      "Gray / 灰"
-    ],
-    [
-      "d",
-      "Beige / ベージュ"
-    ],
-    [
-      "e",
-      "Multi / 柄・多色"
-    ],
-    [
-      "f",
-      "Custom / カスタム"
-    ]
-  ],
-  "CL_Top": [
-    [
-      "0",
-      "Unknown / 不明"
-    ],
-    [
-      "1",
-      "None / Topless / トップレス"
-    ],
-    [
-      "2",
-      "T-shirt / Tシャツ"
-    ],
-    [
-      "3",
-      "Blouse / Shirt / ブラウス・シャツ"
-    ],
-    [
-      "4",
-      "Sweater / Knit / セーター・ニット"
-    ],
-    [
-      "5",
-      "Tank / Crop / タンクトップ・クロップ"
-    ],
-    [
-      "6",
-      "Hoodie / パーカー"
-    ],
-    [
-      "7",
-      "Jacket / ジャケット"
-    ],
-    [
-      "8",
-      "Coat / コート"
-    ],
-    [
-      "9",
-      "Dress (upper) / ドレス（上部）"
-    ],
-    [
-      "a",
-      "Lingerie / Bra / ブラジャー"
-    ],
-    [
-      "b",
-      "Swimsuit Top / 水着トップ"
-    ],
-    [
-      "c",
-      "Kimono / 着物"
-    ],
-    [
-      "d",
-      "School Uniform / 制服"
-    ],
-    [
-      "e",
-      "Costume / コスチューム"
-    ],
-    [
-      "f",
-      "Custom / カスタム"
-    ]
-  ],
-  "CL_BotColor": [
-    [
-      "0",
-      "Unknown / 不明"
-    ],
-    [
-      "1",
-      "None / Skin / なし・肌"
-    ],
-    [
-      "2",
-      "Black / 黒"
-    ],
-    [
-      "3",
-      "White / 白"
-    ],
-    [
-      "4",
-      "Red / 赤"
-    ],
-    [
-      "5",
-      "Blue / 青"
-    ],
-    [
-      "6",
-      "Green / 緑"
-    ],
-    [
-      "7",
-      "Yellow / 黄"
-    ],
-    [
-      "8",
-      "Pink / ピンク"
-    ],
-    [
-      "9",
-      "Purple / 紫"
-    ],
-    [
-      "a",
-      "Orange / オレンジ"
-    ],
-    [
-      "b",
-      "Brown / 茶"
-    ],
-    [
-      "c",
-      "Gray / 灰"
-    ],
-    [
-      "d",
-      "Beige / ベージュ"
-    ],
-    [
-      "e",
-      "Multi / 柄・多色"
-    ],
-    [
-      "f",
-      "Custom / カスタム"
-    ]
-  ],
-  "CL_Bot": [
-    [
-      "0",
-      "Unknown / 不明"
-    ],
-    [
-      "1",
-      "None / Bare / なし"
-    ],
-    [
-      "2",
-      "Jeans / ジーンズ"
-    ],
-    [
-      "3",
-      "Trousers / ズボン"
-    ],
-    [
-      "4",
-      "Shorts / ショートパンツ"
-    ],
-    [
-      "5",
-      "Skirt (Mini) / ミニスカート"
-    ],
-    [
-      "6",
-      "Skirt (Long) / ロングスカート"
-    ],
-    [
-      "7",
-      "Leggings / レギンス"
-    ],
-    [
-      "8",
-      "Sweatpants / スウェットパンツ"
-    ],
-    [
-      "9",
-      "Dress (full) / ドレス"
-    ],
-    [
-      "a",
-      "Panties / パンティ"
-    ],
-    [
-      "b",
-      "Bikini Bottom / ビキニボトム"
-    ],
-    [
-      "c",
-      "Hakama / Kimono / 袴・着物"
-    ],
-    [
-      "d",
-      "School Skirt / 制服スカート"
-    ],
-    [
-      "e",
-      "Stockings / ストッキング"
-    ],
-    [
-      "f",
-      "Custom / カスタム"
-    ]
-  ],
-  "B_Shape": [
-    [
-      "0",
-      "(undefined) / （未定義）"
-    ],
-    [
-      "1",
-      "Square (Pecs) / スクエア（胸筋）"
-    ],
-    [
-      "2",
-      "Round / 丸型"
-    ],
-    [
-      "3",
-      "Teardrop / しずく"
-    ],
-    [
-      "4",
-      "Broad / 広い"
-    ],
-    [
-      "5",
-      "Side Set / サイドセット"
-    ],
-    [
-      "6",
-      "Slender / 細い"
-    ]
-  ],
-  "B_Size": [
-    [
-      "0",
-      "(none) / （なし）"
-    ],
-    [
-      "1",
-      "Flat / Male / Neutral / フラット"
-    ],
-    [
-      "2",
-      "Athletic / Pectorals / アスレチック"
-    ],
-    [
-      "3",
-      "Petite / AAA-A / 小さめ"
-    ],
-    [
-      "4",
-      "Small / B-C / 小"
-    ],
-    [
-      "5",
-      "Medium / D-E / 中"
-    ],
-    [
-      "6",
-      "Large / F-G / 大"
-    ],
-    [
-      "7",
-      "Extra Large / H+ / 特大"
-    ],
-    [
-      "8",
-      "Enhanced / 豊胸"
-    ]
-  ],
-  "WH_Hip": [
-    [
-      "0",
-      "Normal / 普通"
-    ],
-    [
-      "1",
-      "Thin / 細い"
-    ],
-    [
-      "2",
-      "Athletic / Firm / 引き締まった"
-    ],
-    [
-      "3",
-      "Average / 普通"
-    ],
-    [
-      "4",
-      "Curvy / Full / 豊満"
-    ],
-    [
-      "5",
-      "Large / Wide / 大きい"
-    ],
-    [
-      "6",
-      "Extra Large / 特大"
-    ],
-    [
-      "7",
-      "Sticks out / 突き出し"
-    ]
-  ],
-  "WH_Waist": [
-    [
-      "0",
-      "Normal / 普通"
-    ],
-    [
-      "1",
-      "Flat / Thin / 細い"
-    ],
-    [
-      "2",
-      "Athletic / Firm / 引き締まった"
-    ],
-    [
-      "3",
-      "Average / 普通"
-    ],
-    [
-      "4",
-      "Curvy / Full / 豊満"
-    ],
-    [
-      "5",
-      "Large / Wide / 大きい"
-    ],
-    [
-      "6",
-      "Extra Large / 特大"
-    ],
-    [
-      "7",
-      "Pregnant / 妊婦"
-    ]
-  ],
-  "Tool_Table": [
-    [
-      "00",
-      "Nothing / なし"
-    ],
-    [
-      "10",
-      "Sword / 刀"
-    ],
-    [
-      "f0",
-      "Dildo / ディルド"
-    ],
-    [
-      "f1",
-      "Black Dildo / 黒ディルド"
-    ],
-    [
-      "f2",
-      "Purple Dildo / 紫ディルド"
-    ]
-  ],
   "Background_Table": [
     [
       "00",
@@ -1604,6 +1167,706 @@
     [
       "70",
       "Castle / 城"
+    ],
+    [
+      "80",
+      "Stage"
+    ]
+  ],
+  "Animal_Table": [
+    [
+      "00",
+      "(no animal) / 動物なし"
+    ],
+    [
+      "10",
+      "Dog / 犬"
+    ],
+    [
+      "11",
+      "Puppy / 子犬"
+    ],
+    [
+      "12",
+      "Large breed dog / 大型犬"
+    ],
+    [
+      "13",
+      "Small breed dog / 小型犬"
+    ],
+    [
+      "14",
+      "Husky / ハスキー"
+    ],
+    [
+      "15",
+      "Retriever / レトリバー"
+    ],
+    [
+      "16",
+      "Bulldog or Pug / ブルドッグ・パグ"
+    ],
+    [
+      "17",
+      "Poodle / プードル"
+    ],
+    [
+      "18",
+      "Shepherd / シェパード"
+    ],
+    [
+      "20",
+      "Cat / 猫"
+    ],
+    [
+      "21",
+      "Kitten / 子猫"
+    ],
+    [
+      "22",
+      "Long-hair cat / 長毛猫"
+    ],
+    [
+      "23",
+      "Short-hair cat / 短毛猫"
+    ],
+    [
+      "24",
+      "Black cat / 黒猫"
+    ],
+    [
+      "25",
+      "White cat / 白猫"
+    ],
+    [
+      "26",
+      "Tabby cat / トラ猫"
+    ],
+    [
+      "27",
+      "Siamese / シャム"
+    ],
+    [
+      "28",
+      "Persian / ペルシャ"
+    ],
+    [
+      "30",
+      "Bird / 鳥"
+    ],
+    [
+      "31",
+      "Parrot / オウム"
+    ],
+    [
+      "32",
+      "Eagle or Hawk / ワシ・タカ"
+    ],
+    [
+      "33",
+      "Owl / フクロウ"
+    ],
+    [
+      "34",
+      "Songbird / 小鳥"
+    ],
+    [
+      "35",
+      "Waterfowl / 水鳥"
+    ],
+    [
+      "36",
+      "Peacock / クジャク"
+    ],
+    [
+      "37",
+      "Penguin / ペンギン"
+    ],
+    [
+      "40",
+      "Horse / 馬"
+    ],
+    [
+      "41",
+      "Pony / ポニー"
+    ],
+    [
+      "42",
+      "Wild horse / 野生馬"
+    ],
+    [
+      "50",
+      "Reptile / 爬虫類"
+    ],
+    [
+      "51",
+      "Snake / 蛇"
+    ],
+    [
+      "52",
+      "Lizard / トカゲ"
+    ],
+    [
+      "53",
+      "Turtle / カメ"
+    ],
+    [
+      "54",
+      "Crocodile or Alligator / ワニ"
+    ],
+    [
+      "60",
+      "Aquatic / 水生"
+    ],
+    [
+      "61",
+      "Tropical fish / 熱帯魚"
+    ],
+    [
+      "62",
+      "Shark / サメ"
+    ],
+    [
+      "63",
+      "Dolphin / イルカ"
+    ],
+    [
+      "64",
+      "Whale / クジラ"
+    ],
+    [
+      "65",
+      "Octopus / タコ"
+    ],
+    [
+      "70",
+      "Farm animal / 家畜"
+    ],
+    [
+      "71",
+      "Cow / 牛"
+    ],
+    [
+      "72",
+      "Pig / 豚"
+    ],
+    [
+      "73",
+      "Sheep / 羊"
+    ],
+    [
+      "74",
+      "Goat / ヤギ"
+    ],
+    [
+      "75",
+      "Chicken / ニワトリ"
+    ],
+    [
+      "80",
+      "Wild mammal / 野生哺乳類"
+    ],
+    [
+      "81",
+      "Lion / ライオン"
+    ],
+    [
+      "82",
+      "Tiger / トラ"
+    ],
+    [
+      "83",
+      "Bear / クマ"
+    ],
+    [
+      "84",
+      "Wolf or Fox / オオカミ・キツネ"
+    ],
+    [
+      "85",
+      "Deer / シカ"
+    ],
+    [
+      "86",
+      "Elephant / ゾウ"
+    ],
+    [
+      "87",
+      "Giraffe / キリン"
+    ],
+    [
+      "88",
+      "Zebra / シマウマ"
+    ],
+    [
+      "90",
+      "Small mammal / 小動物"
+    ],
+    [
+      "91",
+      "Rabbit / ウサギ"
+    ],
+    [
+      "92",
+      "Hamster or Guinea pig / ハムスター・モルモット"
+    ],
+    [
+      "93",
+      "Capybara / カピバラ"
+    ],
+    [
+      "94",
+      "Ferret / フェレット"
+    ],
+    [
+      "95",
+      "Squirrel / リス"
+    ],
+    [
+      "a0",
+      "Insect / 昆虫"
+    ],
+    [
+      "a1",
+      "Butterfly / チョウ"
+    ],
+    [
+      "a2",
+      "Bee / ハチ"
+    ],
+    [
+      "a3",
+      "Spider / クモ"
+    ],
+    [
+      "b0",
+      "Mythical creature / 幻獣"
+    ],
+    [
+      "b1",
+      "Dragon / ドラゴン"
+    ],
+    [
+      "b2",
+      "Unicorn / ユニコーン"
+    ],
+    [
+      "b3",
+      "Phoenix / フェニックス"
+    ],
+    [
+      "b4",
+      "Mermaid / 人魚"
+    ]
+  ],
+  "top_color": [
+    [
+      "0",
+      "Unknown / 不明"
+    ],
+    [
+      "1",
+      "None / Skin / なし・肌"
+    ],
+    [
+      "2",
+      "Black / 黒"
+    ],
+    [
+      "3",
+      "White / 白"
+    ],
+    [
+      "4",
+      "Red / 赤"
+    ],
+    [
+      "5",
+      "Blue / 青"
+    ],
+    [
+      "6",
+      "Green / 緑"
+    ],
+    [
+      "7",
+      "Yellow / 黄"
+    ],
+    [
+      "8",
+      "Pink / ピンク"
+    ],
+    [
+      "9",
+      "Purple / 紫"
+    ],
+    [
+      "a",
+      "Orange / オレンジ"
+    ],
+    [
+      "b",
+      "Brown / 茶"
+    ],
+    [
+      "c",
+      "Gray / 灰"
+    ],
+    [
+      "d",
+      "Beige / ベージュ"
+    ],
+    [
+      "e",
+      "Multi / 柄・多色"
+    ],
+    [
+      "f",
+      "Custom / カスタム"
+    ]
+  ],
+  "top_type": [
+    [
+      "0",
+      "Unknown / 不明"
+    ],
+    [
+      "1",
+      "None / Topless / トップレス"
+    ],
+    [
+      "2",
+      "T-shirt / Tシャツ"
+    ],
+    [
+      "3",
+      "Blouse / Shirt / ブラウス・シャツ"
+    ],
+    [
+      "4",
+      "Sweater / Knit / セーター・ニット"
+    ],
+    [
+      "5",
+      "Tank / Crop / タンクトップ・クロップ"
+    ],
+    [
+      "6",
+      "Hoodie / パーカー"
+    ],
+    [
+      "7",
+      "Jacket / ジャケット"
+    ],
+    [
+      "8",
+      "Coat / コート"
+    ],
+    [
+      "9",
+      "Dress (upper) / ドレス（上部）"
+    ],
+    [
+      "a",
+      "Lingerie / Bra / ブラジャー"
+    ],
+    [
+      "b",
+      "Swimsuit Top / 水着トップ"
+    ],
+    [
+      "c",
+      "Kimono / 着物"
+    ],
+    [
+      "d",
+      "School Uniform / 制服"
+    ],
+    [
+      "e",
+      "Costume / コスチューム"
+    ],
+    [
+      "f",
+      "Custom / カスタム"
+    ]
+  ],
+  "bottom_color": [
+    [
+      "0",
+      "Unknown / 不明"
+    ],
+    [
+      "1",
+      "None / Skin / なし・肌"
+    ],
+    [
+      "2",
+      "Black / 黒"
+    ],
+    [
+      "3",
+      "White / 白"
+    ],
+    [
+      "4",
+      "Red / 赤"
+    ],
+    [
+      "5",
+      "Blue / 青"
+    ],
+    [
+      "6",
+      "Green / 緑"
+    ],
+    [
+      "7",
+      "Yellow / 黄"
+    ],
+    [
+      "8",
+      "Pink / ピンク"
+    ],
+    [
+      "9",
+      "Purple / 紫"
+    ],
+    [
+      "a",
+      "Orange / オレンジ"
+    ],
+    [
+      "b",
+      "Brown / 茶"
+    ],
+    [
+      "c",
+      "Gray / 灰"
+    ],
+    [
+      "d",
+      "Beige / ベージュ"
+    ],
+    [
+      "e",
+      "Multi / 柄・多色"
+    ],
+    [
+      "f",
+      "Custom / カスタム"
+    ]
+  ],
+  "bottom_type": [
+    [
+      "0",
+      "Unknown / 不明"
+    ],
+    [
+      "1",
+      "None / Bare / なし"
+    ],
+    [
+      "2",
+      "Jeans / ジーンズ"
+    ],
+    [
+      "3",
+      "Trousers / ズボン"
+    ],
+    [
+      "4",
+      "Shorts / ショートパンツ"
+    ],
+    [
+      "5",
+      "Skirt (Mini) / ミニスカート"
+    ],
+    [
+      "6",
+      "Skirt (Long) / ロングスカート"
+    ],
+    [
+      "7",
+      "Leggings / レギンス"
+    ],
+    [
+      "8",
+      "Sweatpants / スウェットパンツ"
+    ],
+    [
+      "9",
+      "Dress (full) / ドレス"
+    ],
+    [
+      "a",
+      "Panties / パンティ"
+    ],
+    [
+      "b",
+      "Bikini Bottom / ビキニボトム"
+    ],
+    [
+      "c",
+      "Hakama / Kimono / 袴・着物"
+    ],
+    [
+      "d",
+      "School Skirt / 制服スカート"
+    ],
+    [
+      "e",
+      "Stockings / ストッキング"
+    ],
+    [
+      "f",
+      "Custom / カスタム"
+    ]
+  ],
+  "bust_shape": [
+    [
+      "0",
+      "(undefined) / （未定義）"
+    ],
+    [
+      "1",
+      "Square (Pecs) / スクエア（胸筋）"
+    ],
+    [
+      "2",
+      "Round / 丸型"
+    ],
+    [
+      "3",
+      "Teardrop / しずく"
+    ],
+    [
+      "4",
+      "Broad / 広い"
+    ],
+    [
+      "5",
+      "Side Set / サイドセット"
+    ],
+    [
+      "6",
+      "Slender / 細い"
+    ]
+  ],
+  "bust_size": [
+    [
+      "0",
+      "(none) / （なし）"
+    ],
+    [
+      "1",
+      "Flat / Male / Neutral / フラット"
+    ],
+    [
+      "2",
+      "Athletic / Pectorals / アスレチック"
+    ],
+    [
+      "3",
+      "Petite / AAA-A / 小さめ"
+    ],
+    [
+      "4",
+      "Small / B-C / 小"
+    ],
+    [
+      "5",
+      "Medium / D-E / 中"
+    ],
+    [
+      "6",
+      "Large / F-G / 大"
+    ],
+    [
+      "7",
+      "Extra Large / H+ / 特大"
+    ],
+    [
+      "8",
+      "Enhanced / 豊胸"
+    ]
+  ],
+  "hip_size": [
+    [
+      "0",
+      "Normal / 普通"
+    ],
+    [
+      "1",
+      "Thin / 細い"
+    ],
+    [
+      "2",
+      "Athletic / Firm / 引き締まった"
+    ],
+    [
+      "3",
+      "Average / 普通"
+    ],
+    [
+      "4",
+      "Curvy / Full / 豊満"
+    ],
+    [
+      "5",
+      "Large / Wide / 大きい"
+    ],
+    [
+      "6",
+      "Extra Large / 特大"
+    ],
+    [
+      "7",
+      "Sticks out / 突き出し"
+    ]
+  ],
+  "waist_size": [
+    [
+      "0",
+      "Normal / 普通"
+    ],
+    [
+      "1",
+      "Flat / Thin / 細い"
+    ],
+    [
+      "2",
+      "Athletic / Firm / 引き締まった"
+    ],
+    [
+      "3",
+      "Average / 普通"
+    ],
+    [
+      "4",
+      "Curvy / Full / 豊満"
+    ],
+    [
+      "5",
+      "Large / Wide / 大きい"
+    ],
+    [
+      "6",
+      "Extra Large / 特大"
+    ],
+    [
+      "7",
+      "Pregnant / 妊婦"
+    ]
+  ],
+  "Tool_Table": [
+    [
+      "00",
+      "Nothing / なし"
+    ],
+    [
+      "10",
+      "Sword / 刀"
     ]
   ],
   "ModelImage_Table": [
@@ -1678,22 +1941,6 @@
     [
       "21",
       "Instagram"
-    ],
-    [
-      "80",
-      "Promptchan"
-    ],
-    [
-      "90",
-      "Fanvue"
-    ],
-    [
-      "a0",
-      "Nastia"
-    ],
-    [
-      "b0",
-      "APOB"
     ]
   ],
   "ModelVideo_Table": [
@@ -1744,10 +1991,6 @@
     [
       "17",
       "Google Veo 3.1"
-    ],
-    [
-      "90",
-      "Promptchan"
     ]
   ],
   "__text_fields__": {
@@ -1909,7 +2152,7 @@
   "__section_order__": [
     "P",
     "FACE",
-    "A",
+    "Animal",
     "PI",
     "PW",
     "FACE_PW",
@@ -1917,20 +2160,20 @@
     "CLIP_FA",
     "CLIP_E",
     "CLIP_X",
-    "E",
-    "HC",
-    "SK",
+    "Eyes",
+    "Hair",
+    "Skin",
     "CLIP_SK",
-    "X",
-    "FA",
-    "CL",
+    "Expression",
+    "FaceAngle",
+    "Clothing",
     "Tool",
-    "B",
-    "WH",
-    "PM",
+    "Bust",
+    "WaistHip",
+    "PostureMotion",
     "CLIP_PM",
     "Background",
-    "CS",
+    "Camera",
     "CLIP_BG",
     "CLIP_CS",
     "J",
@@ -1952,7 +2195,7 @@
   "__section_styles__": {
     "P": "id",
     "FACE": "text",
-    "A": "matrix",
+    "Animal": "matrix",
     "PI": "id",
     "PW": "id",
     "FACE_PW": "text",
@@ -1960,20 +2203,20 @@
     "CLIP_FA": "text",
     "CLIP_E": "text",
     "CLIP_X": "text",
-    "E": "2dig",
-    "HC": "3dig",
-    "SK": "1dig",
+    "Eyes": "2dig",
+    "Hair": "3dig",
+    "Skin": "1dig",
     "CLIP_SK": "text",
-    "X": "matrix",
-    "FA": "2dig",
-    "CL": "4dig",
+    "Expression": "matrix",
+    "FaceAngle": "2dig",
+    "Clothing": "4dig",
     "Tool": "matrix",
-    "B": "2dig",
-    "WH": "2dig",
-    "PM": "2dig",
+    "Bust": "2dig",
+    "WaistHip": "2dig",
+    "PostureMotion": "2dig",
     "CLIP_PM": "text",
     "Background": "matrix",
-    "CS": "3dig",
+    "Camera": "3dig",
     "CLIP_BG": "text",
     "CLIP_CS": "text",
     "J": "id",
@@ -1993,7 +2236,7 @@
     "Head": [
       "P",
       "FACE",
-      "A",
+      "Animal",
       "PI",
       "PW",
       "FACE_PW",
@@ -2001,24 +2244,24 @@
       "CLIP_FA",
       "CLIP_E",
       "CLIP_X",
-      "E",
-      "HC",
-      "SK",
+      "Eyes",
+      "Hair",
+      "Skin",
       "CLIP_SK",
-      "X",
-      "FA"
+      "Expression",
+      "FaceAngle"
     ],
     "Body": [
-      "CL",
+      "Clothing",
       "Tool",
-      "B",
-      "WH",
-      "PM",
+      "Bust",
+      "WaistHip",
+      "PostureMotion",
       "CLIP_PM"
     ],
     "Sight": [
       "Background",
-      "CS",
+      "Camera",
       "CLIP_BG",
       "CLIP_CS",
       "J",
@@ -2046,57 +2289,63 @@
     "Sight",
     "Internal"
   ],
+  "__protected__": [
+    "ModelImage",
+    "ModelVideo",
+    "PostureMotion",
+    "Tool"
+  ],
   "__col_names__": {
-    "A": [
+    "Animal": [
       "Animal"
     ],
-    "E": [
-      "Eyes_color",
-      "Eyes_additional"
+    "Eyes": [
+      "eye_color",
+      "eye_additional"
     ],
-    "HC": [
-      "Hair_color",
-      "Hair_style",
-      "Hair_length"
+    "Hair": [
+      "hair_color",
+      "hair_style",
+      "hair_length"
     ],
-    "SK": [
+    "Skin": [
       "SkinColor_skin"
     ],
-    "X": [
+    "Expression": [
       "Expression / 表情"
     ],
-    "FA": [
-      "FaceAngle_direction",
-      "FaceAngle_vertical"
+    "FaceAngle": [
+      "face_direction",
+      "face_vertical"
     ],
-    "CL": [
-      "Top Color / トップ色",
-      "Top Type / トップ種別",
-      "Bottom Color / ボトム色",
-      "Bottom Type / ボトム種別"
+    "Clothing": [
+      "bottom_type",
+      "bottom_color",
+      "top_type",
+      "top_color"
     ],
     "Tool": [
       "Tool"
     ],
-    "B": [
-      "Bust_shape",
-      "Bust_size"
+    "Bust": [
+      "bust_shape",
+      "bust_size"
     ],
-    "WH": [
-      "WaistHip_hip",
-      "WaistHip_waist"
+    "WaistHip": [
+      "hip_size",
+      "waist_size"
     ],
-    "PM": [
-      "PostureMotion_motion",
-      "PostureMotion_posture"
+    "PostureMotion": [
+      "motion",
+      "posture"
     ],
     "Background": [
       "Background"
     ],
-    "CS": [
-      "CameraShot_lighting",
-      "CameraShot_angle",
-      "CameraShot_shot"
+    "Camera": [
+      "camera_light",
+      "camera_angle",
+      "camera_shot"
     ],
     "ModelImage": [
       "ModelImage"
@@ -2106,63 +2355,73 @@
     ]
   },
   "__col_defs__": {
-    "B": [
+    "Bust": [
       [
         "Shape 1st",
         "shape_1st",
-        "B_Shape"
+        "bust_shape"
       ],
       [
         "Size 2nd",
         "size_2nd",
-        "B_Size"
+        "bust_size"
       ]
     ],
-    "WH": [
+    "WaistHip": [
       [
         "Hip 1st",
         "hip_1st",
-        "WH_Hip"
+        "hip_size"
       ],
       [
         "Waist 2nd",
         "waist_2nd",
-        "WH_Waist"
+        "waist_size"
       ]
     ],
-    "CL": [
+    "Clothing": [
       [
         "Top Color 4th",
         "top_color_4th",
-        "CL_TopColor"
+        "top_color"
       ],
       [
         "Top Type 3rd",
         "top_type_3rd",
-        "CL_Top"
+        "top_type"
       ],
       [
         "Bottom Color 2nd",
         "bot_color_2nd",
-        "CL_BotColor"
+        "bottom_color"
       ],
       [
         "Bottom Type 1st",
         "bot_type_1st",
-        "CL_Bot"
+        "bottom_type"
       ]
     ]
   },
   "__parent_names__": {
-    "E": "Eyes",
-    "HC": "Hair",
-    "SK": "Skin",
-    "FA": "FaceAngle",
-    "CL": "clothing",
-    "B": "Bust",
-    "WH": "WaistHip",
-    "PM": "PostureMotion",
-    "CS": "CameraShot",
+    "P": "Person / 人物",
+    "PI": "PersonInhrt / 継承元",
+    "PW": "PersonsWith / 同伴者",
+    "J": "Timestamp / タイムスタンプ",
+    "Eyes": "Eyes / 目",
+    "Hair": "Hair / 髪",
+    "Skin": "Skin / 肌",
+    "FaceAngle": "FaceAngle / 顔の角度",
+    "Clothing": "clothing",
+    "Bust": "Bust",
+    "WaistHip": "WaistHip",
+    "PostureMotion": "PostureMotion / 姿勢・動作",
+    "Camera": "CameraShot / カメラショット",
+    "O": "O",
+    "R": "R",
+    "K": "K",
+    "Watermark": "Watermark",
+    "audio": "audio",
+    "Variant": "Variant",
     "related": "related"
   },
   "__deleted_sections__": [
@@ -2171,7 +2430,6 @@
     "Quality"
   ],
   "Quality": [],
-  "bbb_Table": [],
   "__hidden_for__": {
     "Audio": [
       "image"
@@ -2209,91 +2467,5 @@
         "value": ""
       }
     ]
-  },
-  "O_Preset": [
-    [
-      "f1",
-      "15:1"
-    ],
-    [
-      "73",
-      "21:9"
-    ],
-    [
-      "09",
-      "16:9"
-    ],
-    [
-      "32",
-      "3:2"
-    ],
-    [
-      "43",
-      "4:3"
-    ],
-    [
-      "11",
-      "1:1"
-    ],
-    [
-      "34",
-      "3:4"
-    ],
-    [
-      "23",
-      "2:3"
-    ],
-    [
-      "90",
-      "9:16"
-    ]
-  ],
-  "R_Preset": [
-    [
-      "36",
-      "360p"
-    ],
-    [
-      "48",
-      "480p"
-    ],
-    [
-      "72",
-      "720p"
-    ],
-    [
-      "a8",
-      "1080p"
-    ],
-    [
-      "a4",
-      "1440p"
-    ],
-    [
-      "04",
-      "4K"
-    ],
-    [
-      "08",
-      "8K"
-    ]
-  ],
-  "K_Preset": [
-    [
-      "24",
-      "24 fps"
-    ],
-    [
-      "30",
-      "30 fps"
-    ],
-    [
-      "60",
-      "60 fps"
-    ],
-    [
-      "b0",
-      "120 fps"
-    ]
-  ]
+  }
 }

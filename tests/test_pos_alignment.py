@@ -121,6 +121,13 @@ def test_background_alias_resolves_to_storage_key():
 def test_alias_map_is_minimal():
     """Only deliberate canvas-name renames belong in the alias map.
     Adding more (Hair → hc, Eyes → e, etc.) creates shims for sections
-    that aren't actually renamed; they would just hide future drift."""
+    that aren't actually renamed; they would just hide future drift.
+
+    Allowed entries:
+      - Background — canvas section name differs from CLIP/storage key
+      - Camera     — canvas section name "Camera" maps to storage key
+                     "camera_shot" (CODED_FIELDS label is "CameraShot",
+                     so the auto-built section→storage map misses it)
+    """
     from attr_viewer import _HUMAN_LABEL_ALIASES
-    assert set(_HUMAN_LABEL_ALIASES.keys()) == {"Background"}
+    assert set(_HUMAN_LABEL_ALIASES.keys()) == {"Background", "Camera"}

@@ -1786,7 +1786,8 @@ class PreviewWindow(QWidget):
                     # Also clear the canvas debug tiles so stale score text
                     # from an earlier detection doesn't linger.
                     _CF_KEYS = ("CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
-                                "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "FACE")
+                                "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL",
+                                "CLIP_A", "FACE")
                     for _k in _CF_KEYS:
                         if _k in _entry:
                             del _entry[_k]
@@ -1863,7 +1864,7 @@ class PreviewWindow(QWidget):
             pass
         _sc.load_file(path, entry)
         # Resize CLIP/FACE/per-field tiles to fit their loaded text content
-        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL"}
+        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "CLIP_A"}
         for _cfw in _sc.widgets:
             if _cfw.key in _clip_keys and getattr(_cfw, "_te", None):
                 QTimer.singleShot(50, lambda _w=_cfw: self._fit_clip_face_tile(_w))
@@ -1880,7 +1881,7 @@ class PreviewWindow(QWidget):
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
-        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL"}
+        _clip_keys = {"CLIP", "FACE", "FACE_PW", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "CLIP_A"}
         for w in getattr(sc, "widgets", []):
             if w.key in _clip_keys:
                 te = getattr(w, "_te", None)
@@ -2995,7 +2996,7 @@ class PreviewWindow(QWidget):
             _dbg("    CLIP START")
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
-            _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL")
+            _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL", "A")
             # In Refresh-CLIP mode (overwrite=True), wipe the canonical
             # lowercase keys for every CLIP-detectable field BEFORE detection
             # runs. Without this, fields that CLIP doesn't detect this round
@@ -4158,6 +4159,32 @@ class PreviewWindow(QWidget):
             self._protected_check.setText("🔓 Editable")
             self._protected_check.setStyleSheet(
                 "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
+
+        # Sync the three other surfaces that reflect lock state so toggling
+        # the lock immediately changes their color. Without this, the preview
+        # rim, main-table row icon, and FM thumbnail stay at the pre-toggle
+        # color until the next nav/refresh — user reported the red rim
+        # persisting after unlocking a renamed file.
+        path = getattr(self, "_attr_path", None)
+        if path:
+            try:
+                self._update_preview_rim(path, locked)
+            except Exception:
+                pass
+            try:
+                app = self.handler.app
+                for _r in range(app.table.rowCount()):
+                    if app.table.get_row_path(_r) == path:
+                        app._refresh_row_rim(_r)
+                        break
+            except Exception:
+                pass
+            try:
+                fm_win = getattr(self.handler.app, "_fm_win", None)
+                if fm_win is not None:
+                    fm_win.refresh_rims_only()
+            except Exception:
+                pass
 
     def _update_preview_rim(self, path, locked):
         """Color the media-pane border by file kind + lock state, the

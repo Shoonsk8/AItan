@@ -27,6 +27,7 @@ STRIP_KEYS = frozenset({
     "CLIP",
     "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM",
     "CLIP_E", "CLIP_CS", "CLIP_BG", "CLIP_X",
+    "CLIP_A",
     "FACE",
     "_project",   # runtime marker that also leaks into saves
 })

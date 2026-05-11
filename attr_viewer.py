@@ -69,22 +69,40 @@ _HUMAN_LABEL_ALIASES = {
     # this mapped to "bg" (short clip-field name) and the entry-clear
     # in _update_clip_for_field cleared the wrong slot.
     "Background": "background",
+    # Section name "Camera" differs from CODED_FIELDS label "CameraShot",
+    # so the auto-built map doesn't catch it. Hand-wire to the storage
+    # key so the 3 sub-combos populate from entry["camera_shot"].
+    "Camera": "camera_shot",
 }
 
 def _build_section_to_field_key():
-    """Section key (e.g. "HC", "Background") → storage key (e.g. "hair",
-    "background"). Storage key comes from the 4th element of each
-    CODED_FIELDS entry — that's the on-disk JSON key, the canonical
-    name. Without this, the canvas widget looks up entry["hc"] while
-    data lives at entry["hair"] and the tile shows empty."""
+    """Section key (e.g. "HC", "FaceAngle", "Background") → storage key
+    (e.g. "hair", "face_angle", "background"). Storage key comes from
+    the 4th element of each CODED_FIELDS entry — that's the on-disk
+    JSON key, the canonical name. Without this, the canvas widget
+    looks up entry["faceangle"] while data lives at entry["face_angle"]
+    and the tile shows empty.
+
+    Maps BOTH:
+      - short filename letter (e.g. "FA") → storage key
+      - human label / long widget name (e.g. "FaceAngle") → storage key
+    so that pre-rename and post-rename canvas section keys both resolve.
+    """
     try:
         import aisearch_attrs as _am
         _map = {}
-        for letter, _label, digits, *rest in _am.CODED_FIELDS:
+        for letter, label, digits, *rest in _am.CODED_FIELDS:
             if digits == 0:
                 continue
             storage = rest[0] if rest else letter.lower()
             _map[letter] = storage
+            # Also accept the human label / long widget key — canvas
+            # sections are keyed by label after the long-key rename.
+            if label and label not in _map:
+                # Some labels are bilingual (e.g. "Clothing / 服装"); split.
+                _short = label.split("/")[0].strip()
+                if _short:
+                    _map[_short] = storage
         _map.update(_HUMAN_LABEL_ALIASES)
         return _map
     except Exception:
@@ -2046,6 +2064,9 @@ class AnchorBox(QWidget):
     def load_soft(self, tags_set, entry): pass   # no per-file data on the anchor
     def get_soft_value(self):    return ("noop", "", "")
     def clear_soft(self): pass
+    def collect_soft(self):      return None      # collect_soft_data() skips None
+    def is_expanded(self):       return True
+    def set_expanded(self, on):  pass
 
     def move(self, *args):
         """Anchor's TL is permanently pinned at (0, 0); ignore any
@@ -2691,6 +2712,7 @@ class AttrViewerWidget(QWidget):
             "CLIP_SK": "Skin",     "CLIP_PM": "PostureMotion",
             "CLIP_CS": "Camera",   "CLIP_BG": "Background",
             "CLIP_X":  "Expression","CLIP_CL": "Clothing",
+            "CLIP_A":  "Animal",
             "FACE":    "P",
             "FACE_PW": "PW",
         }

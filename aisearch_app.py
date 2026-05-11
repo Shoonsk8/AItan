@@ -5012,15 +5012,55 @@ class AISearchApp(QMainWindow):
         except Exception:
             return None
 
+    def _is_face_sample(self, full_path):
+        """True if `full_path` is the source_path of any person in this
+        project's faces DB. Cheap because load_faces_db is mtime-cached
+        in attrs_mod."""
+        try:
+            proj = getattr(self, "current_project", None)
+            if not proj or not full_path:
+                return False
+            db = attrs_mod.load_faces_db(proj)
+            faces = db.get("faces", {}) if isinstance(db, dict) else {}
+            np_target = os.path.normpath(full_path)
+            for _pid, _fdata in faces.items():
+                if not isinstance(_fdata, dict):
+                    continue
+                if os.path.normpath(_fdata.get("source_path", "")) == np_target:
+                    return True
+            return False
+        except Exception:
+            return False
+
     def _row_rim_icon(self, full_path):
         """Build a small colored-square QIcon for a row's Name cell,
-        or None if no rim should appear."""
-        col = self._row_rim_color(full_path)
-        if not col:
+        or None if no rim should appear. When the file is a face-sample
+        (source_path in faces DB) we overlay a cyan border on top so the
+        user can scan the table for labeled training samples at a glance
+        without losing the existing lock/kind fill color."""
+        try:
+            col = self._row_rim_color(full_path)
+            is_sample = self._is_face_sample(full_path)
+            if not col and not is_sample:
+                return None
+            # Always start with a solid fill so QPixmap is well-defined for
+            # the QPainter draw below — alpha-channel pixmaps without a
+            # proper format have caused PyQt6 to abort in past versions.
+            px = QPixmap(12, 12)
+            px.fill(QColor(col) if col else QColor("#3a3a3a"))
+            if is_sample:
+                from PyQt6.QtGui import QPainter as _QP, QPen as _QPen
+                p = _QP(px)
+                try:
+                    pen = _QPen(QColor("#00d0ff"))
+                    pen.setWidth(2)
+                    p.setPen(pen)
+                    p.drawRect(1, 1, 9, 9)
+                finally:
+                    p.end()
+            return QIcon(px)
+        except Exception:
             return None
-        px = QPixmap(12, 12)
-        px.fill(QColor(col))
-        return QIcon(px)
 
     def _refresh_row_rim(self, row):
         """Update a single row's Name-cell icon to reflect current

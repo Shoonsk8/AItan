@@ -1679,7 +1679,7 @@ _TRANSIENT_ENTRY_KEYS = frozenset({
 # out of AItan to keep the embedded block small and file-portable.
 _AITAN_SKIP_KEYS = frozenset({
     "CLIP", "CLIP_HC", "CLIP_FA", "CLIP_SK", "CLIP_PM", "CLIP_E",
-    "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "FACE", "FACE_PW",
+    "CLIP_CS", "CLIP_BG", "CLIP_X", "CLIP_CL", "CLIP_A", "FACE", "FACE_PW",
 })
 
 def _is_transient_key(k: str) -> bool:
@@ -3342,29 +3342,47 @@ CLIP_AUTO_DETECT = [
         ("6", "an astronaut floating in deep outer space with a planet or spacecraft visible in the vacuum of space"),
         ("7", "a person inside a stone castle with medieval walls towers fortress architecture or historic stonework visible behind"),
     ]},
-    # ── Animal group (major row only — sub-types within a group come from
-    # manual selection or per-field correction learning). zero_is_none=True
-    # means "no animal" (code 0) is suppressed so portraits without animals
-    # don't get a false animal tag.
-    # Row codes match attrs_tags_<PROJECT>.json A_Table:
-    #   1=Dog 2=Cat 3=Bird 4=Farm/Livestock(horse,cow,pig,sheep)
-    #   5=Reptile 6=Aquatic mammal(dolphin,whale) 7=Fish/Marine(shark,octopus)
-    #   8=Wild predator(lion,tiger,bear,wolf) 9=Wild prey(deer,elephant,zebra)
-    #   a=Small mammal/Rodent  b=Insect  f=Mythical/Fantasy
-    {"field": "animal", "pos": 2, "zero_is_none": True, "threshold": 0.20, "options": [
+    # ── Animal: margin-gated, codes aligned with Animal_Table rows ──────────
+    # Every Animal prompt starts "a person photographed with …", so on
+    # portraits without any animal all options score within 0.01 of each
+    # other (pure noise). Past argmax-only writes produced random false
+    # positives (Horse, Mythical on plain portraits). But on real animal
+    # photos the winning prompt clearly beats the "no animal" baseline:
+    #   Horse portrait    margin 0.007  ← noise, must skip
+    #   Mythical portrait margin 0.007  ← noise, must skip
+    #   Cat photo         margin 0.045  ← real, must write
+    #   Capybara video    margin 0.048  ← real, must write
+    # `margin_over_zero` requires the winning code's score to beat the
+    # "0/none" prompt by at least this much before the write happens.
+    # 0.025 sits in the gap between noise and real detections.
+    # The CLIP_A debug tile still shows scores for every image —
+    # margin_over_zero only gates the write, not the display.
+    #
+    # Codes MUST match Animal_Table row keys so a CLIP-detected code
+    # lands on the correct row in the matrix:
+    #   1=Dog 2=Cat 3=Bird 4=Horse 5=Reptile 6=Aquatic-mammal
+    #   7=Farm-animal 9=Wild-mammal(large) a=Small-mammal b=Insect
+    #   c=Fish d=Amphibian e=Primate f=Mythical
+    # Row 8 is reserved (was previously Wild-mammal — shifted to 9 so
+    # large mammals sit higher than small mammals in user's preferred
+    # ordering: large/small/insect ascending into a/b).
+    {"field": "animal", "pos": 2, "zero_is_none": True, "margin_over_zero": 0.025,
+     "threshold": 0.20, "options": [
         ("0", "a person photographed alone with no animal companion or pet visible in frame"),
         ("1", "a person photographed with a domestic dog or puppy beside them as pet or companion"),
         ("2", "a person photographed with a domestic cat or kitten beside them as pet or companion"),
-        ("3", "a person photographed with a bird parrot eagle owl peacock or songbird visible"),
-        ("4", "a person photographed with farm livestock horse pony cow pig sheep goat or chicken in a barn pasture or stable"),
+        ("3", "a person photographed with a bird parrot eagle hawk owl peacock or songbird visible"),
+        ("4", "a person photographed with a horse or pony in a stable pasture or riding outdoors"),
         ("5", "a person photographed with a reptile snake lizard turtle or crocodile"),
         ("6", "a person photographed in water with an aquatic mammal dolphin whale seal or sea lion"),
-        ("7", "a person photographed underwater with fish or marine life tropical fish shark octopus or jellyfish"),
-        ("8", "a person photographed with a wild predator carnivore lion tiger bear wolf or fox"),
-        ("9", "a person photographed with a wild prey herbivore deer elephant giraffe zebra rhino or hippo"),
-        ("a", "a person photographed with a small mammal rodent rabbit hamster capybara ferret or squirrel"),
+        ("7", "a person photographed with farm livestock cow pig sheep goat or chicken in a barn pasture or stable"),
+        ("9", "a person photographed with a wild mammal lion tiger bear wolf fox elephant giraffe deer or zebra"),
+        ("a", "a person photographed with a small mammal rabbit hamster capybara ferret or squirrel"),
         ("b", "a person photographed with an insect or arachnid butterfly bee or spider visible"),
-        ("f", "a person photographed with a mythical fantasy creature dragon unicorn phoenix or mermaid"),
+        ("c", "a person photographed underwater or near water with fish goldfish koi salmon tuna shark stingray or pufferfish"),
+        ("d", "a person photographed with an amphibian frog toad salamander newt or axolotl"),
+        ("e", "a person photographed with a primate monkey chimpanzee gorilla orangutan macaque or baboon"),
+        ("f", "a person photographed with a mythical fantasy creature dragon unicorn phoenix mermaid pegasus griffin centaur fairy elf angel or demon"),
     ]},
     # ── Expression family (first digit — AI detects x0 baseline of each family) ─
     {"field": "expression", "pos": 2, "zero_is_none": True,  "threshold": 0.18, "options": [
@@ -3751,7 +3769,18 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
             continue
         if field in _corrected_fields:
             continue   # whole value already set from correction
+        # display_only fields run scoring (so the CLIP_<field> debug tile
+        # can show what AI thinks) but never write to entry — the value
+        # has to be set manually.
+        if spec.get("display_only", False):
+            continue
         pos         = spec["pos"]
+        # margin_over_zero: write only when the winning code beats the
+        # explicit "0/none" prompt by this much. For Animal, prompts
+        # share the prefix "a person photographed with …" so on noise-
+        # only images all options cluster tight together; the margin
+        # gate separates real detections (0.04+) from noise (<0.01).
+        margin_over_zero = spec.get("margin_over_zero", 0.0)
         zero_is_none    = spec.get("zero_is_none", True)
         default_is_zero = spec.get("default_is_zero", False)
         threshold       = spec.get("threshold", 0.20)
@@ -3803,6 +3832,18 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
         #     "0" is itself a meaningful answer (e.g. PM=0 standing).
         if zero_is_none and not default_is_zero and best_code == "0":
             continue   # genuinely classified as "none" — leave unset
+
+        # margin_over_zero gate: when set, require best to beat the
+        # explicit "0" prompt by this much. Filters noise-only images
+        # where every prompt clusters within ~0.01 of the baseline.
+        if margin_over_zero > 0:
+            try:
+                _zero_idx = next(j for j, (c, _) in enumerate(options) if c == "0")
+                _zero_score = float(scores[_zero_idx])
+                if (best_score - _zero_score) < margin_over_zero:
+                    continue
+            except StopIteration:
+                pass
 
         # Write the detected digit into the working hex string
         val = list(current)
@@ -4306,18 +4347,26 @@ def inspect_face_detection(path, project):
         if img is None:
             result["error"] = "could not decode file as image or video"
             return result
-        # First pass: HOG model with default upsample (fast). Most faces
-        # land here. If nothing's found, retry with upsample=2 — that's
-        # where small / off-angle / AI-generated faces typically show up.
-        # User reported "face clearly exists" but num_faces=0; the
-        # default HOG setting misses small or unusual faces.
+        # Three-tier detection cascade (cheap → expensive):
+        #   1. HOG, upsample=1 (default).  ~50ms.  Frontal faces.
+        #   2. HOG, upsample=2.            ~150ms. Small / mid-angle faces.
+        #   3. CNN model.                  ~1-3s.  Profile / 3/4 / occluded.
+        # User reported "picture has a person looking sideways at a cat —
+        # both HOG passes returned 0". HOG is frontal-only by training;
+        # dlib's CNN detector handles non-frontal faces but is too slow
+        # to be the default — only run when HOG produced nothing.
         with _face_lock:
             locations = face_recognition.face_locations(img)
             if not locations:
-                # Upsample retry — doubles the search cost but finds
-                # faces below ~80 px that HOG-1 misses.
                 locations = face_recognition.face_locations(
                     img, number_of_times_to_upsample=2)
+            if not locations:
+                try:
+                    locations = face_recognition.face_locations(img, model="cnn")
+                except Exception:
+                    # CNN model missing (dlib without CUDA / mmod weights
+                    # absent) — fall through with empty locations.
+                    pass
             encodings = face_recognition.face_encodings(img, known_face_locations=locations)
         result["num_faces"] = len(encodings)
         if not encodings:
