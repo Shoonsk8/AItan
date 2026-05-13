@@ -180,15 +180,20 @@ def detect_file_attrs(path):
         if width <= 0 or height <= 0:
             return result
 
-        # R — resolution based on longer side
-        long_side = max(width, height)
-        if   long_side >= 7680: result["resolution"] = "08"   # 8K
-        elif long_side >= 3840: result["resolution"] = "04"   # 4K
-        elif long_side >= 2560: result["resolution"] = "a4"   # 1440p
-        elif long_side >= 1920: result["resolution"] = "a8"   # 1080p
-        elif long_side >= 1280: result["resolution"] = "72"   # 720p
-        elif long_side >= 854:  result["resolution"] = "48"   # 480p
-        else:                   result["resolution"] = "36"   # 360p
+        # R — resolution by SHORT side (the "Np" convention: 720p, 1080p
+        # etc. names the short axis). Thresholds are the midpoint between
+        # adjacent tiers so the closer standard wins.
+        # Tiers: 360p, 480p, 720p, 890p, 1020p, 1080p, 1440p, 4K, 8K.
+        short_side = min(width, height)
+        if   short_side >= 3240: result["resolution"] = "08"   # 8K  (4320)
+        elif short_side >= 1800: result["resolution"] = "04"   # 4K  (2160)
+        elif short_side >= 1260: result["resolution"] = "e4"   # 1440p
+        elif short_side >= 1050: result["resolution"] = "a8"   # 1080p
+        elif short_side >= 955:  result["resolution"] = "a2"   # 1020p
+        elif short_side >= 805:  result["resolution"] = "89"   # 890p
+        elif short_side >= 600:  result["resolution"] = "72"   # 720p
+        elif short_side >= 420:  result["resolution"] = "48"   # 480p
+        else:                    result["resolution"] = "36"   # 360p
 
         # O — orientation / aspect ratio
         ratio = width / height
@@ -500,12 +505,14 @@ _DEFAULT_TAG_GROUPS = {
     ],
     "R": [
         ["36", "360p"], ["48", "480p"],  ["72", "720p"],
-        ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
+        ["89", "890p"], ["a2", "1020p"],
+        ["a8", "1080p"],["e4", "1440p"], ["04", "4K"],
         ["08", "8K"],
     ],
     "R_Preset": [
         ["36", "360p"], ["48", "480p"],  ["72", "720p"],
-        ["a8", "1080p"],["a4", "1440p"], ["04", "4K"],
+        ["89", "890p"], ["a2", "1020p"],
+        ["a8", "1080p"],["e4", "1440p"], ["04", "4K"],
         ["08", "8K"],
     ],
     "K": [
@@ -1713,9 +1720,14 @@ def save(project, data):
                 return v[:_DEBUG_TEXT_CAP] + "\n…(truncated)"
             return v
         cleaned = {}
-        for path, entry in data.items():
+        # Snapshot the items list before iterating — `save` is called
+        # from background threads (CLIP/face detect) while the main
+        # thread or another worker may still be mutating `data`, which
+        # raises "dictionary changed size during iteration". A list
+        # copy is cheap (string keys, dict refs) and avoids the race.
+        for path, entry in list(data.items()):
             if isinstance(entry, dict):
-                stripped = {k: _cap_debug(k, v) for k, v in entry.items()
+                stripped = {k: _cap_debug(k, v) for k, v in list(entry.items())
                             if not _is_transient_key(k)}
                 # Translate short coded-field keys (hc, bg, …) into the
                 # human-readable form (hair, background, …) on disk.
@@ -2152,7 +2164,10 @@ def migrate_aitan_video(path: str) -> bool:
             capture_output=True, timeout=30)
         orig_size = os.path.getsize(path) if os.path.exists(path) else 0
         tmp_size  = os.path.getsize(tmp)  if os.path.exists(tmp)  else 0
-        if tmp_size > 0 and (orig_size == 0 or tmp_size >= orig_size * 0.5):
+        # Same guard as _embed_aitan_video: skip the commit if the original
+        # vanished mid-migration (FM move, external rename) so we don't
+        # recreate a phantom copy at the stale path.
+        if tmp_size > 0 and os.path.exists(path) and tmp_size >= orig_size * 0.5:
             shutil.move(tmp, path)
             return True
         return False
@@ -2278,7 +2293,13 @@ def migrate_aitan_image(path: str) -> bool:
             else:  # .webp
                 lossless = img.info.get("lossless", False)
                 img.save(tmp, format="WEBP", exif=exif_bytes, lossless=lossless, quality=90)
-        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+        # Same guard as _embed_aitan_image: refuse to recreate `path` if it
+        # disappeared during migration. PIL holds `img` open from the
+        # earlier Image.open, so the tmp write can succeed even after the
+        # FM moved the file — without this check shutil.move would
+        # resurrect the original at the stale source location.
+        if (os.path.exists(tmp) and os.path.getsize(tmp) > 0
+                and os.path.exists(path)):
             _shutil.move(tmp, path)
             return True
         return False
@@ -2348,7 +2369,11 @@ def _embed_aitan_video(path: str, block: str, _raise: bool = False) -> bool:
         # even if ffmpeg returned non-zero (some containers produce warnings/non-fatal errors)
         orig_size = os.path.getsize(path) if os.path.exists(path) else 0
         tmp_size  = os.path.getsize(tmp)  if os.path.exists(tmp)  else 0
-        if tmp_size > 0 and (orig_size == 0 or tmp_size >= orig_size * 0.5):
+        # Refuse to recreate the file at `path` if it disappeared while we
+        # were baking — the FM (or any external tool) may have moved/renamed
+        # it out from under us. shutil.move(tmp, path) would otherwise create
+        # a phantom duplicate at the stale path.
+        if tmp_size > 0 and os.path.exists(path) and tmp_size >= orig_size * 0.5:
             shutil.move(tmp, path)
             return True
         err = result.stderr.decode(errors="replace").strip().splitlines()
@@ -2521,7 +2546,11 @@ def _embed_aitan_image(path: str, block: str, _raise: bool = False) -> bool:
             else:
                 return False
         # Atomically replace original only if temp file was written successfully
-        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+        # AND the original still lives at `path`. If the file was moved/renamed
+        # while PIL held it open (FM drag, external rename), shutil.move would
+        # create a phantom copy at the stale path. Skip the commit instead.
+        if (os.path.exists(tmp) and os.path.getsize(tmp) > 0
+                and os.path.exists(path)):
             _shutil.move(tmp, path)
             return True
     except Exception as e:
@@ -3154,10 +3183,36 @@ def apply_rename_rules(path, rules):
     return os.path.join(dir_, new_stem + ext)
 
 
-def unique_path(path):
-    """If path already exists, append -001, -002, … until a free name is found."""
+def unique_path(path, src=None):
+    """If path already exists, append -001, -002, … until a free name is found.
+
+    Pass `src` (the file being renamed) to enable the same-J3 duplicate
+    guard: if the existing target file shares its J3 timestamp code with
+    the source, the existing target is a duplicate of THIS same logical
+    file from a prior rename/bake pass — appending a numeric suffix would
+    just multiply the pile-up (user reported ending up with -001, -002,
+    -003 copies in `Sophie/cat/33 cat`). When same-J3 is detected, return
+    `src` so callers' standard `if new_path == src: return` check bails
+    cleanly without renaming.
+    """
     if not os.path.exists(path):
         return path
+    if src and os.path.normpath(src) != os.path.normpath(path):
+        try:
+            _src_parts = parse_coded_filename(os.path.splitext(os.path.basename(src))[0]) or {}
+            _tgt_parts = parse_coded_filename(os.path.splitext(os.path.basename(path))[0]) or {}
+            _src_j = (_src_parts.get("j") or _src_parts.get("timestamp") or "").lower()
+            _tgt_j = (_tgt_parts.get("j") or _tgt_parts.get("timestamp") or "").lower()
+            if _src_j and _src_j == _tgt_j:
+                try:
+                    from aisearch_debug import dbg as _dbg
+                    _dbg(f"unique_path SKIP same-J3 src={os.path.basename(src)!r} "
+                         f"tgt={os.path.basename(path)!r} j={_src_j!r}")
+                except Exception:
+                    pass
+                return src
+        except Exception:
+            pass
     stem, ext = os.path.splitext(path)
     for i in range(1, 1000):
         candidate = f"{stem}-{i:03d}{ext}"
@@ -3180,71 +3235,80 @@ CLIP_AUTO_DETECT = [
     # regions of the image. Calling out "very dark" / "bright light" /
     # "saturated" gives CLIP a sharper axis to score along.
     # pos 3 = leftmost digit (canvas convention: Color, Style, Length).
+    # Hair color — prompts stripped to just "<color> hair" so CLIP scores
+    # only on hair-related concepts. The old long-form prompts ("no light
+    # tones, no highlights", "deep cocoa or chocolate", "fiery red-orange")
+    # gave CLIP extra non-hair phrases to match against the whole image —
+    # dark clothing/shadow/eyebrows latched onto "very dark/jet/no light"
+    # and pushed "black hair" to the top on clearly-blonde portraits.
+    # CLIP has no region awareness so shorter is better here.
     {"field": "hair", "pos": 3, "zero_is_none": True,  "threshold": 0.20, "options": [
-        ("1", "a person with very dark jet black hair, no light tones, no highlights"),
-        ("2", "a person with dark brown brunette hair, deep cocoa or chocolate tone"),
-        ("3", "a person with light brown caramel hair, mid-tone warm brown"),
-        ("4", "a person with bright blonde hair, golden yellow light-colored hair"),
-        ("5", "a person with platinum white-blonde hair, very pale near-white hair"),
-        ("6", "a person with vivid red hair, deep crimson or burgundy hair"),
-        ("7", "a person with pink hair, saturated pink dye"),
-        ("8", "a person with ginger orange copper hair, fiery red-orange"),
-        ("9", "a person with gray or silver-gray hair, no color saturation"),
-        ("a", "a person with pure white hair, snow white not blonde"),
-        ("b", "a person with vivid blue hair, saturated blue dye"),
-        ("c", "a person with vivid pure yellow hair, saturated yellow not blonde"),
-        ("d", "a person with vivid green hair, saturated green dye"),
-        ("e", "a person with rainbow multi-colored hair, several distinct colors at once"),
-        ("f", "a person with neon glowing fluorescent hair color"),
+        ("1", "a person with black hair"),
+        ("2", "a person with brown hair"),
+        ("3", "a person with light brown hair"),
+        ("4", "a person with blonde hair"),
+        ("5", "a person with platinum blonde hair"),
+        ("6", "a person with red hair"),
+        ("7", "a person with pink hair"),
+        ("8", "a person with orange ginger hair"),
+        ("9", "a person with gray hair"),
+        ("a", "a person with white hair"),
+        ("b", "a person with blue hair"),
+        ("c", "a person with yellow hair"),
+        ("d", "a person with green hair"),
+        ("e", "a person with multicolored hair"),
+        ("f", "a person with neon hair"),
     ]},
-    # ── Hair style ────────────────────────────────────────────────────────────
+    # Hair style — same idea: drop the explanatory clauses, keep the
+    # style descriptor word(s) only.
     {"field": "hair", "pos": 2, "zero_is_none": True,  "threshold": 0.16, "options": [
-        ("1", "a person with flat straight hair with no curl or wave"),
-        ("2", "a person with gently wavy or slightly curled hair"),
-        ("3", "a person with clearly curly or spiral ringlet hair texture"),
-        ("4", "a person with voluminous puffy hair"),
-        ("5", "a person with bob cut chin-length hair"),
-        ("6", "a person with hair tied back in a single ponytail at the back of the head"),
-        ("7", "a person with braided hair, classic three-strand braid"),
-        ("8", "a person with hair tied up in a generic bun or knot, position unspecified"),
-        ("9", "a person with a buzzcut or head that is shaved bald"),
-        ("a", "a person with hair in two symmetric pigtails or twintails on each side of the head"),
-        ("b", "a person with hair tied in a high bun on top of the head"),
-        ("c", "a person with hair tied in a low bun at the nape of the neck"),
-        ("d", "a person with half-up half-down hairstyle, top tied while bottom flows free"),
-        ("e", "a person with a pixie cut, very short layered haircut"),
-        ("f", "a person with a hime cut, long straight hair with blunt straight bangs"),
-        ("g", "a person with hair in a side ponytail draped over one shoulder"),
-        ("h", "a person with hair tied in a side bun off to one side of the head"),
-        ("i", "a person with hair in an elaborate updo or formal styled hair"),
-        ("j", "a person with a mohawk, sides shaved with a strip of hair on top"),
-        ("k", "a person with hair side-swept across the forehead"),
-        ("l", "a person with curtain bangs framing the face"),
-        ("m", "a person with thick blunt straight-cut bangs across the forehead"),
-        ("n", "a person with a layered haircut showing visible cascading layers"),
-        ("o", "a person with a mullet hairstyle, short on top short on sides long in back"),
-        ("p", "a person with a large afro hairstyle"),
-        ("q", "a person with hair in cornrows, tight braids close to the scalp"),
-        ("r", "a person with dreadlocks, thick rope-like locked strands"),
-        ("s", "a person with a top knot, hair gathered in a knot high on top of the head"),
-        ("t", "a person with space buns, two small buns on either side high on the head"),
-        ("u", "a person with a crown braid encircling the top of the head"),
-        ("v", "a person with a French braid, single braid down the back of the head"),
-        ("w", "a person with a fishtail braid, intricately woven herringbone braid"),
-        ("x", "a person with a crew cut, very short military haircut"),
-        ("y", "a person with an undercut, sides closely shaved beneath longer top hair"),
-        ("z", "a person with spiky hair styled to stand up in spikes"),
+        ("1", "a person with straight hair"),
+        ("2", "a person with wavy hair"),
+        ("3", "a person with curly hair"),
+        ("4", "a person with voluminous hair"),
+        ("5", "a person with bob cut hair"),
+        ("6", "a person with a ponytail"),
+        ("7", "a person with braided hair"),
+        ("8", "a person with hair in a bun"),
+        ("9", "a person with a buzzcut"),
+        ("a", "a person with twin pigtails"),
+        ("b", "a person with a high bun"),
+        ("c", "a person with a low bun"),
+        ("d", "a person with half-up half-down hair"),
+        ("e", "a person with a pixie cut"),
+        ("f", "a person with a hime cut"),
+        ("g", "a person with a side ponytail"),
+        ("h", "a person with a side bun"),
+        ("i", "a person with an updo hairstyle"),
+        ("j", "a person with a mohawk"),
+        ("k", "a person with side-swept hair"),
+        ("l", "a person with curtain bangs"),
+        ("m", "a person with blunt bangs"),
+        ("n", "a person with layered hair"),
+        ("o", "a person with a mullet"),
+        ("p", "a person with an afro"),
+        ("q", "a person with cornrows"),
+        ("r", "a person with dreadlocks"),
+        ("s", "a person with a top knot"),
+        ("t", "a person with space buns"),
+        ("u", "a person with a crown braid"),
+        ("v", "a person with a French braid"),
+        ("w", "a person with a fishtail braid"),
+        ("x", "a person with a crew cut"),
+        ("y", "a person with an undercut"),
+        ("z", "a person with spiky hair"),
     ]},
-    # ── Hair length ───────────────────────────────────────────────────────────
+    # Hair length — drop body-position descriptors that match non-hair
+    # regions (shoulders, jaw etc. could match clothing necklines too).
     # pos 1 = rightmost digit.
     {"field": "hair", "pos": 1, "zero_is_none": True,  "threshold": 0.16, "options": [
-        ("1", "a person with a buzzcut shaved head with almost no hair visible"),
-        ("2", "a person with very short hair above the ears not reaching the jaw"),
-        ("3", "a person with hair ending at or just touching the shoulders"),
-        ("4", "a person with long hair clearly past the shoulders reaching mid-back"),
-        ("5", "a person with very long hair reaching the waist hips or lower"),
-        ("6", "a person who is fully bald with a completely shaved or smooth head and no visible hair"),
-        ("7", "a person with partially bald receding hairline or thinning hair on top of the head"),
+        ("1", "a person with a buzzcut"),
+        ("2", "a person with very short hair"),
+        ("3", "a person with shoulder length hair"),
+        ("4", "a person with long hair"),
+        ("5", "a person with very long hair"),
+        ("6", "a person who is bald"),
+        ("7", "a person with thinning hair"),
     ]},
     # ── Face direction ────────────────────────────────────────────────────────
     {"field": "face_angle", "pos": 1, "zero_is_none": False, "threshold": 0.0,  "options": [
@@ -3388,9 +3452,25 @@ CLIP_AUTO_DETECT = [
     # Row 8 is reserved (was previously Wild-mammal — shifted to 9 so
     # large mammals sit higher than small mammals in user's preferred
     # ordering: large/small/insect ascending into a/b).
-    {"field": "animal", "pos": 2, "zero_is_none": True, "margin_over_zero": 0.025,
+    # Animal: auto-write re-enabled so the displayed/stored value tracks
+    # CLIP's current detection — text box and CLIP_A debug stay in sync.
+    # Class 0's prompt was rewritten keyword-dense (face/eyes/nose/hair
+    # etc.) so on no-animal images it should win the competitive scoring
+    # against the richly-described animal prompts. `margin_over_zero` is
+    # kept at 0.10 (up from 0.04) so a narrow class 0 loss still blocks
+    # the write rather than stamping a stray animal class.
+    {"field": "animal", "pos": 2, "zero_is_none": True, "margin_over_zero": 0.10,
+     "margin_over_second": 0.012,
      "threshold": 0.20, "options": [
-        ("0", "a person photographed alone with no animal companion or pet visible in frame"),
+        # Class 0 must compete keyword-for-keyword with the other animal
+        # prompts, which are visually evocative ("underwater with fish
+        # goldfish koi salmon tuna shark stingray pufferfish"). A short
+        # negated prompt ("with no animal") gets crushed because CLIP
+        # ignores "no" and the longer prompts have more matching tokens.
+        # Match the density by listing the visual features of human-only
+        # images: face, eyes, hair, etc. No animal keywords at all so
+        # the prompt embedding doesn't drift toward animal-concept space.
+        ("0", "a closeup portrait headshot photograph of a human person showing face eyes nose mouth lips ears chin cheeks forehead hair head neck shoulders skin facial features"),
         ("1", "a person photographed with a domestic dog or puppy beside them as pet or companion"),
         ("2", "a person photographed with a domestic cat or kitten beside them as pet or companion"),
         ("3", "a person photographed with a bird parrot eagle hawk owl peacock or songbird visible"),
@@ -3436,22 +3516,10 @@ CLIP_AUTO_DETECT = [
         ("a", "a person with very dark almost black eyes deep dark iris"),
     ]},
     # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
-    {"field": "clothing", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
-        ("1", "a person who is topless without any top garment"),
-        ("2", "a person wearing a t-shirt"),
-        ("3", "a person wearing a blouse or button-up shirt"),
-        ("4", "a person wearing a sweater or knit pullover"),
-        ("5", "a person wearing a tank top or crop top"),
-        ("6", "a person wearing a hoodie"),
-        ("7", "a person wearing a jacket"),
-        ("8", "a person wearing a coat or outerwear"),
-        ("9", "a person wearing the upper part of a dress"),
-        ("a", "a person wearing lingerie or a bra"),
-        ("b", "a person wearing a swimsuit top or bikini top"),
-        ("c", "a person wearing a kimono or yukata top"),
-        ("d", "a person wearing a school uniform top"),
-        ("e", "a person wearing a costume top"),
-    ]},
+    # Clothing specs ordered 4 → 3 → 2 → 1 so the debug tile reads
+    # left-to-right matching the filename's digit order (CL<4><3><2><1>).
+    # Earlier order (3, 4, 1, 2) was a mental hop for the user; now
+    # the tile sections appear in the same order as the value digits.
     # ── Clothing — Top color (pos 4) ──────────────────────────────────────────
     {"field": "clothing", "pos": 4, "zero_is_none": True, "threshold": 0.14, "options": [
         ("1", "a person whose top is bare skin or no fabric color"),
@@ -3469,22 +3537,22 @@ CLIP_AUTO_DETECT = [
         ("d", "a person wearing a beige tan colored top"),
         ("e", "a person wearing a multi-colored or patterned top"),
     ]},
-    # ── Clothing — Bottom type (pos 1) ────────────────────────────────────────
-    {"field": "clothing", "pos": 1, "zero_is_none": True, "threshold": 0.15, "options": [
-        ("1", "a person with no bottom garment bare lower body"),
-        ("2", "a person wearing jeans denim pants"),
-        ("3", "a person wearing trousers or slacks"),
-        ("4", "a person wearing shorts"),
-        ("5", "a person wearing a mini skirt"),
-        ("6", "a person wearing a long skirt"),
-        ("7", "a person wearing leggings or yoga pants"),
-        ("8", "a person wearing sweatpants or joggers"),
-        ("9", "a person wearing a full length dress"),
-        ("a", "a person wearing panties or underwear bottom"),
-        ("b", "a person wearing a bikini bottom or swim trunks"),
-        ("c", "a person wearing hakama or kimono bottom"),
-        ("d", "a person wearing a school skirt or school pants"),
-        ("e", "a person wearing stockings or tights"),
+    # ── Clothing — Top type (pos 3) ───────────────────────────────────────────
+    {"field": "clothing", "pos": 3, "zero_is_none": True, "threshold": 0.15, "options": [
+        ("1", "a person who is topless without any top garment"),
+        ("2", "a person wearing a t-shirt"),
+        ("3", "a person wearing a blouse or button-up shirt"),
+        ("4", "a person wearing a sweater or knit pullover"),
+        ("5", "a person wearing a tank top or crop top"),
+        ("6", "a person wearing a hoodie"),
+        ("7", "a person wearing a jacket"),
+        ("8", "a person wearing a coat or outerwear"),
+        ("9", "a person wearing the upper part of a dress"),
+        ("a", "a person wearing lingerie or a bra"),
+        ("b", "a person wearing a swimsuit top or bikini top"),
+        ("c", "a person wearing a kimono or yukata top"),
+        ("d", "a person wearing a school uniform top"),
+        ("e", "a person wearing a costume top"),
     ]},
     # ── Clothing — Bottom color (pos 2) ───────────────────────────────────────
     {"field": "clothing", "pos": 2, "zero_is_none": True, "threshold": 0.14, "options": [
@@ -3502,6 +3570,23 @@ CLIP_AUTO_DETECT = [
         ("c", "a person wearing gray colored bottoms"),
         ("d", "a person wearing beige tan colored bottoms"),
         ("e", "a person wearing multi-colored or patterned bottoms"),
+    ]},
+    # ── Clothing — Bottom type (pos 1) ────────────────────────────────────────
+    {"field": "clothing", "pos": 1, "zero_is_none": True, "threshold": 0.15, "options": [
+        ("1", "a person with no bottom garment bare lower body"),
+        ("2", "a person wearing jeans denim pants"),
+        ("3", "a person wearing trousers or slacks"),
+        ("4", "a person wearing shorts"),
+        ("5", "a person wearing a mini skirt"),
+        ("6", "a person wearing a long skirt"),
+        ("7", "a person wearing leggings or yoga pants"),
+        ("8", "a person wearing sweatpants or joggers"),
+        ("9", "a person wearing a full length dress"),
+        ("a", "a person wearing panties or underwear bottom"),
+        ("b", "a person wearing a bikini bottom or swim trunks"),
+        ("c", "a person wearing hakama or kimono bottom"),
+        ("d", "a person wearing a school skirt or school pants"),
+        ("e", "a person wearing stockings or tights"),
     ]},
 ]
 
@@ -3867,6 +3952,23 @@ def auto_detect_clip_attrs(image_emb, existing_entry, allowed_fields=None, proje
             except StopIteration:
                 pass
 
+        # margin_over_second gate: best must also beat the runner-up by
+        # this margin. Catches noise images where multiple animal prompts
+        # score similarly (e.g. on a plain portrait with no animal, both
+        # "horse" and "cat" prompts may inch above the "no animal"
+        # baseline together; the best wins by random chance and is wrong
+        # in either case). Real animal photos peak sharply on one class.
+        margin_over_second = spec.get("margin_over_second", 0.0)
+        if margin_over_second > 0 and len(scores) > 1:
+            try:
+                import torch as _torch
+                _top2 = _torch.topk(scores, 2)
+                _second_score = float(_top2.values[1])
+                if (best_score - _second_score) < margin_over_second:
+                    continue
+            except Exception:
+                pass
+
         # Write the detected digit into the working hex string
         val = list(current)
         val[-pos] = best_code
@@ -4168,6 +4270,42 @@ _clip_pool_lock = _threading.Lock()
 _clip_pool_state = {"proc": None, "calls": 0, "max_calls": 30,
                     "startup_timeout": 30.0, "call_timeout": 30.0}
 
+# Track every worker subprocess we spawn so an atexit hook can kill
+# them on shutdown. Linux reparents orphaned children to init, so a
+# bare app exit leaves persistent CLIP/face workers running and pinning
+# ~2 GB of RAM (+ GPU memory) per leak. User-reported: "python3 still
+# stays after close app." Registry is a set; entries removed via
+# discard() when a proc exits cleanly.
+_active_workers = set()
+_active_workers_lock = _threading.Lock()
+
+def _register_worker(proc):
+    if proc is None:
+        return
+    with _active_workers_lock:
+        _active_workers.add(proc)
+
+def _unregister_worker(proc):
+    if proc is None:
+        return
+    with _active_workers_lock:
+        _active_workers.discard(proc)
+
+def _kill_all_workers():
+    """atexit hook: terminate every still-running worker subprocess."""
+    with _active_workers_lock:
+        procs = list(_active_workers)
+        _active_workers.clear()
+    for _p in procs:
+        try:
+            if _p.poll() is None:
+                _p.kill()
+        except Exception:
+            pass
+
+import atexit as _atexit
+_atexit.register(_kill_all_workers)
+
 def _clip_pool_spawn():
     """Start a persistent clip worker subprocess and wait for its READY line."""
     import subprocess as _sp
@@ -4179,6 +4317,7 @@ def _clip_pool_spawn():
         [sys.executable, "-u", _worker],
         stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
         text=True, bufsize=1)
+    _register_worker(proc)
     # Wait for "ready" line (model loaded). Bounded by startup_timeout.
     import select as _sel
     _deadline = _time.time() + _clip_pool_state["startup_timeout"]
@@ -4219,6 +4358,7 @@ def _clip_pool_kill():
     except Exception:
         try: proc.kill()
         except Exception: pass
+    _unregister_worker(proc)
     _clip_pool_state["proc"] = None
     _clip_pool_state["calls"] = 0
 
@@ -4314,11 +4454,13 @@ def inspect_face_detection_subprocess(path, project, timeout=120, cancel_check=N
     _worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_worker.py")
     if not os.path.exists(_worker):
         return inspect_face_detection(path, project)
+    proc = None
     try:
         _py = sys.executable
         proc = _sp.Popen(
             [_py, _worker, "--path", path, "--project", str(project)],
             stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        _register_worker(proc)
         _deadline = _time.time() + timeout
         while True:
             try:
@@ -4345,6 +4487,8 @@ def inspect_face_detection_subprocess(path, project, timeout=120, cancel_check=N
     except Exception as e:
         return {"face_found": False, "num_faces": 0, "matches": [],
                 "assigned_id": None, "error": f"worker spawn failed: {e}"}
+    finally:
+        _unregister_worker(proc)
 
 
 def inspect_face_detection(path, project):
@@ -4372,11 +4516,15 @@ def inspect_face_detection(path, project):
         # Three-tier detection cascade (cheap → expensive):
         #   1. HOG, upsample=1 (default).  ~50ms.  Frontal faces.
         #   2. HOG, upsample=2.            ~150ms. Small / mid-angle faces.
-        #   3. CNN model.                  ~1-3s.  Profile / 3/4 / occluded.
+        #   3. CNN model, upsample=0.      ~1-3s.  Profile / 3/4 / occluded.
         # User reported "picture has a person looking sideways at a cat —
         # both HOG passes returned 0". HOG is frontal-only by training;
         # dlib's CNN detector handles non-frontal faces but is too slow
         # to be the default — only run when HOG produced nothing.
+        # CNN runs with upsample=0 to fit in GPU memory when CLIP is also
+        # loaded (default upsample=1 needs ~4x more VRAM than the 1660 Ti
+        # has free after CLIP). On cudaMalloc OOM we downscale and retry,
+        # then map coords back to the original image.
         with _face_lock:
             locations = face_recognition.face_locations(img)
             if not locations:
@@ -4384,10 +4532,40 @@ def inspect_face_detection(path, project):
                     img, number_of_times_to_upsample=2)
             if not locations:
                 try:
-                    locations = face_recognition.face_locations(img, model="cnn")
+                    locations = face_recognition.face_locations(
+                        img, number_of_times_to_upsample=0, model="cnn")
+                except RuntimeError as _e:
+                    # CUDA / cuDNN resource exhaustion at full resolution —
+                    # downscale the image so the CNN's working set fits and
+                    # retry. Scale capped at 1024px so detection still finds
+                    # faces but VRAM usage drops ~3-6x. Different dlib/cuDNN
+                    # versions surface this as "out of memory" (cudaMalloc)
+                    # or "CUDA Resources could not be allocated" (cudnn) —
+                    # both indicate the same retry-with-smaller-image fix.
+                    _err = str(_e).lower()
+                    _is_resource_err = ("out of memory" in _err
+                                        or "could not be allocated" in _err
+                                        or "cudnn" in _err
+                                        or "cuda resources" in _err)
+                    if _is_resource_err:
+                        try:
+                            import PIL.Image as _PI
+                            _h, _w = img.shape[:2]
+                            _scale = 1024.0 / max(_h, _w)
+                            if _scale < 1.0:
+                                _small = np.array(_PI.fromarray(img).resize(
+                                    (int(_w * _scale), int(_h * _scale)),
+                                    _PI.LANCZOS))
+                                _locs_small = face_recognition.face_locations(
+                                    _small, number_of_times_to_upsample=0, model="cnn")
+                                locations = [(int(t / _scale), int(r / _scale),
+                                              int(b / _scale), int(l / _scale))
+                                             for (t, r, b, l) in _locs_small]
+                        except Exception:
+                            pass
                 except Exception:
-                    # CNN model missing (dlib without CUDA / mmod weights
-                    # absent) — fall through with empty locations.
+                    # CNN model missing (mmod weights absent, etc.) —
+                    # fall through with empty locations.
                     pass
             encodings = face_recognition.face_encodings(img, known_face_locations=locations)
         result["num_faces"] = len(encodings)
@@ -4540,7 +4718,7 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
         if not new_stem:
             return path
 
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
     if new_path == path:
         return path
     try:
@@ -4694,7 +4872,9 @@ def rename_file_to_match_entry(attrs_data, path, project=None, defer_save=False)
     new_stem = build_coded_filename(parts, date_first=date_first)
     if not new_stem or new_stem == stem:
         return path
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    # unique_path(..., src=path) handles the same-J3 duplicate guard.
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext),
+                           src=path)
     if new_path == path:
         return path
     try:
@@ -4742,7 +4922,7 @@ def rename_to_date_first(attrs_data, path, project=None):
                                     field_order=get_sync_field_order(project))
     if not new_stem:
         return path
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
     if new_path == path:
         return path
     try:
@@ -4825,7 +5005,7 @@ def normalize_filename(path, current_tags, new_base=None, person_id=None, projec
     wm_suf = "-watermark" if "watermark" in current_tags else ""
 
     new_stem = pid_prefix + base + pose_suf + wm_suf
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
     if new_path == path:
         return path
     try:
@@ -4902,6 +5082,46 @@ def detect_audio_tag(path):
     except Exception:
         return None
 
+# Module-level MediaPipe singletons. Constructing FaceMesh + Pose per file
+# allocated TFLite buffers + model graphs that didn't fully reclaim on `with`
+# exit — observed scan RSS climbing 3 GB → 16 GB+. One instance each, reused
+# across the scan, keeps native memory bounded. atexit closes them so the
+# process doesn't leave dangling MediaPipe resources.
+_mp_face_mesh = None
+_mp_pose      = None
+
+def _get_mp_face_mesh():
+    global _mp_face_mesh
+    if _mp_face_mesh is None:
+        import mediapipe as mp
+        _mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True, max_num_faces=1,
+            refine_landmarks=False, min_detection_confidence=0.5)
+    return _mp_face_mesh
+
+def _get_mp_pose():
+    global _mp_pose
+    if _mp_pose is None:
+        import mediapipe as mp
+        _mp_pose = mp.solutions.pose.Pose(
+            static_image_mode=True, model_complexity=1,
+            min_detection_confidence=0.5)
+    return _mp_pose
+
+def _close_mp_singletons():
+    global _mp_face_mesh, _mp_pose
+    for inst in (_mp_face_mesh, _mp_pose):
+        try:
+            if inst is not None:
+                inst.close()
+        except Exception:
+            pass
+    _mp_face_mesh = None
+    _mp_pose      = None
+
+import atexit as _atexit_mp
+_atexit_mp.register(_close_mp_singletons)
+
 def detect_shot_and_pose(path):
     """Run MediaPipe Face Mesh + Pose in a single pass and return (shot_tag, pose_tag).
     Either value may be None if it cannot be determined.
@@ -4909,29 +5129,33 @@ def detect_shot_and_pose(path):
     if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
         return None, None
     try:
-        import mediapipe as mp
         img = cv2.imread(path)
         if img is None:
             return None, None
+        # MediaPipe pose/shot detection doesn't need 4K precision — downscale
+        # so a 4K original isn't held as ~50 MB raw + cvtColor copy. 1024 max
+        # dimension preserves landmark accuracy.
+        h, w = img.shape[:2]
+        if max(h, w) > 1024:
+            scale = 1024.0 / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)),
+                             interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Free the BGR buffer ASAP — Python may otherwise keep it around
+        # until the function returns.
+        del img
 
         # ── Face Mesh ────────────────────────────────────────────────────────
         face_lm = None
-        with mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=True, max_num_faces=1,
-                refine_landmarks=False,
-                min_detection_confidence=0.5) as fm:
-            fr = fm.process(rgb)
+        fm = _get_mp_face_mesh()
+        fr = fm.process(rgb)
         if fr.multi_face_landmarks:
             face_lm = fr.multi_face_landmarks[0].landmark
 
         # ── Body Pose ────────────────────────────────────────────────────────
         body_lm = None
-        with mp.solutions.pose.Pose(
-                static_image_mode=True,
-                model_complexity=1,
-                min_detection_confidence=0.5) as ps:
-            pr = ps.process(rgb)
+        ps = _get_mp_pose()
+        pr = ps.process(rgb)
         if pr.pose_landmarks:
             body_lm = pr.pose_landmarks.landmark
 
@@ -5174,7 +5398,7 @@ def apply_boolean_sync_rules(attrs_data, path, project, orig_stem=None):
     if not new_stem or new_stem == stem:
         return path
 
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
     if new_path == path:
         return path
     try:
@@ -5247,7 +5471,7 @@ def apply_tag_sync_rules(attrs_data, path, project):
 
     if not changed or new_stem == stem:
         return path
-    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext))
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
     if new_path == path:
         return path
     try:
@@ -5517,14 +5741,27 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
         entry.pop("audio_probed", None)
         changed = True
 
-    # Ratio (O) / Resolution (R) / FPS (K) — always-on
+    # Ratio (O) / Resolution (R) / FPS (K) — always-on.
+    # R always overrides a stale stored value: it's fact-derived from the
+    # file's pixel dimensions, so if the entry says R72 but the file is
+    # actually 1024 high (Ra2), the entry was wrong and we fix it. We
+    # write to BOTH the canonical "resolution" storage key and the legacy
+    # "cf_r" key so _entry_value_for_letter (which checks canonical first)
+    # sees the correction. Without writing to "resolution", a stale value
+    # there shadows the cf_r override and the rename never fires. O and
+    # K stay fill-only so user overrides (rotation, frame-rate rounding)
+    # aren't trampled.
     _fa = detect_file_attrs(path)
     if _fa.get("orientation") and not entry.get("cf_o"):
         entry["cf_o"] = _fa["orientation"]
         changed = True
-    if _fa.get("resolution") and not entry.get("cf_r"):
-        entry["cf_r"] = _fa["resolution"]
-        changed = True
+    _detected_r = _fa.get("resolution")
+    if _detected_r:
+        _stored_r = (entry.get("resolution") or entry.get("cf_r") or "").strip().lower()
+        if _stored_r != _detected_r:
+            entry["resolution"] = _detected_r
+            entry["cf_r"]      = _detected_r
+            changed = True
     if _fa.get("frame_rate") and not entry.get("cf_k"):
         entry["cf_k"] = _fa["frame_rate"]
         changed = True
@@ -5605,6 +5842,19 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                  editable=entry.get("editable", True),
                  preserve_text=True)
         save(project, attrs_data)
+        # Re-sync filename to the (possibly corrected) coded fields.
+        # The original design auto-renamed on any coded-field change here;
+        # the user_edited gate in the preview only blocks the per-nav
+        # rename, not the DB-scan / Apply-Rules auto-detection that ends
+        # up here. Without this call, a detect_file_attrs override (e.g.
+        # R72 → Ra2 on a 1024-tall file mislabeled as 720p) updates the
+        # entry but leaves the filename stale.
+        try:
+            fn_cfg = load_filename_config(project)
+            if fn_cfg.get("auto_rename") and would_rename(attrs_data, path, project):
+                rename_file_to_match_entry(attrs_data, path, project=project)
+        except Exception:
+            pass
     return attrs_data
 
 # Keep old individual helpers pointing to auto_set_all for backwards compat

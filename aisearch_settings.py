@@ -12,11 +12,11 @@ from aisearch_settings_person import _PersonMixin
 from aisearch_settings_metadata import _MetadataMixin
 from aisearch_settings_canvas import _CanvasMixin
 
-VERSION = "2.5.6"
+VERSION = "2.5.7"
 
 
 class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _FilenameMixin, _MetadataMixin, _CanvasMixin, QDialog):
-    def __init__(self, parent, app_instance, initial_tab=0):
+    def __init__(self, parent, app_instance, initial_tab=0, _defer_show=False):
         super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowType.Window |
@@ -35,7 +35,12 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         self._scan_queue = None
 
         self._setup_ui(initial_tab)
-        self.show()
+        # _defer_show=True is used by AISearchApp at startup to restore the
+        # recurring Update Cycle: the cycle's QTimer lives on this dialog,
+        # so the dialog must exist for the cycle to keep ticking — but we
+        # don't want a settings window flashing on the user at launch.
+        if not _defer_show:
+            self.show()
 
     def _setup_ui(self, initial_tab=0):
         layout = QVBoxLayout(self)

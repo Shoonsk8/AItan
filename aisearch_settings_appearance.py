@@ -109,6 +109,38 @@ class _AppearanceMixin:
         l_dup.addWidget(self.check_czkawka_buttons)
         sl.addWidget(g_dup)
 
+        # Animal field override — CLIP keeps picking fantasy/fish/etc. on
+        # face-only images. Toggling this forces attrs["animal"]="00" for
+        # every file on Update, skipping CLIP for animal entirely. The
+        # user can still override on a specific file by clicking a row
+        # in CLIP_A; the next Update will reset it back to "00" while
+        # this is on.
+        g_animal = QGroupBox(_t("🐾 Animal / 🐾 動物"))
+        l_animal = QVBoxLayout(g_animal)
+        self.check_animal_force_none = QCheckBox(_t(
+            "Always set Animal to \"(no animal)\" — skip CLIP animal "
+            "detection / 動物は常に「(no animal)」— CLIP動物検出を無効"))
+        self.check_animal_force_none.setChecked(
+            self.app.config.get("animal_force_none", False))
+        self.check_animal_force_none.toggled.connect(self._save_animal_force_none)
+        l_animal.addWidget(self.check_animal_force_none)
+        sl.addWidget(g_animal)
+
+        # Clothing — skip CLIP detection only. Doesn't force any value;
+        # whatever the user / filename rules set stays. Useful when
+        # CLIP guesses are noisy and the user prefers to set clothing
+        # manually or via filename rules.
+        g_clothing = QGroupBox(_t("👕 Clothing / 👕 服装"))
+        l_clothing = QVBoxLayout(g_clothing)
+        self.check_clothing_skip_clip = QCheckBox(_t(
+            "Skip CLIP detection for Clothing (manual / filename rules "
+            "only) / 服装のCLIP検出を無効（手動・ファイル名規則のみ）"))
+        self.check_clothing_skip_clip.setChecked(
+            self.app.config.get("clothing_skip_clip", False))
+        self.check_clothing_skip_clip.toggled.connect(self._save_clothing_skip_clip)
+        l_clothing.addWidget(self.check_clothing_skip_clip)
+        sl.addWidget(g_clothing)
+
         g5 = QGroupBox(_t("📁 File Conflict on Move / 📁 移動時のファイル競合"))
         l5 = QVBoxLayout(g5)
         self._conflict_group = QButtonGroup(self)
@@ -409,6 +441,20 @@ class _AppearanceMixin:
         if hasattr(self.app, "_btn_dup_import"):
             self.app._btn_dup_import.setVisible(checked)
             self.app._btn_dup_export.setVisible(checked)
+
+    def _save_animal_force_none(self, checked):
+        """Persist the 'always set animal to 00' toggle. Read in
+        aisearch_settings_db.py Step 2 of the Update scan — when on,
+        animal detection is bypassed and the value is forced to 00."""
+        self.app.config["animal_force_none"] = bool(checked)
+        cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+
+    def _save_clothing_skip_clip(self, checked):
+        """Persist the 'skip CLIP detection for Clothing' toggle. Read
+        in aisearch_settings_db.py Step 2 — when on, "clothing" is
+        excluded from allowed_fields so CLIP never writes it."""
+        self.app.config["clothing_skip_clip"] = bool(checked)
+        cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
 
     def _save_delete_confirm(self, checked):
         self.app.config["delete_confirm"] = checked

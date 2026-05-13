@@ -269,6 +269,14 @@ class _FMIconList(QListWidget):
         self.viewport().installEventFilter(self)
 
     def eventFilter(self, obj, event):
+        # Defer all selection logic to Qt's native ExtendedSelection
+        # handling — it already implements Nemo-style deferred selection
+        # (press on a selected item in a multi-selection doesn't collapse
+        # until release, unless a drag fires first). The previous custom
+        # implementation tried to consume the press and re-do this logic
+        # manually but ended up collapsing the selection on plain clicks,
+        # so the user couldn't drag a multi-selection. Now we only track
+        # press position for drag detection and let Qt handle selection.
         if obj is self.viewport():
             t = event.type()
             if t == event.Type.MouseButtonPress:
@@ -276,53 +284,35 @@ class _FMIconList(QListWidget):
                     pos = event.position().toPoint()
                     self._fm_press_pos = pos
                     self._fm_press_item = self.itemAt(pos)
-                    self._fm_pending_collapse = False
-                    # Nemo-style: clicking an already-selected item in a
-                    # multi-selection preserves the selection on press so
-                    # the user can start a drag carrying ALL selected
-                    # items. If no drag fires by the release, collapse
-                    # to the clicked item then.
-                    mods = event.modifiers()
-                    modifierless = not (mods & (
-                        Qt.KeyboardModifier.ControlModifier |
-                        Qt.KeyboardModifier.ShiftModifier))
-                    sel = self.selectedItems()
-                    if (modifierless and self._fm_press_item is not None
-                            and self._fm_press_item in sel and len(sel) > 1):
-                        self._fm_pending_collapse = True
-                        return True   # consume; Qt's default would deselect
                 else:
                     self._fm_press_pos = None
                     self._fm_press_item = None
-                    self._fm_pending_collapse = False
+                # never consume — Qt's native handler runs
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._fm_press_pos is not None
                         and self._fm_press_item is not None):
                     cur = event.position().toPoint()
                     if (cur - self._fm_press_pos).manhattanLength() > self._DRAG_THRESHOLD:
-                        self._fm_press_pos = None
-                        self._fm_pending_collapse = False  # drag wins
+                        # Start drag with all currently selected items.
+                        # _start_url_drag pulls selectedItems() itself —
+                        # Qt's deferred selection has preserved the
+                        # full multi-selection on the press.
                         item = self._fm_press_item
+                        self._fm_press_pos = None
                         self._fm_press_item = None
                         self._start_url_drag(seed_item=item)
                         return True
-            elif t == event.Type.MouseButtonRelease:
-                if (self._fm_pending_collapse
-                        and self._fm_press_item is not None):
-                    # Plain click without drag → collapse selection now.
-                    # Consume the release too so Qt's release handler
-                    # doesn't see a release without a matching press
-                    # (which can leave the selection model in a state
-                    # where the next click range-selects).
-                    self.clearSelection()
-                    self._fm_press_item.setSelected(True)
-                    self.setCurrentItem(self._fm_press_item)
-                    self._fm_pending_collapse = False
-                    self._fm_press_pos = None
-                    self._fm_press_item = None
+                    # Below threshold and press was on an item: suppress
+                    # Qt's MouseMove unconditionally so it doesn't
+                    # rubberband-extend the selection while we wait for
+                    # the drag threshold. With ExtendedSelection, even a
+                    # single-item press + tiny mouse drift was being read
+                    # as "rubberband range-extend from this anchor",
+                    # which felt like the user was holding Shift. Mirrors
+                    # main-app FileTable.mouseMoveEvent.
                     return True
-                self._fm_pending_collapse = False
+            elif t == event.Type.MouseButtonRelease:
                 self._fm_press_pos = None
                 self._fm_press_item = None
         return super().eventFilter(obj, event)
@@ -360,7 +350,14 @@ class _FMIconList(QListWidget):
             sz = self.iconSize()
             drag.setPixmap(ico.pixmap(sz))
             drag.setHotSpot(QPoint(sz.width() // 2, sz.height() // 2))
-        drag.exec(Qt.DropAction.MoveAction)
+        # Include LinkAction so external apps that import files by
+        # reference (Kdenlive, OBS, image editors) can pick it. Without
+        # Link, Kdenlive's drop handler bails because the only offered
+        # actions involve copying or moving the file off disk, which it
+        # doesn't want to do. Internal FM drops still default to Move.
+        drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
+                  | Qt.DropAction.LinkAction,
+                  Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, ev):
         import sys
@@ -785,33 +782,21 @@ class _FMTreeList(QTreeWidget):
 
     # ── Drag start ───────────────────────────────────────────────────────────
     def eventFilter(self, obj, event):
+        # Defer all selection logic to Qt's native ExtendedSelection —
+        # it implements Nemo-style deferred selection out of the box
+        # (press on a selected row in a multi-selection doesn't collapse
+        # until release, unless a drag fires first). The previous custom
+        # implementation consumed the press and re-did this logic, which
+        # left plain clicks collapsing the selection so the user could
+        # not drag a multi-selection. Now we only track press position
+        # for drag detection.
         if obj is self.viewport():
             t = event.type()
             if t == event.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 pos = event.position().toPoint()
                 self._press_pos = pos
                 self._press_item = self.itemAt(pos)
-                self._pending_collapse = False
-                # Nemo-style: if user clicks an already-selected row in
-                # a multi-selection without modifiers, preserve the
-                # selection on PRESS so a drag carries all rows. If no
-                # drag fires, collapse to the clicked row on RELEASE.
-                # Without this, Qt's default would deselect siblings on
-                # press and the drag would only carry one row.
-                mods = event.modifiers()
-                modifierless = not (mods & (
-                    Qt.KeyboardModifier.ControlModifier |
-                    Qt.KeyboardModifier.ShiftModifier))
-                sel = self.selectedItems()
-                if (modifierless and self._press_item is not None
-                        and self._press_item in sel and len(sel) > 1):
-                    # Skip if click is on the expand-arrow / indent area
-                    # so folder expansion still works for multi-selected
-                    # folders. visualItemRect.left() = start of content.
-                    item_rect = self.visualItemRect(self._press_item)
-                    if pos.x() >= item_rect.left():
-                        self._pending_collapse = True
-                        return True   # consume — Qt would deselect siblings
+                # never consume — Qt's native handler runs
             elif t == event.Type.MouseMove:
                 if (event.buttons() & Qt.MouseButton.LeftButton
                         and self._press_pos is not None
@@ -819,26 +804,18 @@ class _FMTreeList(QTreeWidget):
                     cur = event.position().toPoint()
                     if (cur - self._press_pos).manhattanLength() > self._DRAG_THRESHOLD:
                         self._press_pos = None
-                        self._pending_collapse = False  # drag wins
+                        item = self._press_item
+                        self._press_item = None
                         self._start_url_drag()
                         return True
-            elif t == event.Type.MouseButtonRelease:
-                if (self._pending_collapse
-                        and self._press_item is not None):
-                    # Plain click without drag → collapse selection to
-                    # the clicked row (Nemo / Windows Explorer style).
-                    # Consume the release too so Qt's release handler
-                    # doesn't see a release without a matching press —
-                    # otherwise the selection model can be left in a
-                    # state where the next click acts as a range select.
-                    self.clearSelection()
-                    self._press_item.setSelected(True)
-                    self.setCurrentItem(self._press_item)
-                    self._pending_collapse = False
-                    self._press_pos = None
-                    self._press_item = None
+                    # Below threshold and press was on a row: suppress
+                    # MouseMove unconditionally so Qt's ExtendedSelection
+                    # doesn't rubberband-extend the selection while we
+                    # wait for the drag threshold. Without this even a
+                    # single-row press + tiny drift reads as "Shift+drag
+                    # range-extend".
                     return True
-                self._pending_collapse = False
+            elif t == event.Type.MouseButtonRelease:
                 self._press_pos = None
                 self._press_item = None
         return super().eventFilter(obj, event)
@@ -876,7 +853,14 @@ class _FMTreeList(QTreeWidget):
         mime.setUrls(urls)
         drag = QDrag(self)
         drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.MoveAction)
+        # Include LinkAction so external apps that import files by
+        # reference (Kdenlive, OBS, image editors) can pick it. Without
+        # Link, Kdenlive's drop handler bails because the only offered
+        # actions involve copying or moving the file off disk, which it
+        # doesn't want to do. Internal FM drops still default to Move.
+        drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
+                  | Qt.DropAction.LinkAction,
+                  Qt.DropAction.MoveAction)
 
     # ── Drop handling ────────────────────────────────────────────────────────
     _EDGE_BAND = 28      # px from top/bottom that triggers auto-scroll
@@ -978,10 +962,21 @@ class _FMTreeList(QTreeWidget):
         elif target and os.path.isdir(target):
             self._fm.navigate(target)
         elif target and os.path.isfile(target):
-            ph = getattr(self._fm.app, "preview_handler", None)
-            if ph:
-                try: ph.show(target)
-                except Exception: pass
+            ext = os.path.splitext(target)[1].lower()
+            if ext in logic.EXT_VID:
+                # Videos open in the system default player (mpv / vlc /
+                # celluloid / whatever's wired to the .mp4 mime type).
+                # The in-app preview can't seek/scrub like a real player.
+                try:
+                    import subprocess
+                    subprocess.Popen(["xdg-open", target])
+                except Exception:
+                    pass
+            else:
+                ph = getattr(self._fm.app, "preview_handler", None)
+                if ph:
+                    try: ph.show(target)
+                    except Exception: pass
 
     def _on_item_changed(self, item, col):
         # Fired both for our own setText calls and for user inline edits.
@@ -1718,6 +1713,40 @@ class FileManagerWindow(QWidget):
         for p in self._panes:
             try:
                 p.tree.refresh_all_rims()
+            except Exception:
+                pass
+
+    def remove_paths(self, paths):
+        """Surgically prune tree items whose stored path is in `paths`
+        from every pane. Used when files are trashed by code outside the
+        FM (main table delete, dup delete, shift-drag) so the FM tree
+        doesn't keep showing ghost rows. Preserves scroll position and
+        expansion state, unlike refresh_all()."""
+        if not paths:
+            return
+        norm_set = {os.path.normpath(os.path.abspath(p)) for p in paths if p}
+        if not norm_set:
+            return
+        def prune(it):
+            for i in range(it.childCount() - 1, -1, -1):
+                child = it.child(i)
+                try:
+                    data = child.data(0, Qt.ItemDataRole.UserRole)
+                except RuntimeError:
+                    continue
+                if (data and data != ".."
+                        and data != _FMTreeList._PLACEHOLDER):
+                    try:
+                        if os.path.normpath(os.path.abspath(data)) in norm_set:
+                            it.removeChild(child)
+                            continue
+                    except Exception:
+                        pass
+                prune(child)
+        for p in self._panes:
+            try:
+                root = p.tree.invisibleRootItem()
+                prune(root)
             except Exception:
                 pass
 

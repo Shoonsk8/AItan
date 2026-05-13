@@ -552,6 +552,19 @@ class PreviewWindow(QWidget):
         self._info_bar.setVisible(False)
         _inner_vbox.addWidget(self._info_bar)
 
+        # AI-inspect banner — visible only when both modes are "never".
+        # Tells the user at a glance that CLIP/face detection isn't
+        # going to run on this navigation. Bright color so it's
+        # impossible to miss.
+        self._ai_off_banner = QLabel("🔇 AI INSPECT OFF — values shown are stored only, no live detection")
+        self._ai_off_banner.setFixedHeight(22)
+        self._ai_off_banner.setStyleSheet(
+            "background-color: #5a2020; color: #ffaaaa; "
+            "font-size: 9pt; font-weight: bold; padding: 0 8px;")
+        self._ai_off_banner.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
+        self._ai_off_banner.setVisible(False)
+        _inner_vbox.addWidget(self._ai_off_banner)
+
         # Attr panel scroll area — panel built lazily on first expand/navigate
         _tags_f = attrs_mod.tags_file_for_project(
             getattr(handler.app, 'current_project', None))
@@ -739,7 +752,7 @@ class PreviewWindow(QWidget):
         for key, lbl in attrs_mod.TAG_GROUPS.get("Quality", []):
             self._quality_combo.addItem(_t(lbl), key)
         self._quality_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._quality_combo.currentIndexChanged.connect(self._save_attrs)
+        self._quality_combo.currentIndexChanged.connect(self._save_attrs_user_edit)
 
         # Note row (at top for quick access) — hidden when project defines "note" as a text field
         self._note_row_widget = QWidget()
@@ -752,7 +765,7 @@ class PreviewWindow(QWidget):
         self._project_edit.setPlaceholderText(_t("note… / ノート…"))
         self._project_edit.setStyleSheet(
             "background-color: #3a3a3a; color: #e0e0e0; border: 1px solid #555;")
-        self._project_edit.editingFinished.connect(self._save_attrs)
+        self._project_edit.editingFinished.connect(self._save_attrs_user_edit)
         r_title.addWidget(self._project_edit, stretch=1)
         # note row kept as orphan widget (referenced by _refresh_attrs/_save_attrs)
 
@@ -910,7 +923,7 @@ class PreviewWindow(QWidget):
                 hidden_edit.blockSignals(True)
                 hidden_edit.setText(code)
                 hidden_edit.blockSignals(False)
-                self._save_attrs()
+                self._save_attrs_user_edit()
                 # Write coded value into attrs_data AFTER set_file creates the entry
                 _path = self._attr_path
                 if _path and _path in self.handler.app.attrs_data:
@@ -1175,7 +1188,7 @@ class PreviewWindow(QWidget):
 
         # Seed edit kept as orphan (referenced by _refresh_attrs/_save_attrs)
         self._seed_edit = QLineEdit()
-        self._seed_edit.editingFinished.connect(self._save_attrs)
+        self._seed_edit.editingFinished.connect(self._save_attrs_user_edit)
         self._seed_edit.editingFinished.connect(lambda: self._update_bake_btn("pending"))
 
         # ── Dynamic sections driven by attrs_tags.json ──────────────────────
@@ -1186,7 +1199,9 @@ class PreviewWindow(QWidget):
         self._text_save_timer = QTimer()
         self._text_save_timer.setSingleShot(True)
         self._text_save_timer.setInterval(200)
-        self._text_save_timer.timeout.connect(self._save_attrs)
+        # text_save_timer is started by canvas data_changed (user edit
+        # in a canvas widget), so its callback should mark dirty too.
+        self._text_save_timer.timeout.connect(self._save_attrs_user_edit)
         self._text_save_timer.timeout.connect(lambda: self._update_bake_btn("pending"))
 
         self._soft_sec_map = {}  # kept: referenced by legacy drag-reorder code
@@ -1200,6 +1215,11 @@ class PreviewWindow(QWidget):
         vbox.addWidget(self._soft_canvas, stretch=1)
         self._soft_canvas.data_changed.connect(self._text_save_timer.start)
         self._soft_canvas.data_changed.connect(lambda: self._update_bake_btn("pending"))
+        # Mark immediately when ANY canvas widget changes — don't wait for
+        # the text-save debounce, because rapid edit-then-navigate could
+        # nav away before the timer's _save_attrs_user_edit fires, and
+        # the path would never land in _user_edited_paths.
+        self._soft_canvas.data_changed.connect(self._mark_user_edited)
         self._soft_canvas.action_triggered.connect(self._on_canvas_action)
         self._wire_canvas_bool_flags()
         # Make CLIP and FACE canvas tiles auto-expand to show full detection text
@@ -1299,7 +1319,10 @@ class PreviewWindow(QWidget):
         self._protected_check.setStyleSheet(
             "QPushButton { background: transparent; border: none; font-size: 18px; color: #66cc88; padding: 0 4px; }")
         self._protected_check.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._protected_check.toggled.connect(lambda _: self._save_attrs())
+        # Lock toggle is a user action — its rim repaint already runs
+        # in _apply_protected_lock; the save here just persists the
+        # editable flag and now also marks the file as user-edited.
+        self._protected_check.toggled.connect(lambda _: self._save_attrs_user_edit())
         self._protected_check.toggled.connect(self._apply_protected_lock)
         r_bake.addWidget(self._protected_check)
         self._bake_err_label = QLabel("")
@@ -1372,7 +1395,10 @@ class PreviewWindow(QWidget):
                 if _clip_mode == "never" and _face_mode == "never":
                     return
                 _entry = attrs_mod.get(self.handler.app.attrs_data, _p)
-                _clip_fields = ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing")
+                # Derive from CLIP_AUTO_DETECT so newly-added fields (e.g.
+                # "animal") automatically participate in skip-when-set
+                # instead of being silently re-detected every nav.
+                _clip_fields = tuple({s["field"] for s in attrs_mod.CLIP_AUTO_DETECT})
                 _skip = set()
                 if _clip_mode == "when_empty":
                     _skip |= {f for f in _clip_fields if _entry.get(f)}
@@ -1396,6 +1422,11 @@ class PreviewWindow(QWidget):
 
         self._attr_path = None
         self._canvas_loaded_path = None
+        # Paths the user has actually edited this session (via canvas
+        # widgets, seed/project/note edits, person/quality combos, lock
+        # toggle). Background detection writes don't add here, so plain
+        # navigation past a file never triggers autorename.
+        self._user_edited_paths = set()
         return panel
 
     def _attr_arrow(self, open_state):
@@ -1538,10 +1569,14 @@ class PreviewWindow(QWidget):
             self._attr_panel_pending_path = path
             return
         # Always flush a pending text-edit save when switching files — must
-        # happen on every navigation (no debounce) to avoid losing typed text.
+        # happen on every navigation (no debounce) to avoid losing typed
+        # text. Route through _save_attrs_user_edit so the user-edited
+        # flag is set BEFORE the autorename gate below runs — otherwise
+        # typing + immediately navigating away saves the edit but skips
+        # the rename (user reported "I changed it but it never renamed").
         if self._text_save_timer.isActive() and path != self._attr_path:
             self._text_save_timer.stop()
-            self._save_attrs()
+            self._save_attrs_user_edit()
         elif self._text_save_timer.isActive():
             self._text_save_timer.stop()
         # Auto-rename the previous file on navigation: when the user moves to
@@ -1569,77 +1604,119 @@ class PreviewWindow(QWidget):
             # to one frame.
             _old = self._attr_path
             self._last_autorenamed_path = _old   # claim ownership immediately to dedupe
-            def _do_autorename(_old=_old, _proj=_proj):
+            # Only fire autorename when THIS file has been explicitly
+            # edited by the user this session. Background detection
+            # (CLIP_AUTO_DETECT, file-attr O/R/K, watcher init) writes
+            # to entry silently and would otherwise produce a "spontaneous"
+            # rename on every nav — user reported "auto rename fire when
+            # nothing has changed." User-edited flag is set by widget
+            # signal handlers via _mark_user_edited().
+            _user_edited = _old in getattr(self, "_user_edited_paths", set())
+            def _do_autorename(_old=_old, _proj=_proj, _ue=_user_edited):
+                # _final = the path to auto-bake at the end of this fn.
+                # Stays _old when rename doesn't fire; updates to _new on
+                # a successful rename. The bake MUST live inside this fn
+                # (not in a sibling block) — a parallel bake thread on
+                # _old would shutil.move its tmp back to _old after the
+                # rename had already moved _old → _new on disk, recreating
+                # _old and leaving two files for the user to clean up.
+                _final = _old
+                # Convenience: surface autorename outcomes in the main
+                # app status bar so the user doesn't need a terminal to
+                # see why a rename did or didn't fire. Each branch posts
+                # a one-line message; default duration 4 sec.
+                def _status(msg, ms=4000):
+                    try:
+                        _app.statusBar().showMessage(msg, ms)
+                    except Exception:
+                        pass
                 try:
                     _fn_cfg = attrs_mod.load_filename_config(_proj)
                 except Exception:
                     _fn_cfg = {}
                 _ar_on = bool(_fn_cfg.get("auto_rename", False))
-                _ar_dbg(f"autorename: leaving={os.path.basename(_old)} auto_rename={_ar_on}")
+                _ar_dbg(f"autorename: leaving={os.path.basename(_old)} "
+                        f"auto_rename={_ar_on} user_edited={_ue}")
+                _bn_old = os.path.basename(_old)
                 if not _ar_on:
-                    return
-                _wr = False
-                try:
-                    _wr = attrs_mod.would_rename(_app.attrs_data, _old, _proj)
-                except Exception as e:
-                    _ar_dbg(f"autorename: would_rename raised {e}")
-                _ar_dbg(f"autorename: would_rename={_wr}")
-                if not _wr:
-                    return
-                try:
-                    _new = attrs_mod.rename_file_to_match_entry(
-                        _app.attrs_data, _old, project=_proj)
-                    _ar_dbg(f"autorename: rename returned {os.path.basename(_new) if _new else _new!r}")
-                except Exception as e:
-                    _ar_dbg(f"autorename: rename raised {e}")
-                    _new = _old
-                if not _new or _new == _old:
-                    return
-                if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
-                    _app.data["paths"][_app.data["paths"].index(_old)] = _new
-                try:
-                    if hasattr(_app, "_replace_dup_display_path"):
-                        _app._replace_dup_display_path(_old, _new)
-                except Exception:
-                    pass
-                try:
-                    for _r in range(_app.table.rowCount()):
-                        if _app.table.get_row_path(_r) == _old:
-                            _app.table.set_row_path(_r, _new)
-                            break
-                except Exception:
-                    pass
-                _entry_after = _app.attrs_data.get(_new) or _app.attrs_data.get(_old)
-                if isinstance(_entry_after, dict):
-                    _old_bn = os.path.basename(_old)
-                    _note = (_entry_after.get("note") or "").rstrip()
-                    _last_line = _note.splitlines()[-1].strip() if _note else ""
-                    if _last_line != _old_bn:
-                        _appended = (_note + "\n" + _old_bn).lstrip("\n")
-                        _entry_after["note"] = _appended
-                # Don't update self._attr_path — the user has already
-                # moved on to a different file. _last_autorenamed_path
-                # was set earlier so we don't double-fire.
-                self._last_autorenamed_path = _new
-            QTimer.singleShot(0, _do_autorename)
-        # Auto-bake the previous file when leaving it. Run in a background
-        # thread — for videos, ffmpeg-copy can take 300ms+ and would block
-        # navigation otherwise. Track the last path we baked so rapid arrow
-        # nav doesn't re-bake the same file repeatedly.
-        if (self._attr_path and self._attr_path != path
-                and getattr(self, "_last_autobaked_path", None) != self._attr_path):
-            if getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked():
-                _prev_path = self._attr_path
-                _prev_entry = attrs_mod.get(self.handler.app.attrs_data, _prev_path)
-                self._last_autobaked_path = _prev_path
-                if _prev_path and os.path.exists(_prev_path) and attrs_mod._has_real_data(_prev_entry):
-                    import threading as _thr
-                    def _bg_autobake(_p=_prev_path, _e=dict(_prev_entry)):
+                    _status(f"Autorename: OFF ({_bn_old})")
+                elif not _ue:
+                    _status(f"Autorename: skipped — {_bn_old} not edited this session")
+                if _ar_on and _ue:
+                    _wr = False
+                    try:
+                        _wr = attrs_mod.would_rename(_app.attrs_data, _old, _proj)
+                    except Exception as e:
+                        _ar_dbg(f"autorename: would_rename raised {e}")
+                        _status(f"Autorename: error checking — {e}")
+                    _ar_dbg(f"autorename: would_rename={_wr}")
+                    if not _wr:
+                        _status(f"Autorename: filename already matches attrs — {_bn_old}")
+                    if _wr:
                         try:
-                            attrs_mod.embed_aitan_meta(_p, _e)
-                        except Exception:
-                            pass
-                    _thr.Thread(target=_bg_autobake, daemon=True).start()
+                            _new = attrs_mod.rename_file_to_match_entry(
+                                _app.attrs_data, _old, project=_proj)
+                            _ar_dbg(f"autorename: rename returned {os.path.basename(_new) if _new else _new!r}")
+                        except Exception as e:
+                            _ar_dbg(f"autorename: rename raised {e}")
+                            _status(f"Autorename: FAILED — {e}")
+                            _new = _old
+                        if _new and _new != _old:
+                            _status(f"Autorename: {_bn_old} → {os.path.basename(_new)}",
+                                    6000)
+                        elif _new == _old:
+                            _status(f"Autorename: no change for {_bn_old}")
+                        if _new and _new != _old:
+                            if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
+                                _app.data["paths"][_app.data["paths"].index(_old)] = _new
+                            try:
+                                if hasattr(_app, "_replace_dup_display_path"):
+                                    _app._replace_dup_display_path(_old, _new)
+                            except Exception:
+                                pass
+                            try:
+                                for _r in range(_app.table.rowCount()):
+                                    if _app.table.get_row_path(_r) == _old:
+                                        _app.table.set_row_path(_r, _new)
+                                        break
+                            except Exception:
+                                pass
+                            _entry_after = _app.attrs_data.get(_new) or _app.attrs_data.get(_old)
+                            if isinstance(_entry_after, dict):
+                                _old_bn = os.path.basename(_old)
+                                _note = (_entry_after.get("note") or "").rstrip()
+                                _last_line = _note.splitlines()[-1].strip() if _note else ""
+                                if _last_line != _old_bn:
+                                    _appended = (_note + "\n" + _old_bn).lstrip("\n")
+                                    _entry_after["note"] = _appended
+                            # Don't update self._attr_path — the user has
+                            # already moved on. _last_autorenamed_path was
+                            # set earlier so we don't double-fire.
+                            self._last_autorenamed_path = _new
+                            try:
+                                self._user_edited_paths.discard(_old)
+                            except Exception:
+                                pass
+                            _final = _new
+                # Auto-bake the final path (NEW after rename, OLD otherwise).
+                # Runs in a background thread — ffmpeg-copy for videos is
+                # 300ms+ and would block the event loop. Order matters: we
+                # are AFTER any os.rename here, so the bake writes back to
+                # the path that survives, not the one that was just moved.
+                if (getattr(self, '_chk_auto_bake', None) and self._chk_auto_bake.isChecked()
+                        and _final and os.path.exists(_final)
+                        and getattr(self, "_last_autobaked_path", None) != _final):
+                    _entry_for_bake = attrs_mod.get(_app.attrs_data, _final)
+                    if attrs_mod._has_real_data(_entry_for_bake):
+                        self._last_autobaked_path = _final
+                        import threading as _thr
+                        def _bg_autobake(_p=_final, _e=dict(_entry_for_bake)):
+                            try:
+                                attrs_mod.embed_aitan_meta(_p, _e)
+                            except Exception:
+                                pass
+                        _thr.Thread(target=_bg_autobake, daemon=True).start()
+            QTimer.singleShot(0, _do_autorename)
         # CLIP/FACE results are now cached in JSON (per user request) so
         # re-opening a file doesn't re-run detection. Don't clear them from
         # in-memory — that would defeat the cache. Memory growth is bounded
@@ -1723,7 +1800,7 @@ class PreviewWindow(QWidget):
             self._schedule_inspect(skip_fields=_skip_face_only)
         elif _mode in ("always", "when_empty"):
             _entry = attrs_mod.get(self.handler.app.attrs_data, path)
-            _clip_fields = ("hair", "face_angle", "skin", "eyes", "posture_motion", "camera_shot", "background", "expression", "clothing")
+            _clip_fields = tuple({s["field"] for s in attrs_mod.CLIP_AUTO_DETECT})
             if _mode == "when_empty":
                 # Check both entry.field (for 1/2/3dig fields) AND entry.tags
                 # (for matrix fields like X, Background). Read X_Table /
@@ -1944,6 +2021,95 @@ class PreviewWindow(QWidget):
                     if _w.key.startswith("CLIP_") or _w.key in ("CLIP", "FACE", "FACE_PW"):
                         _w.hide()
         self._attr_path = path
+        # Settings → Animal → "Always set Animal to (no animal)" sets
+        # attrs["animal"] = "00" on preview load **only when the field
+        # is empty/missing**. Files that already have a value (user
+        # picked a real cat, filename has A-code extracted, etc.) are
+        # left alone — the setting is for "fresh files default to no
+        # animal", not "wipe everything including correct values".
+        # User said: cat pictures must keep their cat.
+        if path and app.config.get("animal_force_none", False):
+            try:
+                _e_force = app.attrs_data.setdefault(path, {})
+                if not _e_force.get("animal", ""):
+                    _e_force["animal"] = "00"
+                    attrs_mod.save(getattr(app, "current_project", None),
+                                   app.attrs_data)
+            except Exception:
+                pass
+        # Install the CLIP_A row-click handler on the canvas debug tile.
+        # _update_canvas_text_widget only fires from the inspect thread —
+        # for files whose CLIP_A is already cached in attrs, the tile
+        # displays the stored text but never goes through that path, so
+        # the handler never gets installed there. Doing it here ensures
+        # the handler is present on every navigation. Guarded by
+        # _row_click_installed so we only wire each _te once.
+        try:
+            _sc_cl = getattr(self, "_soft_canvas", None)
+            # AI-off banner: when both clip_inspect_mode and face_inspect_mode
+            # are "never", replace every CLIP_* / FACE / FACE_PW debug tile's
+            # text with "(AI inspect OFF)" so the user can see at a glance
+            # that the scores they remember from before aren't being
+            # refreshed. Otherwise the tiles still show stale text from a
+            # past detection, which the user interpreted as "AI is still
+            # running" — same complaint pattern.
+            _cm_pv = app.config.get("clip_inspect_mode", "never")
+            _fm_pv = app.config.get("face_inspect_mode", "never")
+            _ai_off_pv = (_cm_pv == "never" and _fm_pv == "never")
+            # Top-of-preview banner — only visible when AI is fully off.
+            _banner = getattr(self, "_ai_off_banner", None)
+            if _banner is not None:
+                try:
+                    _banner.setVisible(_ai_off_pv)
+                except Exception:
+                    pass
+            if _sc_cl:
+                for _w_cl in getattr(_sc_cl, "widgets", []):
+                    _wk_cl = getattr(_w_cl, "key", None)
+                    # Show "(AI inspect OFF)" placeholder on every CLIP_* /
+                    # FACE / FACE_PW debug tile when AI is fully off.
+                    if _ai_off_pv and (
+                            (_wk_cl in self._CLIP_FIELD_INFO)
+                            or _wk_cl in ("FACE", "FACE_PW")):
+                        _te_off = getattr(_w_cl, "_te", None)
+                        if _te_off is not None:
+                            try:
+                                _te_off.blockSignals(True)
+                                _te_off.setPlainText("(AI inspect OFF)")
+                                _te_off.blockSignals(False)
+                            except Exception:
+                                pass
+                    if _wk_cl not in self._CLIP_FIELD_INFO:
+                        continue
+                    _te_cl = getattr(_w_cl, "_te", None)
+                    if _te_cl is None:
+                        continue
+                    if not getattr(_te_cl, "_row_click_installed", False):
+                        self._install_clip_row_clicks(_te_cl, _wk_cl)
+                        _te_cl._row_click_installed = True
+                    # Refresh the persistent highlight to track this
+                    # file's current stored value for the field.
+                    if not _ai_off_pv:
+                        QTimer.singleShot(0,
+                            lambda _t=_te_cl, _k=_wk_cl: self._highlight_clip_field_for_current(_t, _k))
+        except Exception:
+            pass
+        # NOTE on animal sync: an earlier attempt re-derived
+        # entry["animal"] on every preview navigation (first from
+        # CLIP_A debug, then from the filename) to keep the text box
+        # in lockstep with one of those sources. Both versions caused
+        # Update's writes to be silently overwritten on the very next
+        # navigation — Update's effects looked like no-ops to the user.
+        # Removed: the natural flow is sufficient.
+        #
+        #   Update writes attrs["animal"] → step 5 auto-rename rebuilds
+        #   the filename from attrs (via build_coded_filename) → the
+        #   filename naturally reflects whatever Update last decided.
+        #   The text box reads attrs["animal"] directly, so it matches
+        #   the filename without any extra sync.
+        #
+        # If you see a stale mismatch, the fix belongs in Update /
+        # auto-rename, not in this navigation path.
         # On new-file nav, just reset to idle. Yellow ("pending") is set only
         # when the user actually edits — no per-nav file read for the bake
         # state, which kept arrow-key scrolling fast.
@@ -2253,6 +2419,27 @@ class PreviewWindow(QWidget):
             except Exception:
                 pass
             entry["_project"] = getattr(app, "current_project", None)
+            # When AI inspect is fully off, replace every CLIP_*/FACE
+            # debug-text entry with "(AI inspect OFF)" so the canvas
+            # widgets display that instead of stale scores left over
+            # from a past detection. Done on a SHALLOW COPY so the
+            # real attrs aren't polluted — values are restored by the
+            # next detection when AI is turned back on.
+            _cm_off2 = app.config.get("clip_inspect_mode", "never")
+            _fm_off2 = app.config.get("face_inspect_mode", "never")
+            if _cm_off2 == "never" and _fm_off2 == "never":
+                entry = dict(entry)
+                _off_text = "(AI inspect OFF)"
+                # Set unconditionally — even for keys never written
+                # (fresh file). The previous `if _ek in entry` guard
+                # made the placeholder vanish on files that had no
+                # past CLIP detection at all, which was the most
+                # common case the user was looking at.
+                for _ek in ("CLIP", "CLIP_A", "CLIP_HC", "CLIP_FA",
+                            "CLIP_SK", "CLIP_PM", "CLIP_E", "CLIP_CS",
+                            "CLIP_BG", "CLIP_X", "CLIP_CL",
+                            "FACE", "FACE_PW"):
+                    entry[_ek] = _off_text
             _sc.load_file(path, entry, raw_meta=_raw_meta)
             # Mark that the canvas now reflects THIS path. _save_attrs uses this
             # to refuse writes when the widgets haven't been reloaded yet.
@@ -2260,7 +2447,7 @@ class PreviewWindow(QWidget):
 
             # If key CLIP fields are absent, run detection in background and refresh canvas.
             # Skip entirely in "No inspection" mode — the user chose never to run AI.
-            _clip_fields = {"hair", "face_angle", "skin", "eyes", "bust", "waist_hip", "posture_motion", "camera_shot", "background", "clothing"}
+            _clip_fields = {s["field"] for s in attrs_mod.CLIP_AUTO_DETECT}
             _inspect_mode = self.handler.app.config.get("clip_inspect_mode", "never")
             if _inspect_mode != "never" and not any(entry.get(f) for f in _clip_fields):
                 import threading as _thr
@@ -2926,6 +3113,17 @@ class PreviewWindow(QWidget):
         # the source of slow navigation / memory growth.
         if os.environ.get("AISEARCH_NO_INSPECT"):
             return
+        # Hard switch check — if BOTH face and CLIP inspect modes are
+        # "never", the user has turned AI fully off. Bail immediately
+        # regardless of caller. User: "I turned off then why is it
+        # running? It should look for switch is off or not." This is
+        # the unconditional gate that catches every caller (manual
+        # Refresh, _schedule_inspect debounce, _update_clip_for_field
+        # right-click), not just _schedule_inspect.
+        _cfg = self.handler.app.config
+        if (_cfg.get("clip_inspect_mode", "never") == "never"
+                and _cfg.get("face_inspect_mode", "never") == "never"):
+            return
         # Guard: skip if a previous inspect is still running (rapid navigation)
         if getattr(self, '_inspect_running', False):
             return
@@ -2997,6 +3195,15 @@ class PreviewWindow(QWidget):
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
             _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL", "A")
+            # Bail out of CLIP scoring entirely when clip_inspect_mode is
+            # "never". User: "face only [mode], clip [still] shows" —
+            # _on_inspect was running the full CLIP block even with CLIP
+            # turned off, just suppressing the writes via skip_fields.
+            # The 12s CPU encode was still happening every navigation.
+            # Now we skip the block outright when CLIP is off.
+            _clip_inspect_on = app.config.get("clip_inspect_mode", "never") != "never"
+            if not _clip_inspect_on:
+                _dbg("    CLIP skipped — clip_inspect_mode=never")
             # In Refresh-CLIP mode (overwrite=True), wipe the canonical
             # lowercase keys for every CLIP-detectable field BEFORE detection
             # runs. Without this, fields that CLIP doesn't detect this round
@@ -3028,7 +3235,13 @@ class PreviewWindow(QWidget):
                 # CLIP scoring goes through the persistent worker pool —
                 # CLIP/CUDA state lives in the worker, so any segfault only
                 # kills the worker. Auto-recycles every 30 calls.
-                _clip_specs = attrs_mod.inspect_clip_scores_subprocess(path)
+                # Skip entirely when clip_inspect_mode is "never" (face-
+                # only mode): the user explicitly turned CLIP off; the
+                # 12-sec encode shouldn't run anyway.
+                if _clip_inspect_on:
+                    _clip_specs = attrs_mod.inspect_clip_scores_subprocess(path)
+                else:
+                    _clip_specs = []
                 if _clip_specs:
                     _shown_skip_label = set()   # don't repeat "ignored" per spec position
                     for sp in _clip_specs:
@@ -3251,7 +3464,16 @@ class PreviewWindow(QWidget):
                     # instead of finishing a stale 30-second detection.
                     fi = attrs_mod.inspect_face_detection_subprocess(
                         path, app.current_project,
-                        cancel_check=lambda: self._attr_path != path)
+                        # Also cancel when the user toggles AI off mid-
+                        # detection — the face subprocess otherwise runs
+                        # to completion (5-30s on CPU) even though the
+                        # user clicked the logo expecting an immediate
+                        # stop. User: "I turned off then why it is
+                        # running?"
+                        cancel_check=lambda: (
+                            self._attr_path != path
+                            or app.config.get("face_inspect_mode", "never") == "never"
+                        ))
                     if fi.get("error"):
                         face_txt.append(f"ERROR: {fi['error']}")
                     else:
@@ -3558,11 +3780,235 @@ class PreviewWindow(QWidget):
                     te.blockSignals(True)
                     te.setPlainText(text)
                     te.blockSignals(False)
+                    # CLIP_* debug rows are clickable — clicking a row
+                    # writes that code at the appropriate digit
+                    # position of the storage field for this widget.
+                    # Wired for every CLIP_* widget in _CLIP_FIELD_INFO,
+                    # only once per widget (guarded by _row_click_installed).
+                    # After any text update, re-apply the persistent
+                    # highlight to whichever row matches the current
+                    # stored value.
+                    if key in self._CLIP_FIELD_INFO:
+                        if not getattr(te, "_row_click_installed", False):
+                            self._install_clip_row_clicks(te, key)
+                            te._row_click_installed = True
+                        QTimer.singleShot(0,
+                            lambda _t=te, _k=key: self._highlight_clip_field_for_current(_t, _k))
                     if "ignored — already set" in text:
                         w.hide()
                         return
                     # Resize tile and shift tiles below — deferred so widget is laid out first
                     QTimer.singleShot(50, lambda _w=w: self._fit_clip_face_tile(_w))
+
+    # Map of CLIP_* debug-tile widget key → (storage field name, total
+    # digits in the coded value). Used by the generic clickable-row /
+    # current-selection-highlight machinery. The position embedded in
+    # each "pos=N" debug header is from the RIGHT, so total_digits - pos
+    # gives the string index to update.
+    _CLIP_FIELD_INFO = {
+        "CLIP_A":  ("animal",         2),
+        "CLIP_HC": ("hair",           3),
+        "CLIP_FA": ("face_angle",     2),
+        "CLIP_SK": ("skin",           1),
+        "CLIP_PM": ("posture_motion", 2),
+        "CLIP_E":  ("eyes",           1),
+        "CLIP_CS": ("camera_shot",    3),
+        "CLIP_BG": ("background",     2),
+        "CLIP_X":  ("expression",     2),
+        "CLIP_CL": ("clothing",       4),
+    }
+
+    def _install_clip_a_row_clicks(self, te):
+        """Back-compat alias — actual generic implementation lives in
+        _install_clip_row_clicks. Kept because _update_canvas_text_widget
+        and _refresh_attrs_inner call this name for CLIP_A; they now
+        also call the generic version for other CLIP_* widgets."""
+        self._install_clip_row_clicks(te, "CLIP_A")
+
+    def _highlight_clip_a_row_for_current(self, te):
+        """Back-compat alias for CLIP_A — calls the generic highlight."""
+        self._highlight_clip_field_for_current(te, "CLIP_A")
+
+    def _install_clip_row_clicks(self, te, widget_key):
+        """Make rows in a CLIP_* debug tile clickable. Click a row like
+        '* c: 0.1539  …'  to write that code at the appropriate position
+        of the corresponding storage field for the current file.
+        Supports multi-position fields (HC, CS, CL, …) by scanning
+        backward from the clicked row to find the most recent 'pos=N'
+        header — that N tells us which digit to update."""
+        info = self._CLIP_FIELD_INFO.get(widget_key)
+        if not info:
+            return
+        field, total_digits = info
+        import re as _re
+        _row_re = _re.compile(r'^\s*\*?\s*([0-9a-f]):\s*[\d.]+')
+        _pos_re = _re.compile(r'\s*pos=(\d+)')
+
+        _orig_mouse_press = te.mousePressEvent
+        def _on_mouse_press(ev, _self=self, _te=te, _orig=_orig_mouse_press,
+                            _wkey=widget_key, _field=field, _td=total_digits):
+            try:
+                _orig(ev)
+            except Exception:
+                pass
+            if ev.button() != Qt.MouseButton.LeftButton:
+                return
+            try:
+                cur = _te.cursorForPosition(ev.pos())
+                block = cur.block()
+                line = block.text()
+            except Exception:
+                return
+            m = _row_re.match(line)
+            if not m:
+                return
+            _code = m.group(1).lower()
+            # Scan backward for the nearest "pos=N" header so we know
+            # which digit of the storage value this row updates.
+            _pos = None
+            pb = block.previous()
+            while pb.isValid():
+                pm = _pos_re.match(pb.text())
+                if pm:
+                    try:
+                        _pos = int(pm.group(1))
+                    except Exception:
+                        _pos = None
+                    break
+                pb = pb.previous()
+            if _pos is None or _pos < 1 or _pos > _td:
+                return
+            _self._apply_clip_code_click(_field, _td, _pos, _code)
+            _self._highlight_clip_field_for_current(_te, _wkey)
+        te.mousePressEvent = _on_mouse_press
+        # Initial highlight based on current attrs value.
+        QTimer.singleShot(0,
+            lambda: self._highlight_clip_field_for_current(te, widget_key))
+
+    def _highlight_clip_field_for_current(self, te, widget_key):
+        """Highlight the row(s) matching the current stored value for
+        this CLIP_* widget. For multi-position fields, one row per
+        pos=N section gets highlighted."""
+        info = self._CLIP_FIELD_INFO.get(widget_key)
+        if not info:
+            return
+        field, total_digits = info
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        app = self.handler.app
+        entry = (app.attrs_data.get(path) or {}) if hasattr(app, "attrs_data") else {}
+        val = (entry.get(field, "") or "").lower()
+        self._apply_clip_field_highlight(te, val, total_digits)
+
+    def _apply_clip_field_highlight(self, te, value, total_digits):
+        """Reset doc formatting, then color every row that matches the
+        digit of `value` corresponding to that row's pos=N section.
+        Bold bright-green text (#88ff88) on the matching row."""
+        from PyQt6.QtGui import (QColor as _QC, QTextCursor as _QTC,
+                                 QTextCharFormat as _QTCF, QFont as _QF)
+        import re as _re
+        _row_re = _re.compile(r'^\s*\*?\s*([0-9a-f]):\s*[\d.]+')
+        _pos_re = _re.compile(r'\s*pos=(\d+)')
+        try:
+            doc = te.document()
+            # Reset entire document to default color first so a stale
+            # highlight from a previous value vanishes.
+            _reset_fmt = _QTCF()
+            _reset_fmt.setForeground(_QC("#e0e0e0"))
+            _reset_fmt.setFontWeight(_QF.Weight.Normal)
+            _cur_all = _QTC(doc)
+            _cur_all.select(_QTC.SelectionType.Document)
+            _cur_all.setCharFormat(_reset_fmt)
+            if not value:
+                return
+            pad = value.ljust(total_digits, "0")[:total_digits]
+            current_pos = None
+            block = doc.firstBlock()
+            while block.isValid():
+                text = block.text()
+                pm = _pos_re.match(text)
+                if pm:
+                    try:
+                        current_pos = int(pm.group(1))
+                    except Exception:
+                        current_pos = None
+                else:
+                    m = _row_re.match(text)
+                    if m and current_pos is not None and 1 <= current_pos <= total_digits:
+                        code = m.group(1).lower()
+                        target = pad[total_digits - current_pos]
+                        if code == target:
+                            cur = _QTC(block)
+                            cur.movePosition(_QTC.MoveOperation.EndOfBlock,
+                                             _QTC.MoveMode.KeepAnchor)
+                            fmt = _QTCF()
+                            fmt.setForeground(_QC("#88ff88"))
+                            fmt.setFontWeight(_QF.Weight.Bold)
+                            cur.setCharFormat(fmt)
+                block = block.next()
+        except Exception:
+            pass
+
+    def _apply_clip_code_click(self, field, total_digits, pos, code):
+        """Write the picked code at the given digit position of the
+        storage field for the current file, then refresh the matching
+        canvas widget via its load_soft loader (no full _refresh_attrs,
+        which would clobber the CLIP_* debug list)."""
+        path = self._attr_path
+        if not path:
+            return
+        app = self.handler.app
+        entry = app.attrs_data.setdefault(path, {})
+        existing = (entry.get(field, "") or "").lower()
+        chars = list(existing.ljust(total_digits, "0")[:total_digits])
+        idx = total_digits - pos
+        if 0 <= idx < total_digits:
+            chars[idx] = code
+        new_val = "".join(chars)
+        # Animal-specific: when CLIP click changes the matrix row digit,
+        # reset the column to "0" so the text box shows the row's
+        # generic label (Fish, Cat, …) rather than carrying over an
+        # unrelated col digit. Mirrors the original Animal-only logic.
+        if field == "animal" and total_digits >= 2 and pos == 2:
+            old_row = existing[0:1] if existing else ""
+            new_row = code
+            if old_row != new_row:
+                # Position 1 (rightmost, index N-1) is the col — reset.
+                chars[total_digits - 1] = "0"
+                new_val = "".join(chars)
+        entry[field] = new_val
+        try:
+            attrs_mod.save(getattr(app, "current_project", None), app.attrs_data)
+        except Exception:
+            pass
+        # Find the corresponding selector widget by matching its key
+        # against the field's CODED_FIELDS aliases (letter, label, or
+        # long storage) and call load_soft so the combo(s) repopulate
+        # from the updated entry. Labels may be bilingual
+        # ("Clothing / 服装") — split by "/" so each half qualifies,
+        # since the canvas widget key is usually just the EN half.
+        try:
+            import aisearch_attrs as _am
+            _aliases = {field}
+            for _cf in _am.CODED_FIELDS:
+                _letter, _label, _digits = _cf[0], _cf[1], _cf[2]
+                _storage = _cf[3] if len(_cf) >= 4 else _letter.lower()
+                if _storage == field:
+                    _aliases.update({_letter, _label, _storage})
+                    _aliases.update(_p.strip() for _p in _label.split("/"))
+                    break
+            _sc = getattr(self, "_soft_canvas", None)
+            if _sc:
+                _tags_set = set(entry.get("tags", []) or [])
+                for _w in getattr(_sc, "widgets", []):
+                    if getattr(_w, "key", None) in _aliases:
+                        _loader = getattr(_w, "load_soft", None)
+                        if callable(_loader):
+                            _loader(_tags_set, entry)
+                        break
+        except Exception:
+            pass
 
     @pyqtSlot(str, str, float, float)
     def _auto_apply_face(self, path: str, pid: str, top_sim: float = 0.0,
@@ -3713,17 +4159,51 @@ class PreviewWindow(QWidget):
             return
         QTimer.singleShot(150, lambda _p=pid, _o=path: _focus(_p, _o))
 
+    @staticmethod
+    def _clip_dbg_key_for(key: str) -> str:
+        """Translate a canvas section key into its CLIP_* debug-tile key.
+        Handles three input forms:
+          - explicit short forms: "HC", "A", "CL" → "CLIP_HC" etc.
+          - storage keys:         "hair", "animal", "clothing" → CLIP_HC
+          - section labels:       "Hair", "Animal", "Clothing"  → CLIP_HC
+          - person/face special:  "p"/"pw" → "FACE"/"FACE_PW"
+
+        The old code went straight to `CLIP_<key.upper()>` which only
+        worked for the short-form case. Right-click → Show on widgets
+        keyed by label ("Hair", "Animal") built non-existent tile names
+        like CLIP_HAIR / CLIP_ANIMAL — silent no-op. User noticed Show
+        worked for Person (special-cased) but not the others."""
+        if key is None:
+            return ""
+        _target = key.lower()
+        if _target == "p":
+            return "FACE"
+        if _target == "pw":
+            return "FACE_PW"
+        # Resolve via CODED_FIELDS — letter is the filename code that
+        # becomes the CLIP_* suffix. The user's widget key may be the
+        # letter, the label, or the long storage name. Labels may be
+        # bilingual ("Clothing / 服装") — split by "/" and try each
+        # half, since the canvas widget key is usually the EN half.
+        try:
+            import aisearch_attrs as _am
+            for _cf in _am.CODED_FIELDS:
+                _letter = _cf[0]
+                _label  = _cf[1]
+                _storage = _cf[3] if len(_cf) >= 4 else _letter.lower()
+                _label_parts = [_p.strip() for _p in _label.split("/")]
+                if (key == _letter or key == _label or key == _storage
+                        or key in _label_parts):
+                    return f"CLIP_{_letter.upper()}"
+        except Exception:
+            pass
+        return f"CLIP_{_target.upper()}"
+
     def _show_clip_tile_for_field(self, key: str):
         """Right-click → Show: reveal the debug tile without re-running detection.
         Repositions the tile flush under its parent (BL→TL) so it stays
         attached even after Auto Grid disconnected it."""
-        _target = key.lower()
-        if _target == "p":
-            _dbg_key = "FACE"
-        elif _target == "pw":
-            _dbg_key = "FACE_PW"
-        else:
-            _dbg_key = f"CLIP_{_target.upper()}"
+        _dbg_key = self._clip_dbg_key_for(key)
         _sc = getattr(self, "_soft_canvas", None)
         if not _sc:
             return
@@ -4274,6 +4754,32 @@ class PreviewWindow(QWidget):
                 sa.setStyleSheet("border: none; background: black;")
         except Exception:
             pass
+
+    def _mark_user_edited(self):
+        """Record that the currently-shown file has had a user edit
+        this session. Gates autorename so background detection writes
+        (CLIP_AUTO_DETECT, file-attr O/R/K, watcher init) never trigger
+        a spontaneous rename on navigation-away."""
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        # Auto-init the set if it's missing — the attr panel is lazy-built
+        # so an early canvas signal could fire before _build_attr_panel
+        # initialised it. Without this guard the path would silently fail
+        # to be marked and autorename would skip the file.
+        if not hasattr(self, "_user_edited_paths"):
+            self._user_edited_paths = set()
+        try:
+            self._user_edited_paths.add(path)
+        except Exception:
+            pass
+
+    def _save_attrs_user_edit(self):
+        """Wrapper: mark the current path as user-edited, then save.
+        Wire widget signals here instead of directly to _save_attrs so
+        background-triggered saves don't pollute the user-edit set."""
+        self._mark_user_edited()
+        self._save_attrs()
 
     def _save_attrs(self):
         path = self._attr_path
@@ -5443,6 +5949,13 @@ class PreviewHandler:
 
         if item_row is not None:
             self.app.table.removeRow(item_row)
+
+        fm_win = getattr(self.app, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.remove_paths([path])
+            except Exception:
+                pass
 
         filename = os.path.basename(path)
         QTimer.singleShot(1500, lambda: self._find_and_insert_new(filename, path))

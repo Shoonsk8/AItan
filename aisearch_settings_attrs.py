@@ -91,25 +91,25 @@ class _AttrsMixin:
             for _pfx, _sty in _styles.items():
                 if _sty != "matrix" or _pfx in FIELD_DEFS:
                     continue
-                # Only seed if workspace is completely empty for this prefix
-                _has = any(
-                    mgr.data.get(f"{_pfx}{hex(_r)[2:]}{hex(_c)[2:]}", {}).get("expression")
-                    for _r in range(16) for _c in range(16)
-                )
-                if _has:
-                    continue
                 # Read from {pfx}_Table first, fall back to {pfx} (old pair format)
                 _pairs = list(_raw.get(f"{_pfx}_Table") or _raw.get(_pfx) or [])
                 # Also check TAG_GROUPS for default values
                 if not _pairs:
                     import aisearch_attrs as _aa
                     _pairs = list(_aa._DEFAULT_TAG_GROUPS.get(f"{_pfx}_Major") or [])
+                # Fill missing cells from the canonical _Table without
+                # trampling existing workspace edits. Previously this
+                # block early-exited if ANY cell had data, which let the
+                # workspace silently desync from the tags file — and the
+                # next save would write the truncated workspace back.
                 for _pair in _pairs:
                     if len(_pair) >= 2:
                         _k = str(_pair[0])
                         # Pad single-digit keys to 2 digits (place in row 0)
                         _ws_key = f"{_pfx}{_k.zfill(2)}"
-                        mgr.data.setdefault(_ws_key, {})["expression"] = _pair[1]
+                        _cur = mgr.data.get(_ws_key, {}).get("expression", "").strip()
+                        if not _cur:
+                            mgr.data.setdefault(_ws_key, {})["expression"] = _pair[1]
 
         def _reload_attr_sections():
             """Clear and reload all workspace sections for the selected project."""
@@ -1300,6 +1300,26 @@ class _AttrsMixin:
             final_json = {}
             for k, v in result.items():
                 final_json[k] = v
+            # Matrix-table backstop: for every {pfx}_Table the editor just
+            # rebuilt from the workspace, fill in any (r,c) entries that
+            # exist on disk but are absent from the workspace. The
+            # workspace can desync from the canonical table (a row never
+            # loaded into the editor stays missing), and without this
+            # merge an unrelated save would silently erase those rows.
+            # Erasure now requires the user to actually clear the cell.
+            for _pfx in _all_matrix_pfx:
+                _sk = _save_key(_pfx)
+                _tk = f"{_sk}_Table"
+                _existing_rows = existing.get(_tk)
+                if not isinstance(_existing_rows, list):
+                    continue
+                _new_rows = list(final_json.get(_tk) or [])
+                _seen = {r[0] for r in _new_rows if isinstance(r, list) and r}
+                for _row in _existing_rows:
+                    if isinstance(_row, list) and len(_row) >= 2 and _row[0] not in _seen:
+                        _new_rows.append(list(_row))
+                        _seen.add(_row[0])
+                final_json[_tk] = _new_rows
             # 🔒 Protected: source of truth depends on whether this save
             # is to the same project the editor is showing.
             #   - Same project (regular save): editor's checkbox state is

@@ -42,9 +42,25 @@ else:
 
 
 def load_db_logic(name):
-    """DBが存在するか確認し、読み込む"""
+    """DBが存在するか確認し、読み込む。
+    Always loads via map_location="cpu" first — the features.pt may have
+    been saved with CUDA tensors; if the current CUDA context is in a
+    bad state (e.g. earlier assert, partial OOM), loading directly to
+    device aborts the whole process with `cudaErrorAssert` SIGABRT
+    instead of letting us fall back gracefully. After CPU load we try
+    to move embeddings to device; on failure we keep the CPU copy."""
     db_path = os.path.join(_DATA_DIR, f"features_{name}.pt")
-    return (torch.load(db_path, map_location=device), db_path) if os.path.exists(db_path) else (None, None)
+    if not os.path.exists(db_path):
+        return (None, None)
+    data = torch.load(db_path, map_location="cpu")
+    if device != "cpu" and isinstance(data, dict) and "embeddings" in data:
+        try:
+            data["embeddings"] = data["embeddings"].to(device)
+        except Exception:
+            # CUDA unavailable or asserted — search still works on CPU,
+            # just slower. Leave embeddings on CPU.
+            pass
+    return (data, db_path)
 
 def get_sz_readable(p):
     """人間が読みやすいサイズ表記"""
@@ -179,40 +195,88 @@ def _video_first_frame_pil(path):
 
 
 def extract_feature(path):
-    """ファイルから特徴量を抽出"""
-    try:
-        img = None
-        if path.lower().endswith(EXT_VID):
-            # Reuse the shared video thumbnail cache (first-frame only) so
-            # CLIP and the preview thumbnail share one cv2 decode per video.
-            # Without this, a single video gets decoded twice through cv2 —
-            # doubling memory pressure on swscaler-leaky files.
+    """ファイルから特徴量を抽出.
+    Returns the CLIP embedding tensor on success, or None on any failure.
+    On failure, prints a one-line reason to stderr so the user can tell
+    whether the file was *actually* unreadable vs CLIP-encode-failed
+    (often the latter: a single CUDA assert poisons every subsequent
+    encode, so the scan flags hundreds of fine files as 'unreadable')."""
+    import sys as _sys
+    img = None
+    if path.lower().endswith(EXT_VID):
+        # Reuse the shared video thumbnail cache (first-frame only) so
+        # CLIP and the preview thumbnail share one cv2 decode per video.
+        # Without this, a single video gets decoded twice through cv2 —
+        # doubling memory pressure on swscaler-leaky files.
+        try:
             rgb = get_video_thumbnail_rgb(path, first_only=True)
-            if rgb is not None:
-                img = Image.fromarray(rgb)
-        else:
-            try:
-                Image.MAX_IMAGE_PIXELS = None
-                img = Image.open(path).convert('RGB')
-                if img.width * img.height > 4000 * 4000:
-                    img.thumbnail((2048, 2048), Image.LANCZOS)
-            except Exception:
-                # Image open failed — likely a video file with wrong extension.
-                # Use the shared video cache (handles ffmpeg fallback internally).
-                rgb = get_video_thumbnail_rgb(path, first_only=True)
-                if rgb is not None:
-                    img = Image.fromarray(rgb)
-        if img is None:
+        except Exception as e:
+            print(f"[extract_feature] video decode raised: {e}  path={path}",
+                  file=_sys.stderr, flush=True)
             return None
-        # CLIP-ViT-L-14 expects 224×224. Anything larger is wasted memory.
-        # Downscale before encoding so a 4K video frame doesn't allocate
-        # gigabytes during model.encode.
-        if max(img.width, img.height) > 512:
-            img.thumbnail((512, 512), Image.LANCZOS)
-        # torch.no_grad() prevents autograd graph buildup — without this each
-        # encode keeps activations alive in memory, leaks ~hundreds of MB.
-        import torch as _torch
+        if rgb is None:
+            print(f"[extract_feature] video decode returned None  path={path}",
+                  file=_sys.stderr, flush=True)
+            return None
+        img = Image.fromarray(rgb)
+    else:
+        try:
+            Image.MAX_IMAGE_PIXELS = None
+            img = Image.open(path).convert('RGB')
+            if img.width * img.height > 4000 * 4000:
+                img.thumbnail((2048, 2048), Image.LANCZOS)
+        except Exception as e_img:
+            # Image open failed — could be a misnamed video. Try the
+            # video path as a fallback (cv2/ffmpeg, first frame).
+            try:
+                rgb = get_video_thumbnail_rgb(path, first_only=True)
+            except Exception as e_vid:
+                print(f"[extract_feature] PIL failed ({e_img}) AND "
+                      f"video fallback raised ({e_vid})  path={path}",
+                      file=_sys.stderr, flush=True)
+                return None
+            if rgb is None:
+                print(f"[extract_feature] PIL failed ({e_img}) AND "
+                      f"video fallback returned None  path={path}",
+                      file=_sys.stderr, flush=True)
+                return None
+            img = Image.fromarray(rgb)
+    if img is None:
+        print(f"[extract_feature] no image after open  path={path}",
+              file=_sys.stderr, flush=True)
+        return None
+    # CLIP-ViT-L-14 expects 224×224. Anything larger is wasted memory.
+    # Downscale before encoding so a 4K video frame doesn't allocate
+    # gigabytes during model.encode.
+    if max(img.width, img.height) > 512:
+        img.thumbnail((512, 512), Image.LANCZOS)
+    # torch.no_grad() prevents autograd graph buildup — without this each
+    # encode keeps activations alive in memory, leaks ~hundreds of MB.
+    import torch as _torch
+    try:
         with _torch.no_grad():
             emb = model.encode(img, convert_to_tensor=True).to(device)
         return emb
-    except Exception: return None
+    except Exception as e_gpu:
+        # GPU encode failed. Most common cause: CUDA in asserted state
+        # after an earlier OOM or kernel fault, which silently poisons
+        # every subsequent encode. Don't write the file off as
+        # "unreadable/corrupt" — it opened cleanly above. Retry on CPU
+        # so the scan keeps producing real embeddings.
+        print(f"[extract_feature] CLIP encode failed on device={device} "
+              f"({type(e_gpu).__name__}: {e_gpu}), retrying on CPU  path={path}",
+              file=_sys.stderr, flush=True)
+        try:
+            with _torch.no_grad():
+                # device="cpu" param overrides the model's loaded device for
+                # this call. Slower per-file than GPU but reliable when CUDA
+                # is broken. Returns a CPU tensor; caller (extract_feature's
+                # consumers) only need it for similarity math and don't
+                # require GPU residency.
+                emb = model.encode(img, convert_to_tensor=True, device="cpu")
+            return emb
+        except Exception as e_cpu:
+            print(f"[extract_feature] CPU retry also failed: "
+                  f"{type(e_cpu).__name__}: {e_cpu}  path={path}",
+                  file=_sys.stderr, flush=True)
+            return None

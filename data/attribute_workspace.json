@@ -193,6 +193,9 @@
   "Animal75": {
     "expression": "Chicken / ニワトリ"
   },
+  "Animal80": {
+    "expression": "Test"
+  },
   "Animal90": {
     "expression": "Wild mammal / 野生哺乳類"
   },

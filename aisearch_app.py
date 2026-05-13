@@ -538,6 +538,19 @@ class AISearchApp(QMainWindow):
         self.load_db()
         QTimer.singleShot(0, self.table.setFocus)
         # QApplication.instance().installEventFilter(self)  # disabled: causes settings button to fail
+        # Restore the recurring Update Cycle if it was armed at last
+        # shutdown. The cycle's timer lives on the settings dialog, so we
+        # force-construct it hidden; _build_db_tab's deferred auto-arm
+        # picks up the flag and re-arms the timer.
+        if self.config.get("update_cycle_armed", False):
+            QTimer.singleShot(2000, self._restore_update_cycle)
+
+    def _restore_update_cycle(self):
+        try:
+            if getattr(self, '_settings_win', None) is None:
+                self._settings_win = SettingsView(self, self, 0, _defer_show=True)
+        except Exception:
+            pass
 
     # ── Focus management ─────────────────────────────────────────────────────
 
@@ -4634,6 +4647,7 @@ class AISearchApp(QMainWindow):
         deleted = 0
         errors = []
         batch = []
+        trashed_paths = []
 
         # Map paths to rows for snapshotting
         path_to_row = {}
@@ -4667,6 +4681,7 @@ class AISearchApp(QMainWindow):
                         errors.append(f"{os.path.basename(p)}: {err}")
                         continue
                     deleted += 1
+                    trashed_paths.append(p)
                     if _tp is not None:
                         batch.append({
                             "type": "delete", "orig_path": p, "trash_path": _tp,
@@ -4694,6 +4709,13 @@ class AISearchApp(QMainWindow):
 
         if batch:
             self._push_undo(batch)
+
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None and trashed_paths:
+            try:
+                fm_win.remove_paths(trashed_paths)
+            except Exception:
+                pass
 
         # Strip deleted paths out of the dup groups, drop singleton groups.
         # Filter the parallel `_dup_group_labels` list in lockstep so
@@ -6909,6 +6931,7 @@ class AISearchApp(QMainWindow):
         deleted_any = False
         errors = []
         batch = []
+        trashed_paths = []
 
         # Delete bottom-to-top so row indices stay valid
         for row in sorted(rows, reverse=True):
@@ -6937,6 +6960,7 @@ class AISearchApp(QMainWindow):
                     self.data["paths"]      = [self.data["paths"][i] for i in keep]
                     self.data["embeddings"] = self.data["embeddings"][keep]
                 self.table.removeRow(row)
+                trashed_paths.append(path)
                 deleted_any = True
             elif err:
                 errors.append(err)
@@ -6950,6 +6974,12 @@ class AISearchApp(QMainWindow):
             self._cleanup_singleton_groups()
             self._rebuild_dup_display_data()
             self._save_dup_results()
+            fm_win = getattr(self, "_fm_win", None)
+            if fm_win is not None and trashed_paths:
+                try:
+                    fm_win.remove_paths(trashed_paths)
+                except Exception:
+                    pass
             new_row = min(first_row, self.table.rowCount() - 1)
             if new_row >= 0:
                 self._select_row(new_row)

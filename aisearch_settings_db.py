@@ -3,7 +3,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QLineEdit, QGroupBox, QCheckBox,
                               QProgressBar, QComboBox, QMessageBox,
                               QTableWidget, QTableWidgetItem, QHeaderView,
-                              QListWidget, QApplication, QDateTimeEdit)
+                              QListWidget, QApplication, QDateTimeEdit,
+                              QSpinBox)
 from PyQt6.QtCore import Qt, QTimer, QDateTime
 from PyQt6.QtGui import QColor
 from attr_viewer import _lang_label as _t
@@ -78,7 +79,9 @@ class _DbMixin:
         proj_name_row.addWidget(QLabel(_t("Project Name: / プロジェクト名：")))
         self.new_proj_entry = QLineEdit()
         self.new_proj_entry.setText(self.app.current_project or "")
-        self.new_proj_entry.setPlaceholderText("Enter name for new or existing project…")
+        self.new_proj_entry.setPlaceholderText(_t(
+            "Enter name for new or existing project… / "
+            "新規・既存プロジェクト名を入力…"))
         self.new_proj_entry.setMinimumWidth(220)
         proj_name_row.addWidget(self.new_proj_entry, stretch=1)
         def _on_proj_name_changed(text):
@@ -168,6 +171,20 @@ class _DbMixin:
             "background-color: #2a4a6a; color: white; padding: 4px 10px;")
         self.btn_schedule.clicked.connect(self._toggle_schedule_update)
         sched_row.addWidget(self.btn_schedule)
+        # Recurring update — same row, right of the one-shot. Mutually
+        # exclusive with the one-shot; arming either cancels the other.
+        sched_row.addSpacing(12)
+        sched_row.addWidget(QLabel(_t("Every / 毎")))
+        self.sp_recurring = QSpinBox()
+        self.sp_recurring.setRange(1, 1440)
+        self.sp_recurring.setValue(int(self.app.config.get("update_every_min", 30) or 30))
+        self.sp_recurring.setSuffix(_t(" min / 分"))
+        sched_row.addWidget(self.sp_recurring)
+        self.btn_recurring = QPushButton(_t("🔁 Cycle / 🔁 周期"))
+        self.btn_recurring.setStyleSheet(
+            "background-color: #2a4a6a; color: white; padding: 4px 10px;")
+        self.btn_recurring.clicked.connect(self._toggle_recurring_update)
+        sched_row.addWidget(self.btn_recurring)
         self.lbl_schedule_status = QLabel("")
         sched_row.addWidget(self.lbl_schedule_status, stretch=1)
         l2.addLayout(sched_row)
@@ -175,9 +192,11 @@ class _DbMixin:
         # ── Utility buttons row ───────────────────────────────────────────────
         util_row = QHBoxLayout()
         btn_rename_util = QPushButton(_t("✏ Rename Files / ✏ ファイルリネーム"))
-        btn_rename_util.setToolTip(
+        btn_rename_util.setToolTip(_t(
             "Rename all project files to coded format (no CLIP/face scan).\n"
-            "Update mode: rename only files not yet in coded format.")
+            "Update mode: rename only files not yet in coded format. / "
+            "全プロジェクトファイルをコード形式にリネーム（CLIP・顔スキャンなし）。\n"
+            "Updateモード：未コード化のファイルのみリネーム。"))
         btn_rename_util.setStyleSheet(
             "background-color: #2a2a4a; color: #aaaaff; padding: 4px 8px;")
         btn_rename_util.clicked.connect(
@@ -188,36 +207,44 @@ class _DbMixin:
         util_row.addWidget(btn_rename_util)
 
         btn_redetect = QPushButton(_t("🔄 Re-detect All / 🔄 再検出"))
-        btn_redetect.setToolTip(
+        btn_redetect.setToolTip(_t(
             "Re-run metadata + tag detection on all DB files.\n"
             "Picks up new filename rules (e.g. -watermark) on existing files.\n"
-            "No CLIP re-encoding — fast.")
+            "No CLIP re-encoding — fast. / "
+            "全DBファイルでメタデータ+タグ検出を再実行。\n"
+            "既存ファイルの新しいファイル名ルール（-watermarkなど）を反映。\n"
+            "CLIP再エンコードなし — 高速。"))
         btn_redetect.setStyleSheet(
             "background-color: #2a3a2a; color: #aaffaa; padding: 4px 8px;")
         btn_redetect.clicked.connect(self._auto_detect_all)
         util_row.addWidget(btn_redetect)
 
         btn_unlock_util = QPushButton(_t("🔓 Unlock All / 🔓 全解除"))
-        btn_unlock_util.setToolTip(
-            "Run metadata scan on all files to set editable flag — no CLIP scan.")
+        btn_unlock_util.setToolTip(_t(
+            "Run metadata scan on all files to set editable flag — no CLIP scan. / "
+            "全ファイルでメタデータスキャンを実行しeditableフラグを設定 — CLIPスキャンなし。"))
         btn_unlock_util.setStyleSheet(
             "background-color: #2a3a2a; color: #aaffaa; padding: 4px 8px;")
         btn_unlock_util.clicked.connect(self._unlock_all_metadata)
         util_row.addWidget(btn_unlock_util)
 
         btn_fix_moved = QPushButton(_t("🔍 Fix Moved Files / 🔍 移動ファイル修正"))
-        btn_fix_moved.setToolTip(
+        btn_fix_moved.setToolTip(_t(
             "Scan configured directories for files matching missing DB entries.\n"
-            "Remaps moved/renamed paths without re-scanning.")
+            "Remaps moved/renamed paths without re-scanning. / "
+            "設定済みディレクトリを走査し、見つからないDBエントリに合致するファイルを検索。\n"
+            "再スキャンせずに移動・改名されたパスを再マップ。"))
         btn_fix_moved.setStyleSheet(
             "background-color: #2a2a4a; color: #aaaaff; padding: 4px 8px;")
         btn_fix_moved.clicked.connect(self._rescan_moved_files)
         util_row.addWidget(btn_fix_moved)
 
-        btn_embed_aitan = QPushButton("📎 Embed AItan{}")
-        btn_embed_aitan.setToolTip(
+        btn_embed_aitan = QPushButton(_t("📎 Embed AItan{} / 📎 AItan{}埋め込み"))
+        btn_embed_aitan.setToolTip(_t(
             "Write AItan{} metadata block into every file's embedded comment/description.\n"
-            "Backfills files added before auto-embedding was enabled.")
+            "Backfills files added before auto-embedding was enabled. / "
+            "全ファイルの埋め込みcomment/descriptionにAItan{}メタデータブロックを書き込む。\n"
+            "自動埋め込み有効化前のファイルにも追記。"))
         btn_embed_aitan.setStyleSheet(
             "background-color: #2a3a4a; color: #aaccff; padding: 4px 8px;")
         btn_embed_aitan.clicked.connect(self._embed_aitan_all)
@@ -262,6 +289,15 @@ class _DbMixin:
         tl.addStretch()
         tabs.addTab(tab_data, _t("🗄 Database / 🗄 データベース"))
 
+        # Restore the Cycle if it was armed at last shutdown. Deferred so
+        # the rest of the tab finishes painting first, and we don't
+        # accidentally re-arm when toggling on after settings is open.
+        if (self.app.config.get("update_cycle_armed", False)
+                and not getattr(self, '_recurring_armed', False)):
+            QTimer.singleShot(0, lambda: (
+                None if getattr(self, '_recurring_armed', False)
+                else self._toggle_recurring_update()))
+
     # --- scanning ---
 
     def execute_generate(self, reset=True, auto_apply_moves=False):
@@ -274,9 +310,11 @@ class _DbMixin:
                 self._toggle_ui(False)
                 self.btn_scan_new.setEnabled(True)
                 self.btn_stop.setEnabled(False)
-                self.btn_stop.setText("Stop")
+                self.btn_stop.setText(_t("Stop / 停止"))
             else:
-                self.lbl_scan.setText("Scan already in progress — press Stop to cancel.")
+                self.lbl_scan.setText(_t(
+                    "Scan already in progress — press Stop to cancel. / "
+                    "スキャンが既に進行中 — Stopで中止。"))
                 return
         name = self.new_proj_entry.text().strip()
         dirs_flags  = self._get_dirs_with_flags()
@@ -288,9 +326,12 @@ class _DbMixin:
         dirs     = [d       for d, _      in dirs_flags]
         no_subs  = [no_sub  for _, no_sub in dirs_flags]
         if not name:
-            self.lbl_scan.setText("Enter a project name first."); return
+            self.lbl_scan.setText(_t(
+                "Enter a project name first. / プロジェクト名を入力してください。")); return
         if not dirs:
-            self.lbl_scan.setText("No directories configured — use '+ Add' first."); return
+            self.lbl_scan.setText(_t(
+                "No directories configured — use '+ Add' first. / "
+                "ディレクトリ未設定 — まず「+ 追加」してください。")); return
 
         dir_list = "\n".join(f"  • {d}" for d in dirs)
         if reset:
@@ -318,13 +359,47 @@ class _DbMixin:
         self._stop_scan = False
         self._active_scan_btn = self.btn_generate if reset else self.btn_scan_new
         self._toggle_ui(True)
-        self._active_scan_btn.setText("Scanning…")
+        self._active_scan_btn.setText(_t("Scanning… / スキャン中…"))
         self.btn_stop.setEnabled(True)
         self.btn_scan_new.setEnabled(False)
         self._scan_queue = queue.Queue()
+        # Cycle status: while the scan runs, the recurring label would
+        # otherwise still read "Next update in N min" from the previous
+        # arm, which misleads the user into thinking we're idle. Flip to
+        # "Updating now…" — _scan_done resets it to the next idle gap.
+        if (getattr(self, '_recurring_armed', False)
+                and hasattr(self, 'lbl_schedule_status')):
+            self.lbl_schedule_status.setText(_t(
+                f"Updating now… / 更新中…"))
+
+        # Logo ON when scan starts: the scan IS doing AI work, so the logo
+        # should reflect that. Without this, a previously-tripped ceiling
+        # could leave the logo stuck OFF while the scan ran AI for hours
+        # — visually disconnected from what's actually happening. Restore
+        # from the stored _prev modes if present, otherwise set sensible
+        # defaults (when_empty = run AI only on files missing the data).
+        try:
+            _changed_logo = False
+            if self.app.config.get("face_inspect_mode", "when_empty") == "never":
+                _prev = self.app.config.pop("_face_inspect_prev", "when_empty")
+                self.app.config["face_inspect_mode"] = _prev
+                _changed_logo = True
+            if self.app.config.get("clip_inspect_mode", "never") == "never":
+                _prev = self.app.config.pop("_clip_inspect_prev", "when_empty")
+                self.app.config["clip_inspect_mode"] = _prev
+                _changed_logo = True
+            if _changed_logo:
+                cfg.save_config(self.app.config,
+                                getattr(self.app, "current_project", None))
+                if hasattr(self.app, "_refresh_logo_pixmap"):
+                    self.app._refresh_logo_pixmap()
+        except Exception:
+            pass
 
         _auto_rename = attrs_mod.load_filename_config(getattr(self.app, "current_project", None)).get("auto_rename", False)
-        self.lbl_scan.setText("Starting scan — CLIP + face + metadata…")
+        self.lbl_scan.setText(_t(
+            "Starting scan — CLIP + face + metadata… / "
+            "スキャン開始 — CLIP+顔+メタデータ…"))
 
         def _worker():
             try:
@@ -445,10 +520,40 @@ class _DbMixin:
 
                 self._scan_queue.put(("total", len(to_add)))
                 added = 0
+                # Batch-flush buffers for the new entries. Per-file
+                # `torch.cat([data["embeddings"], emb.unsqueeze(0)])`
+                # used to reallocate the full embeddings tensor every
+                # iteration; for 10K+ files that's a lot of churn. Now
+                # we accumulate into Python lists and flush at every
+                # checkpoint (~100 files) — one big stack+cat per batch.
+                _pending_paths = []
+                _pending_embs  = []
+
+                def _flush_pending():
+                    nonlocal _pending_paths, _pending_embs
+                    if _pending_embs:
+                        data["paths"].extend(_pending_paths)
+                        data["embeddings"] = torch.cat(
+                            [data["embeddings"], torch.stack(_pending_embs)])
+                        _pending_paths = []
+                        _pending_embs = []
 
                 def _save_checkpoint():
+                    _flush_pending()
                     torch.save(data, os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt"))
                     attrs_mod.save(name, attrs_data)
+
+                # Per-file RSS spike tracker. If a single file pushes the
+                # main process RSS up by more than this threshold, dump
+                # the file path + before/after to stderr so the user can
+                # find the offender. Quiet for normal-size files.
+                _SPIKE_THRESHOLD_MB = 500
+                try:
+                    import psutil as _psutil_log
+                    _last_rss = _psutil_log.Process().memory_info().rss / (1024 * 1024)
+                except Exception:
+                    _psutil_log = None
+                    _last_rss = 0
 
                 for i, p in enumerate(to_add):
                     if self._stop_scan:
@@ -480,32 +585,139 @@ class _DbMixin:
                     if _locked:
                         continue
 
-                    # ── Step 2: CLIP auto-detect attributes (always-on for FIELD_DEFS fields) ─────
+                    # ── Step 2: CLIP auto-detect attributes ───────────────────
+                    # Names match `spec["field"]` in CLIP_AUTO_DETECT (long
+                    # storage keys). The previous short-letter set
+                    # ({"hc","fa","sk",…}) silently mismatched every spec
+                    # entry because auto_detect_clip_attrs filters by long
+                    # name — so Update never actually wrote CLIP fields,
+                    # they only got values from preview's _on_inspect.
+                    #
+                    # `animal` is special: force re-detected each scan and
+                    # CLEARED from stored attrs when detection doesn't
+                    # qualify (winner failed margin_over_zero=0.10). Without
+                    # the clear, the text box keeps showing a stale a2
+                    # Hamster / ff Kraken from a past detection while
+                    # CLIP_A debug shows a different live winner — that's
+                    # the data-connection disconnect the user reported.
+                    # Now stored animal always reflects the most recent
+                    # detection's outcome (winner or empty), in sync with
+                    # what CLIP currently thinks.
+                    # AI OFF respect: when the user has both inspect modes
+                    # set to "never", Update SHOULD NOT run CLIP-attr or
+                    # face detection. Only Step 1 (CLIP embed for search
+                    # index) and Step 4 (metadata) + Step 5 (rename) run.
+                    # User: "it is off from beginning and i just drop a
+                    # file ... then updated" — meaning Update was still
+                    # detecting against their AI-off wish.
+                    _cm_upd = self.app.config.get("clip_inspect_mode", "never")
+                    _fm_upd = self.app.config.get("face_inspect_mode", "never")
+                    _ai_off_upd = (_cm_upd == "never" and _fm_upd == "never")
                     self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "attrs")))
-                    try:
-                        _clip_fields = {"hc", "fa", "sk", "e", "b", "wh", "pm", "cs", "bg", "cl"}
-                        clip_updates = attrs_mod.auto_detect_clip_attrs(
-                            emb, attrs_data.get(p, {}), allowed_fields=_clip_fields)
-                        if clip_updates:
-                            attrs_data.setdefault(p, {}).update(clip_updates)
-                    except Exception:
-                        pass
+                    _step2_animal_decided = False
+                    _step2_animal_value   = None
+                    clip_updates          = None
+                    # Gate Step 2 on clip_inspect_mode specifically — not
+                    # on the combined _ai_off_upd. "Face only" means
+                    # clip=never, face=on; Step 2 (CLIP attr-detect)
+                    # must skip even though face is on.
+                    if _cm_upd != "never":
+                        try:
+                            _clip_fields = {"hair", "face_angle", "skin", "eyes",
+                                            "bust", "waist_hip", "posture_motion",
+                                            "camera_shot", "background", "clothing",
+                                            "animal", "expression"}
+                            _entry_for_detect = dict(attrs_data.get(p, {}))
+                            _curr_animal = _entry_for_detect.get("animal", "")
+                            _animal_force_none = bool(
+                                self.app.config.get("animal_force_none", False))
+                            if _animal_force_none and not _curr_animal:
+                                attrs_data.setdefault(p, {})["animal"] = "00"
+                                _entry_for_detect["animal"] = "00"
+                                _curr_animal = "00"
+                            # All CLIP fields preserve any non-empty stored
+                            # value — CLIP only fills fields that are empty.
+                            _clip_fields_this_file = set()
+                            for _f in _clip_fields:
+                                if not _entry_for_detect.get(_f, ""):
+                                    _clip_fields_this_file.add(_f)
+                            _animal_user_locked = bool(_curr_animal)
+                            # Settings → Clothing → "Skip CLIP for Clothing".
+                            if self.app.config.get("clothing_skip_clip", False):
+                                _clip_fields_this_file.discard("clothing")
+                            clip_updates = attrs_mod.auto_detect_clip_attrs(
+                                emb, _entry_for_detect, allowed_fields=_clip_fields_this_file)
+                            if clip_updates:
+                                attrs_data.setdefault(p, {}).update(clip_updates)
+                            # Animal authority — re-apply after Step 4.
+                            _step2_animal_decided = True
+                            if _animal_user_locked:
+                                _step2_animal_value = _curr_animal
+                            else:
+                                _step2_animal_value = (clip_updates or {}).get("animal")
+                                if _step2_animal_value is None:
+                                    _existing_entry = attrs_data.get(p)
+                                    if isinstance(_existing_entry, dict):
+                                        _existing_entry.pop("animal", None)
+                        except Exception:
+                            _step2_animal_decided = False
+                            _step2_animal_value   = None
 
                     # ── Step 3: Face ──────────────────────────────────────────
-                    self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "face")))
-                    pid = None
-                    try:
-                        pid = attrs_mod.detect_or_assign_person_id(p, name, raise_errors=True)
-                    except Exception as fe:
-                        face_errors.append(f"{fname}: {fe}")
-                        self._scan_queue.put(("face_warn", f"{fname}: {fe}"))
-                    if pid:
-                        faces_found += 1
-                        attrs_data.setdefault(p, {})["person_id"] = pid
+                    # Filename-encoded P-codes are the user's explicit
+                    # label and MUST win over the face detector's guess.
+                    # User reported "Sophie/0Base/face/00-20 was P001
+                    # everywhere after FanView mass-rename; Update changed
+                    # them all to P031" — face_recognition misidentified
+                    # the person and step 5's rename then rewrote the
+                    # filename to match. Skip auto-assign when the
+                    # filename already encodes a person.
+                    _stem_for_pid = os.path.splitext(os.path.basename(p))[0]
+                    _parsed_pid = attrs_mod.parse_coded_filename(_stem_for_pid)
+                    _filename_persons = (_parsed_pid.get("persons", [])
+                                         if _parsed_pid else [])
+                    if _filename_persons:
+                        # User-labeled file. Sync attrs to the filename so
+                        # the rename step is a no-op. Detection is skipped
+                        # entirely — running it on user-labeled files
+                        # would also pollute faces DB enrichment with a
+                        # wrong-person association.
+                        attrs_data.setdefault(p, {})["person_id"] = _filename_persons[0]
+                    elif _fm_upd == "never":
+                        # face_inspect_mode is "never" — skip face
+                        # detection. Independent of clip_inspect_mode so
+                        # "CLIP only" mode runs CLIP attrs but not face.
+                        pass
+                    else:
+                        self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "face")))
+                        pid = None
+                        try:
+                            pid = attrs_mod.detect_or_assign_person_id(p, name, raise_errors=True)
+                        except Exception as fe:
+                            face_errors.append(f"{fname}: {fe}")
+                            self._scan_queue.put(("face_warn", f"{fname}: {fe}"))
+                        if pid:
+                            faces_found += 1
+                            attrs_data.setdefault(p, {})["person_id"] = pid
 
                     # ── Step 4: Metadata ──────────────────────────────────────
                     self._scan_queue.put(("progress", (i + 1, len(to_add), fname, "meta")))
                     attrs_data = attrs_mod.auto_set_all(attrs_data, p, name)
+
+                    # CLIP decision wins over filename-extract rules for
+                    # animal. auto_set_all just ran user-defined filename
+                    # rules (e.g. extract A-code from stem) which would
+                    # overwrite Step 2's decision from the OLD filename.
+                    # Restore Step 2's intended value (either the new CLIP
+                    # winner, or "no animal" if margin failed) so the
+                    # auto-rename below builds the filename to match.
+                    if _step2_animal_decided:
+                        _e = attrs_data.get(p)
+                        if isinstance(_e, dict):
+                            if _step2_animal_value is None:
+                                _e.pop("animal", None)
+                            else:
+                                _e["animal"] = _step2_animal_value
 
                     # ── Step 5: Rename ────────────────────────────────────────
                     if _auto_rename:
@@ -532,10 +744,79 @@ class _DbMixin:
                         except Exception:
                             pass
 
-                    # ── Commit to DB ──────────────────────────────────────────
-                    data["paths"].append(p)
-                    data["embeddings"] = torch.cat([data["embeddings"], emb.unsqueeze(0)])
+                    # ── Commit to DB (batched — flushed at checkpoint) ────────
+                    _pending_paths.append(p)
+                    _pending_embs.append(emb)
                     added += 1
+
+                    # RSS spike tracker — log the file path if this one's
+                    # work pushed RSS up by > _SPIKE_THRESHOLD_MB. Helps
+                    # identify pathological files (huge videos, weird
+                    # codecs, faces that confuse dlib, etc.).
+                    if _psutil_log is not None:
+                        try:
+                            _now_rss = _psutil_log.Process().memory_info().rss / (1024 * 1024)
+                            _delta = _now_rss - _last_rss
+                            if _delta > _SPIKE_THRESHOLD_MB:
+                                import sys as _sys
+                                print(f"[RSS SPIKE] +{_delta:.0f} MB "
+                                      f"({_last_rss:.0f} -> {_now_rss:.0f}) "
+                                      f"on {p}",
+                                      file=_sys.stderr, flush=True)
+                            _last_rss = _now_rss
+                        except Exception:
+                            pass
+
+                    # Bound memory growth from CLIP/MediaPipe/cv2/dlib
+                    # accumulators every 50 files. gc.collect() trims Python
+                    # cycles; empty_cache() returns VRAM to the driver so
+                    # the next forward pass doesn't grow the cache further.
+                    # Gate on `i` so locked/failed files (which still run
+                    # CLIP) also get cleaned up.
+                    if (i + 1) % 50 == 0:
+                        import gc as _gc
+                        _gc.collect()
+                        try:
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+
+                    # Pause-on-ceiling: same RSS cap the AI inspect logo
+                    # uses (clip_inspect_rss_limit_mb, default 1500). When
+                    # RSS exceeds it, flush + save, signal the main thread
+                    # to flip the AI logo OFF, then sleep-poll until RSS
+                    # drops to 80% of the ceiling. Stop button breaks out.
+                    # Gated on `i` (loop index) not `added` — locked/failed
+                    # files don't increment `added` but still run CLIP and
+                    # grow RSS, so they must not starve the ceiling check.
+                    if (i + 1) % 10 == 0:
+                        try:
+                            import psutil as _psutil
+                            _env = os.environ.get("AISEARCH_INSPECT_RSS_LIMIT_MB")
+                            _ceil = float(_env) if _env else float(
+                                self.app.config.get("clip_inspect_rss_limit_mb", 1500))
+                            _rss = _psutil.Process().memory_info().rss / (1024 * 1024)
+                            if _rss > _ceil:
+                                _flush_pending()
+                                _save_checkpoint()
+                                self._scan_queue.put(("pause_for_memory",
+                                                      (_rss, _ceil)))
+                                _resume = _ceil * 0.8
+                                import gc as _gc2, time as _time
+                                while not self._stop_scan:
+                                    _gc2.collect()
+                                    try:
+                                        torch.cuda.empty_cache()
+                                    except Exception:
+                                        pass
+                                    _rss = _psutil.Process().memory_info().rss / (1024 * 1024)
+                                    if _rss <= _resume:
+                                        break
+                                    _time.sleep(3)
+                                self._scan_queue.put(("resume_from_memory",
+                                                      (_rss, _ceil)))
+                        except Exception:
+                            pass
 
                     if added % 100 == 0:
                         _save_checkpoint()
@@ -602,7 +883,7 @@ class _DbMixin:
                     self.progress_label.setText(self.progress_label.text() + "  [saved]")
                     sb.showMessage(sb.currentMessage() + "  [saved]")
                 elif msg == "uptodate":
-                    self._active_scan_btn.setText("Up to date")
+                    self._active_scan_btn.setText(_t("Up to date / 最新"))
                     sb.clearMessage()
                     self.show(); self.raise_()
                     QMessageBox.information(self, "Done", "Already up to date.")
@@ -610,6 +891,61 @@ class _DbMixin:
                 elif msg == "face_warn":
                     # Face detection error for one file — show briefly, keep scanning
                     self.lbl_scan.setText(f"Face err: {payload[:80]}")
+                elif msg == "pause_for_memory":
+                    # RSS crossed the AI-inspect ceiling. Mirror the preview's
+                    # behavior: flip both inspect modes to "never" so the AI
+                    # logo flips OFF — same one consistent signal whether the
+                    # ceiling was tripped by preview or scan. Stored prev so
+                    # the user can click the logo to restore later.
+                    _rss_mb, _ceil_mb = payload
+                    try:
+                        _changed = False
+                        if self.app.config.get("face_inspect_mode", "when_empty") != "never":
+                            self.app.config["_face_inspect_prev"] = self.app.config.get(
+                                "face_inspect_mode", "when_empty")
+                            self.app.config["face_inspect_mode"] = "never"
+                            _changed = True
+                        if self.app.config.get("clip_inspect_mode", "never") != "never":
+                            self.app.config["_clip_inspect_prev"] = self.app.config.get(
+                                "clip_inspect_mode")
+                            self.app.config["clip_inspect_mode"] = "never"
+                            _changed = True
+                        if _changed:
+                            cfg.save_config(self.app.config,
+                                            getattr(self.app, "current_project", None))
+                            if hasattr(self.app, "_refresh_logo_pixmap"):
+                                self.app._refresh_logo_pixmap()
+                    except Exception:
+                        pass
+                    self.lbl_scan.setText(
+                        f"⚠ Paused — RSS {int(_rss_mb)} MB > "
+                        f"ceiling {int(_ceil_mb)} MB. Waiting for memory…")
+                    sb.showMessage(self.lbl_scan.text())
+                elif msg == "resume_from_memory":
+                    _rss_mb, _ceil_mb = payload
+                    self.lbl_scan.setText(
+                        f"✓ Resumed — RSS dropped to {int(_rss_mb)} MB.")
+                    sb.showMessage(self.lbl_scan.text())
+                    # Logo back ON — scan is doing AI work again, so the
+                    # OFF state would lie. Restores the modes that were
+                    # active before the pause flipped them OFF.
+                    try:
+                        _changed_logo = False
+                        if self.app.config.get("face_inspect_mode", "when_empty") == "never":
+                            _prev = self.app.config.pop("_face_inspect_prev", "when_empty")
+                            self.app.config["face_inspect_mode"] = _prev
+                            _changed_logo = True
+                        if self.app.config.get("clip_inspect_mode", "never") == "never":
+                            _prev = self.app.config.pop("_clip_inspect_prev", "when_empty")
+                            self.app.config["clip_inspect_mode"] = _prev
+                            _changed_logo = True
+                        if _changed_logo:
+                            cfg.save_config(self.app.config,
+                                            getattr(self.app, "current_project", None))
+                            if hasattr(self.app, "_refresh_logo_pixmap"):
+                                self.app._refresh_logo_pixmap()
+                    except Exception:
+                        pass
                 elif msg == "stopped":
                     removed, added, failed, attrs_data, faces_found, face_errors = payload
                     self.app.attrs_data = attrs_mod.load(name)
@@ -622,9 +958,9 @@ class _DbMixin:
                     # everything as before.
                     _silent = getattr(self.app, '_scan_paused_by_watcher', False)
                     if _silent:
-                        self._active_scan_btn.setText("Paused…")
+                        self._active_scan_btn.setText(_t("Paused… / 一時停止中…"))
                     else:
-                        self._active_scan_btn.setText("Stopped")
+                        self._active_scan_btn.setText(_t("Stopped / 停止済"))
                     sb.clearMessage()
                     if not _silent:
                         self.show(); self.raise_()
@@ -643,15 +979,32 @@ class _DbMixin:
                     self.app.set_project(name)
                     face_info = f"  |  Faces: {faces_found}" if faces_found or face_errors else ""
                     err_info  = f"  |  Face errors: {len(face_errors)}" if face_errors else ""
-                    self._active_scan_btn.setText("Done")
-                    self.lbl_scan.setText(f"Done — added {added}, removed {removed}{face_info}{err_info}")
+                    # Surface CLIP/face inspect mode right after Update so
+                    # the user can see whether AI is currently on or off
+                    # without hunting through Settings. Both modes "never"
+                    # = AI is fully off and Update didn't touch CLIP-detect
+                    # values; anything else = AI was active.
+                    _cm = self.app.config.get("clip_inspect_mode", "never")
+                    _fm = self.app.config.get("face_inspect_mode", "never")
+                    if _cm == "never" and _fm == "never":
+                        _ai_state = "AI INSPECT: OFF"
+                    elif _cm == "never":
+                        _ai_state = "AI INSPECT: face only"
+                    elif _fm == "never":
+                        _ai_state = "AI INSPECT: clip only"
+                    else:
+                        _ai_state = "AI INSPECT: ON"
+                    self._active_scan_btn.setText(_t("Done / 完了"))
+                    self.lbl_scan.setText(
+                        f"Done — added {added}, removed {removed}{face_info}{err_info}  |  {_ai_state}")
                     QTimer.singleShot(8000, lambda: self.lbl_scan.setText(""))
                     sb.clearMessage()
+                    sb.showMessage(_ai_state, 6000)
                     if failed: self._show_failed_files(failed)
                     if face_errors: self._show_face_errors(face_errors)
                     self._scan_done(); return
                 elif msg == "error":
-                    self._active_scan_btn.setText("Error")
+                    self._active_scan_btn.setText(_t("Error / エラー"))
                     sb.clearMessage()
                     self.show(); self.raise_()
                     QMessageBox.critical(self, "Scan Error", payload)
@@ -668,7 +1021,7 @@ class _DbMixin:
         self._stop_scan_all = True
         self._stop_rename_only = True
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setText("Stopping…")
+        self.btn_stop.setText(_t("Stopping… / 停止中…"))
         # Fallback: if the worker thread doesn't respond within 10 s, reset UI anyway
         self._stop_fallback_timer = QTimer(self)
         self._stop_fallback_timer.setSingleShot(True)
@@ -692,6 +1045,12 @@ class _DbMixin:
             self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
             self.lbl_schedule_status.setText("")
             return
+        # Cancel any recurring schedule — one schedule active at a time.
+        recurring = getattr(self, '_recurring_timer', None)
+        if recurring is not None and recurring.isActive():
+            recurring.stop()
+            self._recurring_timer = None
+            self.btn_recurring.setText(_t("🔁 Cycle / 🔁 周期"))
         # Time-only picker — combine the chosen time with today's date,
         # roll over to tomorrow if the time already passed.
         now = QDateTime.currentDateTime()
@@ -731,6 +1090,85 @@ class _DbMixin:
         # doesn't block on the confirmation dialog.
         self.execute_generate(reset=False, auto_apply_moves=True)
 
+    def _toggle_recurring_update(self):
+        """Arm/disarm a recurring Update. The N-minute gap is measured
+        AFTER the previous scan finishes, not wall-clock — so a long
+        scan doesn't compress the next idle window. Mutually exclusive
+        with the one-shot _toggle_schedule_update; arming one cancels
+        the other. Interval persists in config (update_every_min)."""
+        if getattr(self, '_recurring_armed', False):
+            # Currently armed → user clicked Stop
+            existing = getattr(self, '_recurring_timer', None)
+            if existing is not None and existing.isActive():
+                existing.stop()
+            self._recurring_timer = None
+            self._recurring_armed = False
+            try:
+                self.app.config["update_cycle_armed"] = False
+                cfg.save_config(self.app.config,
+                                getattr(self.app, "current_project", None))
+            except Exception:
+                pass
+            self.btn_recurring.setText(_t("🔁 Cycle / 🔁 周期"))
+            self.lbl_schedule_status.setText("")
+            return
+        # Cancel any one-shot schedule — only one active at a time.
+        one_shot = getattr(self, '_schedule_timer', None)
+        if one_shot is not None and one_shot.isActive():
+            one_shot.stop()
+            self._schedule_timer = None
+            self.btn_schedule.setText(_t("⏰ Schedule / ⏰ 予約"))
+        mins = int(self.sp_recurring.value())
+        try:
+            self.app.config["update_every_min"] = mins
+            self.app.config["update_cycle_armed"] = True
+            cfg.save_config(self.app.config,
+                            getattr(self.app, "current_project", None))
+        except Exception:
+            pass
+        self._recurring_armed = True
+        self._arm_recurring_timer(mins)
+        self.btn_recurring.setText(_t("⏹ Stop Cycle / ⏹ 周期停止"))
+        _target = QDateTime.currentDateTime().addSecs(mins * 60)
+        _ts = _target.toString("HH:mm")
+        self.lbl_schedule_status.setText(_t(
+            f"Next update in {mins} min (at {_ts}) / 次回まで {mins}分（{_ts}）"))
+
+    def _arm_recurring_timer(self, mins):
+        """Start (or restart) the single-shot timer that will fire the
+        next recurring Update. Replaces any previously-armed timer so
+        _scan_done can call this on every finish without stacking."""
+        existing = getattr(self, '_recurring_timer', None)
+        if existing is not None and existing.isActive():
+            existing.stop()
+        t = QTimer(self)
+        t.setSingleShot(True)
+        t.timeout.connect(self._fire_recurring_update)
+        t.start(int(mins) * 60 * 1000)
+        self._recurring_timer = t
+
+    def _fire_recurring_update(self):
+        """Recurring tick. If a scan is somehow already running (e.g. a
+        manual scan started during the idle window), wait — _scan_done
+        will re-arm us when that scan finishes. Otherwise kick off
+        execute_generate; _scan_done re-arms after it completes."""
+        if not getattr(self, '_recurring_armed', False):
+            return
+        mins = int(self.sp_recurring.value()) if hasattr(self, "sp_recurring") else 0
+        if (getattr(self, "_is_scanning", False)
+                or getattr(self, "_is_metadata_scanning", False)):
+            self.lbl_schedule_status.setText(_t(
+                f"Waiting — scan in progress / 待機中 — 実行中"))
+            return
+        # Reflect the actual state — "Next update in 30 min" while the
+        # update itself was running was misleading. _scan_done flips it
+        # back to "Next update in N min" once the scan finishes.
+        self.lbl_schedule_status.setText(_t(
+            f"Updating now… / 更新中…"))
+        # Unattended — same auto_apply_moves as the one-shot fire.
+        # _scan_done will arm the next tick once this scan finishes.
+        self.execute_generate(reset=False, auto_apply_moves=True)
+
     def _scan_done(self):
         _fb = getattr(self, '_stop_fallback_timer', None)
         if _fb and _fb.isActive():
@@ -740,15 +1178,15 @@ class _DbMixin:
             self._poll_timer = None
         self._stop_scan = False
         # Restore each button to its original label
-        self.btn_generate.setText("Scan ALL")
-        self.btn_scan_new.setText("Update")
+        self.btn_generate.setText(_t("Scan ALL / 全スキャン"))
+        self.btn_scan_new.setText(_t("Update / 更新"))
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setText("Stop")
+        self.btn_stop.setText(_t("Stop / 停止"))
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
         self._last_eta_str = ""
-        self.progress_label.setText("Status: Ready")
+        self.progress_label.setText(_t("Status: Ready / 状態：準備完了"))
         self._is_metadata_scanning = False
         self._is_scanning = False
         self._toggle_ui(False)
@@ -756,6 +1194,17 @@ class _DbMixin:
         self._update_generate_btn()
         # Pick up any files that arrived in watch dirs during the scan
         QTimer.singleShot(500, lambda: getattr(self.app, '_scan_new_files', lambda: None)())
+        # Re-arm the recurring Update timer for the next idle gap — measured
+        # from now (scan finish), not from the previous tick. This is what
+        # gives "every 30 min" its "30 min of idle between scans" meaning
+        # instead of "ticks at fixed wall-clock intervals".
+        if getattr(self, '_recurring_armed', False) and hasattr(self, "sp_recurring"):
+            mins = int(self.sp_recurring.value())
+            self._arm_recurring_timer(mins)
+            _target = QDateTime.currentDateTime().addSecs(mins * 60)
+            _ts = _target.toString("HH:mm")
+            self.lbl_schedule_status.setText(_t(
+                f"Next update in {mins} min (at {_ts}) / 次回まで {mins}分（{_ts}）"))
 
     def _update_generate_btn(self):
         has_dirs = self.dir_listbox.rowCount() > 0
@@ -1022,7 +1471,7 @@ class _DbMixin:
             QTimer.singleShot(4000, lambda: self.lbl_scan.setText(""))
         attrs_mod.save(self.app.current_project, live_attrs)
         self.app.attrs_data = live_attrs
-        self.btn_stop.setText("Stop")
+        self.btn_stop.setText(_t("Stop / 停止"))
         self.btn_stop_scan.setEnabled(False)
 
     def _embed_aitan_all(self):
@@ -1045,7 +1494,7 @@ class _DbMixin:
         self._active_scan_btn = self.btn_scan_new
         self._toggle_ui(True)
         self.btn_stop.setEnabled(True)
-        self.btn_stop.setText("Stop")
+        self.btn_stop.setText(_t("Stop / 停止"))
         self._active_scan_btn.setText("Embedding…")
         self.btn_scan_new.setEnabled(False)
         self.lbl_scan.setText(f"Embedding AItan{{}} in {len(all_entries)} files…")
@@ -1392,7 +1841,7 @@ class _DbMixin:
         self._active_scan_btn = self.btn_scan_new if new_only else self.btn_generate
         self._toggle_ui(True)
         self.btn_stop.setEnabled(True)
-        self.btn_stop.setText("Stop")
+        self.btn_stop.setText(_t("Stop / 停止"))
         self._active_scan_btn.setText("Renaming…")
         self.btn_scan_new.setEnabled(False)
         label = "new files" if new_only else "files"

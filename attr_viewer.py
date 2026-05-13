@@ -3217,7 +3217,13 @@ class AttrViewerWidget(QWidget):
     def refresh_language(self):
         """Re-populate all combo labels and tile titles after a language change."""
         for w in self.widgets:
-            w.setTitle(_lang_label(w._label_raw))
+            # AnchorBox is a bare QWidget (no QGroupBox title) — skip
+            # the setTitle call instead of crashing the language switch.
+            if hasattr(w, "setTitle") and hasattr(w, "_label_raw"):
+                try:
+                    w.setTitle(_lang_label(w._label_raw))
+                except Exception:
+                    pass
             if getattr(w, "_cb", None):
                 w._fill_combo(preserve=True)
             # Taglist/boolean/radio buttons keep raw label on btn._lbl_raw
