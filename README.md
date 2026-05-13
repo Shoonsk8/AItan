@@ -31,8 +31,8 @@ AI-powered desktop app for searching, tagging, and organising image and video co
 ### Step 1 — Clone the repo
 
 ```bash
-git clone https://github.com/Shoonsk8/AIsearch.git
-cd AIsearch
+git clone https://github.com/Shoonsk8/AItan.git
+cd AItan
 ```
 
 ### Step 2 — Create a virtual environment
