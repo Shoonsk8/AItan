@@ -623,6 +623,10 @@
     "threshold": 0.16,
     "options": [
       [
+        "0",
+        "a person with closed eyes eyelids shut down no iris or pupil visible sleeping or blinking face"
+      ],
+      [
         "1",
         "a person with chocolate brown eyes warm dark iris"
       ],
