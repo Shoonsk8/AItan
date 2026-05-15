@@ -29,6 +29,7 @@ Facial Expression Library/
 
 # --- Runtime / env ---
 __pycache__/
+.venv/
 venv/
 *.pyc
 *.pyo

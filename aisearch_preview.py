@@ -2472,14 +2472,30 @@ class PreviewWindow(QWidget):
                                 Q_ARG(str, ""))
                             return
                         _changed = False
+                        # Filename-authority: pre-populate the entry copy
+                        # with every coded value the filename encodes
+                        # before CLIP runs, so auto_detect_clip_attrs's
+                        # per-position skip naturally protects those
+                        # fields from overwrite. Same rule as the scan.
+                        _entry_for_clip = dict(_entry)
+                        attrs_mod.populate_entry_from_filename(
+                            _entry_for_clip, _path)
                         _updates = attrs_mod.auto_detect_clip_attrs(
-                            _emb, _entry, allowed_fields=_clip_fields,
+                            _emb, _entry_for_clip, allowed_fields=_clip_fields,
                             project=getattr(app, "current_project", None))
                         if _updates:
                             # Check live entry — user may have manually set a field
-                            # while this thread was running; don't overwrite their input
+                            # while this thread was running; don't overwrite their input.
+                            # Also skip any field that's encoded in the
+                            # filename (defensive — filename should always
+                            # win, even though the pre-populate above
+                            # should have already prevented CLIP from
+                            # returning it).
                             _live = app.attrs_data.setdefault(_path, {})
+                            _fn_locked = attrs_mod.filename_encoded_fields(_path)
                             for _k, _v in _updates.items():
+                                if _k in _fn_locked:
+                                    continue
                                 if not _live.get(_k):
                                     _live[_k] = _v
                                     _changed = True
@@ -2512,8 +2528,17 @@ class PreviewWindow(QWidget):
                         # Re-check at WRITE time (not just thread-start) because
                         # detect_or_assign_person_id is slow enough for the user
                         # to type a correction while we're running.
+                        # Filename-authority: if the filename encodes a P-code,
+                        # take that as the truth and skip face detection.
+                        _fn_pid = attrs_mod.filename_encoded_fields(
+                            _path).get("person_id", "")
                         _stored = (app.attrs_data.get(_path) or {}).get("person_id", "")
-                        if not _stored:
+                        if _fn_pid and not _stored:
+                            _live_entry = app.attrs_data.setdefault(_path, {})
+                            if not _live_entry.get("person_id"):
+                                _live_entry["person_id"] = _fn_pid
+                                _changed = True
+                        elif not _stored and not _fn_pid:
                             _pid = attrs_mod.detect_or_assign_person_id(_path, app.current_project)
                             if _pid is None:
                                 _pid = "000"
@@ -2829,17 +2854,46 @@ class PreviewWindow(QWidget):
             return
         fid = self._person_id_combo.itemData(idx)
         if not fid:
+            # Editable combo: the user TYPED a custom ID that isn't a
+            # known person, so the inserted item carries no itemData.
+            # Fall back to the typed text — without this the combo
+            # shows the new number but person_id silently keeps the old
+            # value (user typed 037, file stayed 046).
+            _txt = self._person_id_combo.currentText().strip()
+            fid = _norm_pid(_txt.split()[0]) if _txt else ""
+        if not fid:
             return
+        app = self.handler.app
+        # Capture the file's CURRENT person before we overwrite it —
+        # if this was the old person's only file, it's now empty and
+        # should be removed (its base would otherwise point at a file
+        # that has moved on).
+        _old_pid = ""
+        if self._attr_path:
+            _old_pid = (app.attrs_data.get(self._attr_path) or {}).get(
+                "person_id", "")
         # Push the ID into the P001 text field so Bake and _save_attrs pick it up
         if self._p_edits:
             self._p_edits[0].blockSignals(True)
             self._p_edits[0].setText(fid)
             self._p_edits[0].blockSignals(False)
-        registry = attrs_mod.load_person_registry(self.handler.app.current_project)
+        registry = attrs_mod.load_person_registry(app.current_project)
         name = registry.get(fid, "")
         self._person_name_edit.setText(name)
         # Save immediately so person_id persists across restarts
         self._save_attrs()
+        # Old person now orphaned? Remove it so a dead base doesn't linger.
+        if _old_pid and _old_pid != fid:
+            try:
+                if attrs_mod.remove_person_if_orphaned(
+                        app.current_project, _old_pid, app.attrs_data):
+                    if hasattr(app, "_refresh_persons_tab_if_open"):
+                        app._refresh_persons_tab_if_open()
+                    if hasattr(app, "_refresh_row_rim_for_path") \
+                            and self._attr_path:
+                        app._refresh_row_rim_for_path(self._attr_path)
+            except Exception:
+                pass
         self._update_bake_btn("pending")
 
     def _on_match_person(self):
@@ -4027,6 +4081,29 @@ class PreviewWindow(QWidget):
         app = self.handler.app
         if self._attr_path != path:
             return  # user navigated away
+        # Filename-encoded P-code is the user's explicit label and
+        # MUST win over face detection's guess — same rule as Step 3
+        # in execute_generate. User: "I renamed all files to P013,
+        # one became P031" — _auto_apply_face was overriding the
+        # filename when its detector hit the confidence floor + gap.
+        # Skip the override entirely when the filename already encodes
+        # a person. Face DB enrichment still happens via the regular
+        # detect path; we just don't touch person_id.
+        try:
+            _stem_pid = os.path.splitext(os.path.basename(path))[0]
+            _parsed_pid_pv = attrs_mod.parse_coded_filename(_stem_pid)
+            _filename_persons_pv = (_parsed_pid_pv.get("persons", [])
+                                    if _parsed_pid_pv else [])
+        except Exception:
+            _filename_persons_pv = []
+        if _filename_persons_pv:
+            try:
+                from aisearch_debug import dbg as _dbg_fp
+                _dbg_fp(f"_auto_apply_face SKIP — filename encodes "
+                        f"P={_filename_persons_pv[0]!r}, leaving alone")
+            except Exception:
+                pass
+            return
         entry = attrs_mod.get(app.attrs_data, path)
         old_pid = (entry.get("person_id") or "").strip().lower()
         if old_pid == pid.strip().lower():
@@ -5735,10 +5812,19 @@ class PreviewHandler:
                 )
                 if on_screen:
                     self.window.setGeometry(sx, sy, sw, sh)
+        # show() is called on EVERY navigation (handle_preview fires on
+        # row-selection change). Must NOT activateWindow() here — that
+        # makes the preview window the active window, so the main
+        # window stops receiving key events and arrow-key navigation
+        # silently dies. raise_() lifts it in the Z-order without
+        # stealing activation; showNormal() un-minimises it.
         if not self.window.isVisible():
             self.window.show()
+            self.window.raise_()
         else:
-            self.window.raise_()  # bring to front without stealing focus from main window
+            if self.window.isMinimized():
+                self.window.showNormal()
+            self.window.raise_()
 
         # Apply current mode color to the bar
         _mode_colors = {"search": "#2a8ad4", "dup": "#9b6dff", "browse": "#3a8a3a"}

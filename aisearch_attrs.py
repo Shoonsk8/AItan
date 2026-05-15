@@ -1140,6 +1140,62 @@ def parse_coded_filename(stem):
         _PCF_CACHE.clear()
     return result
 
+
+def filename_encoded_fields(path: str) -> dict:
+    """Return a dict of {long_storage_key: value} for every coded
+    field encoded in the filename. Used to mark fields as
+    user-authoritative before AI auto-detect runs — fields present in
+    the filename must never be overwritten by CLIP / face guesses.
+
+    Empty dict if path has no coded portion. person_id is included
+    under the key "person_id" (from the first P-code in `persons`)."""
+    out = {}
+    if not path:
+        return out
+    try:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        parts = parse_coded_filename(stem)
+    except Exception:
+        parts = None
+    if not parts:
+        return out
+    # parse_coded_filename returns short letter keys (lowercase) for
+    # CODED_FIELDS values, plus "persons"/"persons_with"/"j".
+    persons = parts.get("persons", []) or []
+    if persons:
+        out["person_id"] = persons[0]
+    pw = parts.get("persons_with", []) or []
+    if pw:
+        out["persons_with"] = pw
+    for cf in CODED_FIELDS:
+        letter = cf[0]
+        digits = cf[2]
+        storage = cf[3] if len(cf) >= 4 else letter.lower()
+        if digits == 0:
+            continue   # boolean flags handled separately
+        val = parts.get(letter.lower(), "")
+        if val:
+            out[storage] = val
+    return out
+
+
+def populate_entry_from_filename(entry: dict, path: str) -> dict:
+    """Pre-populate `entry` with filename-encoded coded-field values
+    so the existing per-position skip in auto_detect_clip_attrs
+    naturally protects those fields from CLIP overwrite. The user's
+    filename is authoritative; AI never writes through a value the
+    user explicitly encoded. Mutates and returns entry."""
+    if not isinstance(entry, dict):
+        return entry
+    enc = filename_encoded_fields(path)
+    for k, v in enc.items():
+        # Don't overwrite a value already in entry (might be more
+        # specific) — only fill empty slots.
+        if not entry.get(k):
+            entry[k] = v
+    return entry
+
+
 def build_coded_filename(parts, date_first=False, field_order=None):
     """Build a coded filename stem from a dict of parts.
     Format: P{pid}[P{pid2}…][PW{pid}…]{fields in CODED_FIELDS order}.
@@ -1229,7 +1285,27 @@ def save_faces_db(project, db):
     with open(p, "w", encoding="utf-8") as f:
         json.dump(db, f, indent=2, ensure_ascii=False)
 
-def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False):
+
+def _pool_match_distance(samples, enc):
+    """Aggregate a person's sample pool into one match distance.
+
+    Uses the 2nd-nearest sample (or the only sample for a 1-sample
+    pool) instead of the raw minimum. The raw min meant a single
+    outlier sample sitting near an unrelated face was enough to
+    trigger a false match — and pools hold up to 20 samples each,
+    pooled across alias groups, so there were many chances for one
+    bad sample to win. Requiring the 2nd-nearest to also be close
+    means at least two of the person's samples have to agree before
+    the match counts."""
+    import face_recognition
+    dists = face_recognition.face_distance(samples, enc)
+    if len(dists) == 0:
+        return 1.0
+    s = sorted(dists)
+    return float(s[1] if len(s) >= 2 else s[0])
+
+
+def detect_or_assign_person_id(path, project, threshold=0.5, raise_errors=False):
     """Extract face embedding, match against project face DB, return hex ID.
     Each person ID stores multiple embeddings; comparison uses closest match
     across all samples so accuracy improves as more images are confirmed.
@@ -1279,7 +1355,7 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
             samples = _group_samples(fid)
             if not samples:
                 continue
-            dist = min(face_recognition.face_distance(samples, enc))
+            dist = _pool_match_distance(samples, enc)
             if dist < best_dist:
                 best_dist, best_id = dist, fid
 
@@ -1322,7 +1398,7 @@ def detect_or_assign_person_id(path, project, threshold=0.65, raise_errors=False
         return None
 
 
-def match_person_id(path, project, threshold=0.65):
+def match_person_id(path, project, threshold=0.5):
     """Match face in image against known people — never assigns a new ID.
     Returns the best matching person ID string, or None if no confident match."""
     try:
@@ -1357,7 +1433,7 @@ def match_person_id(path, project, threshold=0.65):
                 samples.extend(s)
             if not samples:
                 continue
-            dist = min(face_recognition.face_distance(samples, enc))
+            dist = _pool_match_distance(samples, enc)
             if dist < best_dist:
                 best_dist, best_id = dist, fid
         return best_id if best_dist < threshold else None
@@ -1627,6 +1703,26 @@ def reassign_person_id(old_id, new_id, project, attrs_data):
     save_person_registry(registry, project)
 
     return attrs_data
+
+
+def next_free_person_id(project=None):
+    """Return a fresh, unused 3-hex person ID (001–fff) and advance the
+    faces-DB counter so the next call returns a different one. Skips any
+    ID already used in the faces DB or the person registry. Returns None
+    if the ID space is exhausted."""
+    db = load_faces_db(project)
+    faces = db.setdefault("faces", {})
+    registry = load_person_registry(project)
+    used = set(faces.keys()) | set(registry.keys())
+    nid = max(db.get("next_id", 1), 1)
+    while nid <= 0xfff and format(nid, "03x") in used:
+        nid += 1
+    if nid > 0xfff:
+        return None
+    new_id = format(nid, "03x")
+    db["next_id"] = nid + 1
+    save_faces_db(project, db)
+    return new_id
 
 
 def get_person_id_label(project, hex_id):
@@ -3696,10 +3792,29 @@ def load_corrections(project):
         return []
 
 
+def atomic_torch_save(obj, path):
+    """torch.save via a temp file + os.replace so a kill or crash
+    mid-write can never leave a truncated (corrupt) file. A plain
+    torch.save writes the zip in place and is NOT atomic — that is
+    exactly what corrupted features_*.pt and took down project load.
+    os.replace is atomic on the same filesystem."""
+    import torch as _torch
+    tmp = f"{path}.tmp"
+    try:
+        _torch.save(obj, tmp)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
+
 def _save_corrections(project, corrections):
     try:
-        import torch
-        torch.save(corrections, _corrections_file(project))
+        atomic_torch_save(corrections, _corrections_file(project))
         _corrections_cache[project or "default"] = corrections
     except Exception:
         pass
@@ -4682,7 +4797,7 @@ def flush_path_renames_to_stores(renames, project, update_clip_pt=True):
                         _changed_pt = True
                 if _changed_pt:
                     _pt["paths"] = _paths
-                    _torch.save(_pt, _pt_path)
+                    atomic_torch_save(_pt, _pt_path)
             except Exception:
                 pass
 
@@ -4731,6 +4846,159 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
     if flush_stores and project:
         update_path_in_all_stores(path, new_path, project)
     return new_path
+
+
+def strip_person_from_filename(attrs_data, path, project=None, flush_stores=True):
+    """Rename a file to remove the primary P-code from its coded
+    filename stem, keeping every other coded field (incl. PW).
+
+    Used by 'disassemble non-samples': the file is no longer tied to
+    any person, and leaving P### in the name would let the filename
+    authority re-bind it on the next scan. Returns the new path
+    (== path if the name is uncoded, has no person, or rename failed)."""
+    stem, ext = os.path.splitext(os.path.basename(path))
+    parts = parse_coded_filename(stem)
+    if parts is None or not parts.get("persons"):
+        return path   # uncoded, or no primary person to strip
+    parts["persons"] = []
+    new_stem = build_coded_filename(parts, field_order=get_sync_field_order(project))
+    if not new_stem:
+        # Stripping the person emptied the stem — fall back to a
+        # date-only stem so the file keeps a stable, parseable name.
+        new_stem = f"J{parts.get('timestamp') or julian_id_for_file(path)}"
+    new_path = unique_path(os.path.join(os.path.dirname(path), new_stem + ext), src=path)
+    if new_path == path:
+        return path
+    try:
+        os.rename(path, new_path)
+    except Exception:
+        return path
+    if path in attrs_data:
+        attrs_data[new_path] = attrs_data.pop(path)
+    if flush_stores and project:
+        update_path_in_all_stores(path, new_path, project)
+    return new_path
+
+
+def rebuild_person_pool_from_samples(project, pid, sample_paths):
+    """Replace person `pid`'s faces-DB embedding pool with ONLY the
+    face embeddings extracted from `sample_paths`.
+
+    Used by the 'disassemble non-samples' workflow: the user has
+    hand-picked the files that truly are this person, so the pool is
+    rebuilt from scratch rather than trying to subtract polluted
+    samples one by one (which relies on the same unreliable
+    closest-match guess). source_path / source_paths are reset to the
+    sample list. Returns {'embedded': n, 'failed': [paths]} or None on
+    error. Does NOT wipe the pool when no sample face is usable."""
+    try:
+        import face_recognition  # noqa: F401  (ensures the dep is present)
+        if not project or not pid:
+            return None
+        embs, ok_paths, failed = [], [], []
+        for sp in sample_paths or []:
+            if not sp or not os.path.exists(sp):
+                failed.append(sp)
+                continue
+            img = _load_image_or_video_frame(sp)
+            if img is None:
+                failed.append(sp)
+                continue
+            with _face_lock:
+                encs = _face_encodings_with_fallback(img)
+            if not encs:
+                failed.append(sp)
+                continue
+            embs.append(encs[0].tolist())
+            ok_paths.append(os.path.abspath(sp))
+        if not embs:
+            return {"embedded": 0, "failed": failed}
+        db = load_faces_db(project)
+        faces = db.setdefault("faces", {})
+        fdata = faces.setdefault(pid, {})
+        fdata["embeddings"]   = embs
+        fdata["source_path"]  = ok_paths[0]
+        fdata["source_paths"] = ok_paths
+        fdata.pop("embedding", None)  # drop legacy single-emb field
+        save_faces_db(project, db)
+        try:
+            _faces_db_cache.pop(project, None)
+        except Exception:
+            pass
+        return {"embedded": len(embs), "failed": failed}
+    except Exception:
+        return None
+
+
+def remove_person_if_orphaned(project, pid, attrs_data):
+    """Remove person `pid` from the faces DB, registry, and alias /
+    right groups IF no file in `attrs_data` is tagged with it any
+    more. Used after a person_id change (e.g. the preview P-field
+    dropdown) so the old person doesn't linger as an empty entry with
+    a dead base pointing at a file that has moved on. Returns True if
+    it was removed."""
+    pid = (pid or "").strip()
+    if not pid or pid == "000":
+        return False
+    for entry in attrs_data.values():
+        if isinstance(entry, dict) \
+                and (entry.get("person_id") or "").strip() == pid:
+            return False   # still referenced — not orphaned
+    # Orphaned — purge it everywhere a person can live.
+    db = load_faces_db(project)
+    if db.get("faces", {}).pop(pid, None) is not None:
+        save_faces_db(project, db)
+    registry = load_person_registry(project)
+    if registry.pop(pid, None) is not None:
+        save_person_registry(registry, project)
+    remove_person_from_aliases(pid)
+    remove_from_right_group(pid)
+    return True
+
+
+def face_distances_to_sample(sample_path, paths, progress_cb=None, cancel_cb=None):
+    """Extract the face embedding from `sample_path`, then from every
+    file in `paths`, and return {path: face_distance} — lower means
+    more similar to the sample. Files with no detectable face map to
+    None. `progress_cb(done, total)` is called after each file if
+    given; `cancel_cb()` returning True aborts early. Returns None if
+    the sample itself has no extractable face."""
+    try:
+        import face_recognition
+        s_img = _load_image_or_video_frame(sample_path)
+        if s_img is None:
+            return None
+        with _face_lock:
+            s_encs = _face_encodings_with_fallback(s_img)
+        if not s_encs:
+            return None
+        s_enc = s_encs[0]
+        out = {}
+        total = len(paths)
+        for i, p in enumerate(paths):
+            if cancel_cb and cancel_cb():
+                return out
+            d = None
+            try:
+                if p and os.path.exists(p):
+                    img = _load_image_or_video_frame(p)
+                    if img is not None:
+                        with _face_lock:
+                            encs = _face_encodings_with_fallback(img)
+                        if encs:
+                            d = float(face_recognition.face_distance(
+                                [encs[0]], s_enc)[0])
+            except Exception:
+                d = None
+            out[p] = d
+            if progress_cb:
+                try:
+                    progress_cb(i + 1, total)
+                except Exception:
+                    pass
+        return out
+    except Exception:
+        return None
 
 
 def _entry_value_for_letter(entry, letter, label, storage_key=None):

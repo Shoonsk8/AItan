@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import shutil
+import importlib.util
 
 import pytest
 
@@ -142,6 +143,8 @@ def test_clip_pipeline_runs_at_all():
 
     import aisearch_logic as logic
     from aisearch_attrs import auto_detect_clip_attrs
+    if getattr(logic, "model", None) is None:
+        pytest.skip("CLIP model not loaded in this test environment")
     emb = logic.extract_feature(sample)
     assert emb is not None, "extract_feature returned None"
     result = auto_detect_clip_attrs(emb, existing_entry={})
@@ -165,6 +168,8 @@ def test_face_worker_subprocess_starts():
             break
     if not sample:
         pytest.skip("no still images found")
+    if importlib.util.find_spec("face_recognition") is None:
+        pytest.skip("optional face_recognition dependency is not installed")
 
     from aisearch_attrs import inspect_face_detection_subprocess
     res = inspect_face_detection_subprocess(sample, "AIX", timeout=120)

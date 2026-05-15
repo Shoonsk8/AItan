@@ -540,7 +540,7 @@ class _DbMixin:
 
                 def _save_checkpoint():
                     _flush_pending()
-                    torch.save(data, os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt"))
+                    attrs_mod.atomic_torch_save(data, os.path.join(attrs_mod.DATA_DIR, f"features_{name}.pt"))
                     attrs_mod.save(name, attrs_data)
 
                 # Per-file RSS spike tracker. If a single file pushes the
@@ -628,6 +628,15 @@ class _DbMixin:
                                             "camera_shot", "background", "clothing",
                                             "animal", "expression"}
                             _entry_for_detect = dict(attrs_data.get(p, {}))
+                            # Filename-authority: pre-populate the entry
+                            # with every coded value the filename encodes
+                            # (P/E/HC/FA/SK/B/WH/PM/CS/BG/CL/A/X). The
+                            # per-position skip in auto_detect_clip_attrs
+                            # then naturally protects those fields from
+                            # CLIP overwrite — the user's filename codes
+                            # become authoritative across all coded fields.
+                            attrs_mod.populate_entry_from_filename(
+                                _entry_for_detect, p)
                             _curr_animal = _entry_for_detect.get("animal", "")
                             _animal_force_none = bool(
                                 self.app.config.get("animal_force_none", False))
@@ -1414,7 +1423,7 @@ class _DbMixin:
         if scan_renames:
             attrs_mod.flush_path_renames_to_stores(scan_renames, self.app.current_project)
             if self.app.data:
-                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
+                attrs_mod.atomic_torch_save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.app.current_project}.pt"))
         self.btn_stop_scan.setEnabled(False)
 
     def _update_scan_project_label(self):
@@ -1782,7 +1791,7 @@ class _DbMixin:
         # Flush to disk
         _am.save(project, attrs_data)
         self.app.attrs_data = attrs_data
-        torch.save(self.app.data,
+        _am.atomic_torch_save(self.app.data,
                    os.path.join(_am.DATA_DIR, f"features_{project}.pt"))
         _am.flush_path_renames_to_stores(renames, project)
 
@@ -1894,7 +1903,7 @@ class _DbMixin:
                                     np_ = path_map.get(os.path.normpath(p))
                                     if np_:
                                         self.app.data["paths"][idx2] = np_
-                                torch.save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{project}.pt"))
+                                attrs_mod.atomic_torch_save(self.app.data, os.path.join(attrs_mod.DATA_DIR, f"features_{project}.pt"))
                                 # Rebuild path index
                                 self.app._path_idx = {
                                     os.path.realpath(p): i
@@ -2043,11 +2052,11 @@ class _DbMixin:
                 existing = {"paths": [], "embeddings": torch.empty((0, logic.EMBEDDING_DIM)).to(logic.device)}
             existing["base_dirs"]       = base_dirs
             existing["base_dirs_nosub"] = base_nosub
-            torch.save(existing, pt_path)
+            attrs_mod.atomic_torch_save(existing, pt_path)
         else:
             data = {"paths": [], "embeddings": torch.empty((0, logic.EMBEDDING_DIM)).to(logic.device),
                     "base_dirs": base_dirs, "base_dirs_nosub": base_nosub}
-            torch.save(data, pt_path)
+            attrs_mod.atomic_torch_save(data, pt_path)
             # Create blank person registry and faces file for new project
             reg_path = attrs_mod.person_registry_file_for_project(name)
             if not os.path.exists(reg_path):

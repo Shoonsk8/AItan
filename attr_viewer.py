@@ -575,9 +575,23 @@ class FieldWidget(QGroupBox):
             # field, immediately fire data_changed and a dedicated commit
             # signal so the parent saves *now* rather than after the
             # debounce timer. Defends against navigation losing typed text.
+            #
+            # BUT only when the text ACTUALLY changed while focused. A
+            # bare focus-in/out with no edit (e.g. the preview window is
+            # activated, then focus is handed back to the main table)
+            # must NOT look like a user edit — it spuriously starts the
+            # save timer, which makes the next navigation flag the file
+            # as user-edited and auto-rename an untouched file.
             _orig_focus_out = self._te.focusOutEvent
+            _orig_focus_in  = self._te.focusInEvent
+            def _focus_in_snap(ev, _self=self, _orig=_orig_focus_in):
+                _orig(ev)
+                _self._te._focus_in_text = _self._te.toPlainText()
             def _focus_out_save(ev, _self=self, _orig=_orig_focus_out):
                 _orig(ev)
+                if _self._te.toPlainText() == getattr(
+                        _self._te, "_focus_in_text", None):
+                    return  # focused but never edited — not a real change
                 # Find the AttrViewerWidget ancestor and emit data_changed
                 # so its _text_save_timer triggers and saves immediately.
                 try:
@@ -588,6 +602,7 @@ class FieldWidget(QGroupBox):
                         p.data_changed.emit()
                 except Exception:
                     pass
+            self._te.focusInEvent  = _focus_in_snap
             self._te.focusOutEvent = _focus_out_save
             vlay.addWidget(self._te)
 

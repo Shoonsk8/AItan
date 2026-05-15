@@ -5,6 +5,7 @@ Phase-1 cut: navigate folders, view icon grid of files+folders, multi-select,
 Ctrl+wheel to resize thumbnails. Thumbnails load asynchronously in a worker
 thread so the window paints instantly even on big folders.
 """
+import math
 import os
 import shutil
 import time
@@ -14,14 +15,17 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                               QMessageBox, QInputDialog, QMenu, QStackedWidget,
                               QTableWidget, QTableWidgetItem, QHeaderView,
                               QAbstractItemView, QTreeWidget, QTreeWidgetItem,
-                              QSplitter, QDialog, QCheckBox, QGridLayout)
-from PyQt6.QtCore import Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal, QPoint
+                              QSplitter, QDialog, QCheckBox, QGridLayout,
+                              QSizePolicy)
+from PyQt6.QtCore import (Qt, QSize, QUrl, QMimeData, QThread, pyqtSignal,
+                          QPoint, QPointF, QRectF, QTimer)
 from PyQt6.QtGui import (QPixmap, QIcon, QImageReader, QPainter, QImage,
-                         QColor, QPen, QShortcut, QKeySequence, QAction, QDrag)
+                         QColor, QPen, QFont, QShortcut, QKeySequence, QAction,
+                         QDrag)
 
 import aisearch_logic as logic
 
-VERSION = "2.5.4"
+VERSION = "2.5.8"
 
 
 _VALID_EXTS = tuple(ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
@@ -162,6 +166,63 @@ def _rim_color_for(is_video, locked, cfg=None):
     if locked:
         return cfg.get("rim_pic_lock", _RIM_DEFAULTS["rim_pic_lock"])
     return None   # unlocked picture — no rim
+
+
+def _drop_wants_copy(ev):
+    """Single source of truth for FM drop copy/move intent."""
+    return (
+        bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        or ev.dropAction() == Qt.DropAction.CopyAction
+        or ev.proposedAction() == Qt.DropAction.CopyAction
+    )
+
+
+def _local_paths_from_drop(ev):
+    return [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
+
+
+def _drop_paths_allowed(src_paths, target_dir, is_copy):
+    """Reject impossible folder drops consistently across all FM views.
+
+    Ctrl-copy onto the exact same folder is allowed; it creates a nested
+    duplicate there. Placing a folder inside one of its descendants is
+    never allowed because it has no stable filesystem meaning.
+    """
+    for src in src_paths:
+        try:
+            if not os.path.isdir(src):
+                continue
+            src_abs = os.path.abspath(src)
+            tgt_abs = os.path.abspath(target_dir)
+            if not is_copy and tgt_abs == src_abs:
+                return False
+            if tgt_abs.startswith(src_abs + os.sep):
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _handle_fm_url_drop(ev, target_dir, move_files_into, error_parent=None):
+    """Common FM URL drop path used by icon, tree, and carousel views."""
+    if not ev.mimeData().hasUrls():
+        ev.ignore(); return False
+    srcs = _local_paths_from_drop(ev)
+    if not srcs or not target_dir or not os.path.isdir(target_dir):
+        ev.ignore(); return False
+    is_copy = _drop_wants_copy(ev)
+    if not _drop_paths_allowed(srcs, target_dir, is_copy):
+        ev.ignore(); return False
+    mode = "copy" if is_copy else "move"
+    ev.acceptProposedAction()
+    try:
+        move_files_into(srcs, target_dir, mode=mode)
+    except Exception as e:
+        import traceback
+        QMessageBox.critical(
+            error_parent, "Drop Error",
+            f"Failed to {mode} files:\n{e}\n{traceback.format_exc()}")
+    return True
 
 
 def _make_thumb_pixmap(path, size):
@@ -355,9 +416,14 @@ class _FMIconList(QListWidget):
         # Link, Kdenlive's drop handler bails because the only offered
         # actions involve copying or moving the file off disk, which it
         # doesn't want to do. Internal FM drops still default to Move.
+        from PyQt6.QtWidgets import QApplication as _QApp
+        default_action = (
+            Qt.DropAction.CopyAction
+            if _QApp.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+            else Qt.DropAction.MoveAction)
         drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
                   | Qt.DropAction.LinkAction,
-                  Qt.DropAction.MoveAction)
+                  default_action)
 
     def dragEnterEvent(self, ev):
         import sys
@@ -390,19 +456,7 @@ class _FMIconList(QListWidget):
                 target = data
         if not target:
             target = self._fm._cur_dir
-        srcs = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
-        if not srcs or not os.path.isdir(target):
-            ev.ignore(); return
-        ev.acceptProposedAction()
-        mode = ("copy"
-                if ev.modifiers() & Qt.KeyboardModifier.ControlModifier
-                else "move")
-        try:
-            self._fm.move_files_into(srcs, target, mode=mode)
-        except Exception as e:
-            import traceback
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Drop Error", f"Failed to {mode} files:\n{e}\n{traceback.format_exc()}")
+        _handle_fm_url_drop(ev, target, self._fm.move_files_into, self)
 
 
 class _FMItem(QTreeWidgetItem):
@@ -659,18 +713,45 @@ class _FMTreeList(QTreeWidget):
         """Return a pixmap with the appropriate rim stamped on a copy
         (cache stays plain). Rim color depends on file kind (video vs.
         picture) and lock state (entry["editable"] in attrs_data).
-        Colors are user-overridable via Appearance config keys."""
+        Colors are user-overridable via Appearance config keys.
+
+        Also overlays a cyan border when the file is a face-sample
+        (matches the main table's _row_rim_icon behavior). Lets the
+        user spot training samples in the FM tree at a glance."""
         import aisearch_attrs as _am
         ext = os.path.splitext(path)[1].lower()
         is_video = ext in logic.EXT_VID
-        attrs_data = getattr(self._fm.app, "attrs_data", {}) or {}
+        app = self._fm.app
+        attrs_data = getattr(app, "attrs_data", {}) or {}
         locked = not _am.is_editable(attrs_data, path)
-        cfg = getattr(self._fm.app, "config", {}) or {}
+        cfg = getattr(app, "config", {}) or {}
         color = _rim_color_for(is_video, locked, cfg)
-        if not color:
+        try:
+            is_sample = bool(getattr(app, "_is_face_sample", lambda _p: False)(path))
+        except Exception:
+            is_sample = False
+        if not color and not is_sample:
             return pixmap
         out = pixmap.copy()
-        _stamp_rim(out, color)
+        if color:
+            _stamp_rim(out, color)
+        if is_sample:
+            # Overlay a thin cyan border on top of (or instead of) the
+            # kind/lock rim. Same color the main-table _row_rim_icon
+            # uses so the two views are consistent.
+            try:
+                from PyQt6.QtGui import QPainter as _QP, QPen as _QPen, QColor as _QC
+                p = _QP(out)
+                try:
+                    pen = _QPen(_QC("#00d0ff"))
+                    pen.setWidth(2)
+                    p.setPen(pen)
+                    w, h = out.width(), out.height()
+                    p.drawRect(1, 1, max(1, w - 2), max(1, h - 2))
+                finally:
+                    p.end()
+            except Exception:
+                pass
         return out
 
     def _make_folder_item(self, name, full):
@@ -806,7 +887,7 @@ class _FMTreeList(QTreeWidget):
                         self._press_pos = None
                         item = self._press_item
                         self._press_item = None
-                        self._start_url_drag()
+                        self._start_url_drag(seed_item=item)
                         return True
                     # Below threshold and press was on a row: suppress
                     # MouseMove unconditionally so Qt's ExtendedSelection
@@ -820,13 +901,14 @@ class _FMTreeList(QTreeWidget):
                 self._press_item = None
         return super().eventFilter(obj, event)
 
-    def _start_url_drag(self):
+    def _start_url_drag(self, seed_item=None):
         # Always include the press item, even if Qt's late selection
         # update dropped it out of selectedItems(). Union them so a
         # multi-selection drag never silently loses one row.
         items = list(self.selectedItems())
-        if self._press_item is not None and self._press_item not in items:
-            items.insert(0, self._press_item)
+        seed_item = seed_item or self._press_item
+        if seed_item is not None and seed_item not in items:
+            items.insert(0, seed_item)
         if not items:
             return
         paths = []
@@ -853,14 +935,19 @@ class _FMTreeList(QTreeWidget):
         mime.setUrls(urls)
         drag = QDrag(self)
         drag.setMimeData(mime)
-        # Include LinkAction so external apps that import files by
-        # reference (Kdenlive, OBS, image editors) can pick it. Without
-        # Link, Kdenlive's drop handler bails because the only offered
-        # actions involve copying or moving the file off disk, which it
-        # doesn't want to do. Internal FM drops still default to Move.
+        # Default action mirrors what the user gestured at drag-start:
+        # Ctrl held → Copy (so Qt shows the +copy cursor immediately),
+        # otherwise Move. Qt still flips on the fly if the user toggles
+        # Ctrl mid-drag. Include LinkAction so external apps that import
+        # files by reference (Kdenlive, OBS, image editors) can pick it.
+        from PyQt6.QtWidgets import QApplication as _QApp
+        default_action = (
+            Qt.DropAction.CopyAction
+            if _QApp.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+            else Qt.DropAction.MoveAction)
         drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
                   | Qt.DropAction.LinkAction,
-                  Qt.DropAction.MoveAction)
+                  default_action)
 
     # ── Drop handling ────────────────────────────────────────────────────────
     _EDGE_BAND = 28      # px from top/bottom that triggers auto-scroll
@@ -936,24 +1023,7 @@ class _FMTreeList(QTreeWidget):
                 target = os.path.dirname(data)
         if not target:
             target = self._fm._cur_dir
-        srcs = [u.toLocalFile() for u in ev.mimeData().urls() if u.isLocalFile()]
-        if not srcs or not os.path.isdir(target):
-            ev.ignore(); return
-        # Don't move a folder into itself or one of its descendants.
-        for src in srcs:
-            try:
-                src_abs = os.path.abspath(src)
-                tgt_abs = os.path.abspath(target)
-                if (tgt_abs == src_abs
-                        or tgt_abs.startswith(src_abs + os.sep)):
-                    ev.ignore(); return
-            except Exception:
-                pass
-        ev.acceptProposedAction()
-        mode = ("copy"
-                if ev.modifiers() & Qt.KeyboardModifier.ControlModifier
-                else "move")
-        self._fm.move_files_into(srcs, target, mode=mode)
+        _handle_fm_url_drop(ev, target, self._fm.move_files_into, self)
 
     def _on_double_click(self, item, col):
         target = item.data(0, Qt.ItemDataRole.UserRole)
@@ -991,6 +1061,375 @@ class _FMTreeList(QTreeWidget):
         if not new_name or new_name == old_name:
             return
         self._fm._handle_inline_rename(item, full, new_name)
+
+
+class _FMCarouselView(QWidget):
+    """3D-ring carousel of subfolders for one FilePane. Wheel rotates,
+    click selects, double-click navigates into that folder. Companion to
+    _FMTreeList — same data source (current dir), different visualization.
+    Ported from /mnt/1TBSSD/CarouselUI."""
+
+    _REP_NAMES = ("0.jpg", "0.jpeg", "0.png", "0.webp", "0.bmp")
+
+    selection_changed = pyqtSignal(int)  # emits selected_index
+
+    def __init__(self, pane):
+        super().__init__()
+        self.pane = pane
+        self.items = []
+        self.selected_index = 0
+        self.display_position = 0.0
+        self.target_position = 0.0
+        self._pix_cache = {}
+        self.hit_map = []
+        self.setMouseTracking(True)
+        self.setAcceptDrops(True)
+        self._press_pos = None
+        self._press_folder = None
+        # Tight vertical sizing — height matches the painted content,
+        # so there's no dead space below the folder label. Horizontal
+        # is Expanding so the ring fills available width.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._animate)
+        self._timer.start(16)
+
+    # ── Geometry helpers (sizeHint + paintEvent share these so the
+    # widget is exactly as tall as what's drawn) ─────────────────────────
+    @staticmethod
+    def _radius_for(width):
+        return int(min(max(120, width * 0.30), 380))
+
+    @classmethod
+    def _layout_for(cls, width):
+        radius = cls._radius_for(width)
+        face_size = int(max(80, min(150, radius * 0.36)))
+        sel_size = int(face_size * 1.32)
+        # Place the selected face top ~4 px from the top of the widget;
+        # the back-half of the ring will spill above (clipped by parent),
+        # which matches the "ring close to top, top may be hidden" spec.
+        cy = max(0, int(sel_size / 2 - radius * 0.15)) + 4
+        label_top = cy + int(radius * 0.15) + sel_size // 2 + 4
+        label_h = 24
+        return radius, face_size, sel_size, cy, label_top, label_h
+
+    def sizeHint(self):
+        w = max(self.width(), 600)
+        _, _, _, _, label_top, label_h = self._layout_for(w)
+        return QSize(w, label_top + label_h + 2)
+
+    def minimumSizeHint(self):
+        _, _, _, _, label_top, label_h = self._layout_for(400)
+        return QSize(400, label_top + label_h + 2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Width changed → recompute height via sizeHint.
+        self.updateGeometry()
+
+    def populate(self, dir_path):
+        self.items = []
+        self._pix_cache = {}
+        if dir_path and os.path.isdir(dir_path):
+            try:
+                entries = sorted(os.listdir(dir_path))
+            except OSError:
+                entries = []
+            for name in entries:
+                if name.startswith("."):
+                    continue
+                full = os.path.join(dir_path, name)
+                if os.path.isdir(full):
+                    self.items.append((full, self._rep_image_for(full)))
+        if self.selected_index >= len(self.items):
+            self.selected_index = 0
+        self.display_position = float(self.selected_index)
+        self.target_position = float(self.selected_index)
+        self.update()
+        self.selection_changed.emit(self.selected_index)
+
+    @classmethod
+    def _rep_image_for(cls, folder):
+        try:
+            files = [n for n in os.listdir(folder)
+                     if os.path.isfile(os.path.join(folder, n))
+                     and os.path.splitext(n)[1].lower() in _VALID_EXTS]
+        except OSError:
+            return None
+        if not files:
+            return None
+        by_name = {n.lower(): n for n in files}
+        for cand in cls._REP_NAMES:
+            if cand in by_name:
+                return os.path.join(folder, by_name[cand])
+        return os.path.join(folder, sorted(files)[0])
+
+    def _pixmap_for(self, path, size):
+        if not path:
+            return None
+        key = (path, int(size))
+        if key in self._pix_cache:
+            return self._pix_cache[key]
+        px = _make_thumb_pixmap(path, int(size))
+        if px is None:
+            return None
+        if px.width() != size or px.height() != size:
+            x = max(0, (px.width() - int(size)) // 2)
+            y = max(0, (px.height() - int(size)) // 2)
+            px = px.copy(x, y, int(size), int(size))
+        self._pix_cache[key] = px
+        return px
+
+    def _animate(self):
+        if not self.items:
+            return
+        diff = self.target_position - self.display_position
+        if abs(diff) > 0.001:
+            self.display_position += diff * 0.18
+            if abs(self.target_position - self.display_position) < 0.01:
+                self.display_position = self.target_position
+            self.update()
+        else:
+            self.display_position %= max(1, len(self.items))
+            self.target_position %= max(1, len(self.items))
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillRect(self.rect(), QColor("#151515"))
+        if not self.items:
+            p.setPen(QColor("#bbbbbb"))
+            p.setFont(QFont("Arial", 14))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "No subfolders here")
+            return
+        self.hit_map = []
+        w = self.width()
+        cx = w / 2
+        radius, face_size, sel_size, cy, label_top, label_h = self._layout_for(w)
+        self._draw_ring(p, cx, cy, radius)
+        self._draw_faces(p, cx, cy, radius, face_size, sel_size)
+        folder = self.items[self.selected_index][0]
+        p.setPen(QColor("#f0c64d"))
+        p.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        p.drawText(QRectF(0, label_top, w, label_h),
+                   Qt.AlignmentFlag.AlignCenter,
+                   os.path.basename(folder))
+
+    def _draw_ring(self, p, cx, cy, radius):
+        xr = radius
+        yr = int(radius * 0.16)
+        thick = int(radius * 0.07)
+        top = cy - yr
+        bot = cy + yr
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor("#242424"), 5))
+        p.drawArc(QRectF(cx - xr, top - thick, xr * 2, bot - top), 0, 180 * 16)
+        p.setPen(QPen(QColor("#858585"), 10))
+        p.drawArc(QRectF(cx - xr, top, xr * 2, bot - top), 180 * 16, 180 * 16)
+        p.setPen(QPen(QColor("#373737"), 3))
+        p.drawArc(QRectF(cx - xr * 0.86, top + thick * 0.8, xr * 1.72, bot - top),
+                  180 * 16, 180 * 16)
+
+    def _draw_faces(self, p, cx, cy, radius, face_size, sel_size):
+        count = len(self.items)
+        max_each = min(4, count - 1) if count > 1 else 0
+        step = math.radians(24 if count > 5 else 34)
+        xr = radius * 0.82
+        yr = radius * 0.15
+        center_slot = math.floor(self.display_position)
+        positions = []
+        for slot in range(center_slot - max_each, center_slot + max_each + 2):
+            index = slot % count
+            folder, rep = self.items[index]
+            offset = slot - self.display_position
+            if abs(offset) > max_each + 0.75:
+                continue
+            angle = math.pi / 2 - offset * step
+            x = cx + math.cos(angle) * xr
+            y = cy + math.sin(angle) * yr
+            distance = abs(offset)
+            selected = distance < 0.08
+            size = int(sel_size - min(1.0, distance) * (sel_size - face_size * 0.9))
+            size = int(max(face_size * 0.52, size - max(0, distance - 1) * face_size * 0.08))
+            brightness = max(0.4, 1.0 - distance * 0.12)
+            positions.append((selected, distance, index, folder, rep, x, y, size, brightness))
+
+        for selected, distance, index, folder, rep, x, y, size, brightness in sorted(
+                positions, key=lambda row: (row[0], -row[1])):
+            rect = QRectF(x - size / 2, y - size / 2, size, size)
+            px = self._pixmap_for(rep, size) if rep else None
+            if px is not None:
+                p.drawPixmap(rect.toRect(), px)
+                if brightness < 0.98:
+                    p.fillRect(rect, QColor(0, 0, 0, int((1.0 - brightness) * 150)))
+            else:
+                p.setBrush(QColor("#252525"))
+                p.setPen(QPen(QColor("#777777"), 2))
+                p.drawRect(rect)
+                p.setPen(QColor("#aaaaaa"))
+                p.setFont(QFont("Arial", 10))
+                name = os.path.basename(folder)
+                if len(name) > 10:
+                    name = name[:9] + "…"
+                p.drawText(rect, Qt.AlignmentFlag.AlignCenter, name)
+            border = QColor("#f0c64d") if selected else QColor("#777777")
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(border, 4 if selected else 2))
+            p.drawRect(rect.adjusted(-4, -4, 4, 4))
+            self.hit_map.append((rect.adjusted(-8, -8, 8, 8), index, folder))
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta:
+            self._rotate_by(-1 if delta > 0 else 1)
+        event.accept()
+
+    def mousePressEvent(self, event):
+        self._press_pos = None
+        self._press_folder = None
+        for rect, index, _folder in reversed(self.hit_map):
+            if rect.contains(event.position()):
+                self._select_index(index)
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._press_pos = event.position().toPoint()
+                    self._press_folder = _folder
+                return
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton
+                and self._press_pos is not None
+                and self._press_folder is not None):
+            cur = event.position().toPoint()
+            if (cur - self._press_pos).manhattanLength() > _FMTreeList._DRAG_THRESHOLD:
+                folder = self._press_folder
+                self._press_pos = None
+                self._press_folder = None
+                self._start_url_drag(folder)
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._press_pos = None
+        self._press_folder = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        for rect, _index, folder in reversed(self.hit_map):
+            if rect.contains(event.position()):
+                self.pane.navigate(folder)
+                return
+
+    def _start_url_drag(self, folder):
+        if not folder or not os.path.isdir(folder):
+            return
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(folder)])
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        rep = self._rep_image_for(folder)
+        px = self._pixmap_for(rep, 96) if rep else None
+        if px is not None:
+            drag.setPixmap(px)
+            drag.setHotSpot(QPoint(px.width() // 2, px.height() // 2))
+        from PyQt6.QtWidgets import QApplication as _QApp
+        default_action = (
+            Qt.DropAction.CopyAction
+            if _QApp.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+            else Qt.DropAction.MoveAction)
+        drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
+                  | Qt.DropAction.LinkAction,
+                  default_action)
+
+    def _folder_at_pos(self, pos):
+        for rect, _index, folder in reversed(self.hit_map):
+            if rect.contains(pos):
+                return folder
+        if self.items:
+            return self.items[self.selected_index][0]
+        return self.pane._cur_dir
+
+    def dragEnterEvent(self, ev):
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dragMoveEvent(self, ev):
+        if ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dropEvent(self, ev):
+        if not ev.mimeData().hasUrls():
+            ev.ignore(); return
+        target = self._folder_at_pos(ev.position())
+        _handle_fm_url_drop(ev, target, self.pane.fm.move_files_into, self)
+
+    def _rotate_by(self, direction):
+        if not self.items:
+            return
+        self._select_index(self.selected_index + direction, direction=direction)
+
+    def _select_index(self, index, direction=None):
+        if not self.items:
+            return
+        count = len(self.items)
+        index = index % count
+        if direction:
+            self.target_position += 1 if direction > 0 else -1
+        else:
+            current = self.target_position
+            diff = (index - current + count / 2) % count - count / 2
+            self.target_position = current + diff
+        prev = self.selected_index
+        self.selected_index = index
+        if prev != index:
+            self.selection_changed.emit(index)
+
+
+class _FMCarouselPanel(QWidget):
+    """Carousel mode container: wheel on top, nemo-style tree below
+    showing the carousel-selected folder's contents. Double-clicking a
+    folder in either view navigates the whole pane to that folder."""
+
+    def __init__(self, pane):
+        super().__init__()
+        self.pane = pane
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+
+        self.ring = _FMCarouselView(pane)
+        # Ring widget sizes itself to its painted content via sizeHint;
+        # no explicit min/max height needed here.
+        lay.addWidget(self.ring)
+
+        # Second _FMTreeList showing the contents of whichever folder
+        # the ring currently has selected. Shares the same FilePane so
+        # navigation, context menus, drag/drop, etc. all behave the
+        # same as the primary tree.
+        self.contents = _FMTreeList(pane)
+        self.contents.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.contents.customContextMenuRequested.connect(pane._on_context_menu)
+        # Single-click / arrow-key → live preview, same as the primary tree.
+        self.contents.currentItemChanged.connect(pane._on_current_changed)
+        lay.addWidget(self.contents, 1)
+
+        self.ring.selection_changed.connect(self._on_ring_changed)
+
+    def populate(self, dir_path):
+        self.ring.populate(dir_path)
+        if not self.ring.items:
+            self.contents.populate_root(dir_path)
+
+    def _on_ring_changed(self, _index):
+        if not self.ring.items:
+            return
+        folder, _rep = self.ring.items[self.ring.selected_index]
+        self.contents.populate_root(folder)
 
 
 class FilePane(QWidget):
@@ -1032,7 +1471,35 @@ class FilePane(QWidget):
         self.path_edit = QLineEdit()
         self.path_edit.returnPressed.connect(self._on_path_edit_enter)
         tb.addWidget(self.path_edit, 1)
+        self.btn_view_mode = QPushButton("◎ Carousel")
+        self.btn_view_mode.setToolTip("Switch between tree and carousel view")
+        self.btn_view_mode.setStyleSheet(_btn_ss)
+        self.btn_view_mode.clicked.connect(self._toggle_view_mode)
+        tb.addWidget(self.btn_view_mode)
         v.addLayout(tb)
+
+        # Filename filter — case-insensitive substring on each item's
+        # displayed name. ".." stays visible. Reapplied after every
+        # _refresh() so navigating preserves the filter.
+        self._fn_filter_text = ""
+        _fn_row = QHBoxLayout()
+        _fn_row.setContentsMargins(0, 0, 0, 0)
+        _fn_row.setSpacing(4)
+        _fn_lbl = QLabel("🔍")
+        _fn_lbl.setToolTip("Filter by filename")
+        self.fn_filter_input = QLineEdit()
+        self.fn_filter_input.setPlaceholderText(
+            "filter by filename… (Esc to clear)")
+        self.fn_filter_input.setClearButtonEnabled(True)
+        self.fn_filter_input.textChanged.connect(self._on_fn_filter_changed)
+        from PyQt6.QtGui import QShortcut as _QSc, QKeySequence as _QKs
+        _esc_sc = _QSc(_QKs("Escape"), self.fn_filter_input)
+        _esc_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        _esc_sc.activated.connect(lambda: (self.fn_filter_input.clear(),
+                                           self.tree.setFocus()))
+        _fn_row.addWidget(_fn_lbl)
+        _fn_row.addWidget(self.fn_filter_input, 1)
+        v.addLayout(_fn_row)
 
         self.tree = _FMTreeList(self)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1040,7 +1507,16 @@ class FilePane(QWidget):
         # Single-click / arrow-key selection → live preview, same as
         # the main page's behavior.
         self.tree.currentItemChanged.connect(self._on_current_changed)
-        v.addWidget(self.tree, 1)
+
+        # Carousel view — wheel on top + tree showing the selected
+        # folder's contents below. Each pane keeps its own toggle state
+        # so dual-pane can be (tree, carousel) or any other mix.
+        self.carousel = _FMCarouselPanel(self)
+
+        self.view_stack = QStackedWidget()
+        self.view_stack.addWidget(self.tree)      # index 0
+        self.view_stack.addWidget(self.carousel)  # index 1
+        v.addWidget(self.view_stack, 1)
 
         # Status line: live count of selected items + total size
         self.status_lbl = QLabel("")
@@ -1124,7 +1600,41 @@ class FilePane(QWidget):
         self._cur_dir = self._history[self._history_idx]
         self.path_edit.setText(self._cur_dir)
         self.tree.populate_root(self._cur_dir)
+        self.carousel.populate(self._cur_dir)
         self._update_nav_buttons()
+        # Preserve the filename filter across navigation
+        self._apply_fn_filter()
+
+    def _toggle_view_mode(self):
+        if self.view_stack.currentIndex() == 0:
+            self.view_stack.setCurrentIndex(1)
+            self.btn_view_mode.setText("▤ Tree")
+        else:
+            self.view_stack.setCurrentIndex(0)
+            self.btn_view_mode.setText("◎ Carousel")
+
+    def _on_fn_filter_changed(self, text):
+        self._fn_filter_text = text or ""
+        self._apply_fn_filter()
+
+    def _apply_fn_filter(self):
+        """Hide tree items whose displayed name doesn't contain the
+        filter substring. ".." is always visible. Only top-level items
+        are filtered — once the user expands a folder, its children
+        show unfiltered (consistent with how the rest of the FM
+        navigation works)."""
+        needle = (self._fn_filter_text or "").strip().lower()
+        for i in range(self.tree.topLevelItemCount()):
+            it = self.tree.topLevelItem(i)
+            if not it:
+                continue
+            if it.data(0, Qt.ItemDataRole.UserRole) == "..":
+                it.setHidden(False)
+                continue
+            if not needle:
+                it.setHidden(False)
+            else:
+                it.setHidden(needle not in it.text(0).lower())
 
     def _update_status(self):
         """Live status line — selection count + total size of selected files."""
@@ -1186,17 +1696,28 @@ class FilePane(QWidget):
             and os.path.dirname(self._cur_dir) != self._cur_dir)
 
     # ── Selected-paths helpers (used by context menu / shortcuts) ───────────
+    def _active_tree(self):
+        """Tree currently visible to the user. In carousel mode the
+        user interacts with the carousel's contents tree, not the
+        (hidden) primary tree — without this routing, Delete / Rename
+        / context-menu file ops all read an empty selection."""
+        if (hasattr(self, "view_stack")
+                and self.view_stack.currentIndex() == 1
+                and hasattr(self, "carousel")):
+            return self.carousel.contents
+        return self.tree
+
     def _path_at_pos(self, pos):
-        it = self.tree.itemAt(pos)
+        it = self._active_tree().itemAt(pos)
         return it.data(0, Qt.ItemDataRole.UserRole) if it else None
 
     def _current_path(self):
-        it = self.tree.currentItem()
+        it = self._active_tree().currentItem()
         return it.data(0, Qt.ItemDataRole.UserRole) if it else None
 
     def _selected_paths(self):
         out = []
-        for it in self.tree.selectedItems():
+        for it in self._active_tree().selectedItems():
             d = it.data(0, Qt.ItemDataRole.UserRole)
             if d and d != ".." and d != _FMTreeList._PLACEHOLDER:
                 out.append(d)
@@ -1264,7 +1785,7 @@ class FilePane(QWidget):
             act_open_loc.triggered.connect(
                 lambda _, p=path: self.fm._open_in_nemo(p))
             menu.addAction(act_open_loc)
-        menu.exec(self.tree.viewport().mapToGlobal(pos))
+        menu.exec(self._active_tree().viewport().mapToGlobal(pos))
 
     def _new_folder(self):
         if not self._cur_dir:
@@ -1296,13 +1817,14 @@ class FilePane(QWidget):
         # Nemo-style inline rename: the name cell becomes an editable
         # QLineEdit. Commit on Enter, cancel on Esc. The rename runs
         # from _handle_inline_rename when the editor closes.
-        item = self.tree.currentItem()
+        tree = self._active_tree()
+        item = tree.currentItem()
         if item is None:
             return
         full = item.data(0, Qt.ItemDataRole.UserRole)
         if not full or full == "..":
             return
-        self.tree.editItem(item, 0)
+        tree.editItem(item, 0)
 
     def _handle_inline_rename(self, item, old_path, new_name):
         """Called from _FMTreeList._on_item_changed once the editor
@@ -1332,12 +1854,15 @@ class FilePane(QWidget):
         # the old name; setting it again is safe (editing_lock blocks
         # the recursive _on_item_changed) and guarantees the display
         # reflects what's actually on disk.
-        self.tree._editing_lock = True
+        # Lock the tree the item actually lives in — could be the primary
+        # tree OR the carousel's contents tree.
+        item_tree = item.treeWidget() or self.tree
+        item_tree._editing_lock = True
         try:
             item.setData(0, Qt.ItemDataRole.UserRole, new_path)
             item.setText(0, new_name)
         finally:
-            self.tree._editing_lock = False
+            item_tree._editing_lock = False
         renames = {}
         if os.path.isfile(new_path):
             self.fm._sync_in_memory(old_path, new_path)
@@ -1374,11 +1899,12 @@ class FilePane(QWidget):
                 p._refresh()
 
     def _revert_item_name(self, item, old_name):
-        self.tree._editing_lock = True
+        item_tree = item.treeWidget() or self.tree
+        item_tree._editing_lock = True
         try:
             item.setText(0, old_name)
         finally:
-            self.tree._editing_lock = False
+            item_tree._editing_lock = False
 
     def _toggle_lock(self, path):
         """Right-click → Lock / Unlock toggle. Delegates to the main
@@ -1426,17 +1952,18 @@ class FilePane(QWidget):
         # above the top-most. Captured before any deletion so it can't
         # be wiped by a refresh. Keeps the FM focused so the next file
         # shows in preview without a click.
+        tree = self._active_tree()
         sel_set = set(paths)
-        sel_items = [it for it in self.tree.selectedItems()
+        sel_items = [it for it in tree.selectedItems()
                      if it.data(0, Qt.ItemDataRole.UserRole) in sel_set]
         next_focus_item = None
         if sel_items:
             def _row(it):
-                par = it.parent() or self.tree.invisibleRootItem()
+                par = it.parent() or tree.invisibleRootItem()
                 return par.indexOfChild(it)
             last  = max(sel_items, key=_row)
             first = min(sel_items, key=_row)
-            par = last.parent() or self.tree.invisibleRootItem()
+            par = last.parent() or tree.invisibleRootItem()
             for i in range(par.indexOfChild(last) + 1, par.childCount()):
                 sib = par.child(i)
                 sp  = sib.data(0, Qt.ItemDataRole.UserRole)
@@ -1446,7 +1973,7 @@ class FilePane(QWidget):
                     next_focus_item = sib
                     break
             if next_focus_item is None:
-                par2 = first.parent() or self.tree.invisibleRootItem()
+                par2 = first.parent() or tree.invisibleRootItem()
                 for i in range(par2.indexOfChild(first) - 1, -1, -1):
                     sib = par2.child(i)
                     sp  = sib.data(0, Qt.ItemDataRole.UserRole)
@@ -1487,7 +2014,7 @@ class FilePane(QWidget):
         for it in list(sel_items):
             sp = it.data(0, Qt.ItemDataRole.UserRole)
             if sp in trashed:
-                par = it.parent() or self.tree.invisibleRootItem()
+                par = it.parent() or tree.invisibleRootItem()
                 par.removeChild(it)
         # The OTHER pane(s) may have been viewing the same dir, so
         # refresh those — but not us.
@@ -1498,11 +2025,11 @@ class FilePane(QWidget):
         # currentItemChanged, which auto-shows the next file in preview.
         if next_focus_item is not None:
             try:
-                self.tree.setCurrentItem(next_focus_item)
-                self.tree.scrollToItem(next_focus_item)
+                tree.setCurrentItem(next_focus_item)
+                tree.scrollToItem(next_focus_item)
             except RuntimeError:
                 pass
-        self.tree.setFocus()
+        tree.setFocus()
 
 
 def _prune_descendants(paths):
@@ -1536,6 +2063,31 @@ def _suggest_unique_name(target_dir, name):
         if not os.path.exists(os.path.join(target_dir, candidate)):
             return candidate
         i += 1
+
+
+def _copy_path_for_duplicate(src, dst):
+    """Copy a file or folder for FM Ctrl-drop.
+
+    Special case: copying a folder into itself creates ``src/basename``.
+    Plain ``shutil.copytree`` creates that destination and can then see it
+    while walking the source, so exclude the destination basename at the
+    source root.
+    """
+    if not os.path.isdir(src):
+        shutil.copy2(src, dst)
+        return
+    src_abs = os.path.abspath(src)
+    dst_abs = os.path.abspath(dst)
+    ignore = None
+    if os.path.dirname(dst_abs) == src_abs:
+        dst_name = os.path.basename(dst_abs)
+
+        def ignore(_dir, names):
+            if os.path.abspath(_dir) == src_abs and dst_name in names:
+                return {dst_name}
+            return set()
+
+    shutil.copytree(src, dst, ignore=ignore)
 
 
 def _fmt_size(n):
@@ -1825,13 +2377,27 @@ class FileManagerWindow(QWidget):
             if not os.path.exists(src):
                 errors.append(f"Missing: {os.path.basename(src)}")
                 continue
-            dst = os.path.join(target_dir, os.path.basename(src))
+            target_for_src = target_dir
+            if os.path.isdir(src):
+                try:
+                    src_abs = os.path.abspath(src)
+                    tgt_abs = os.path.abspath(target_for_src)
+                    if not is_copy and tgt_abs == src_abs:
+                        skipped.append(os.path.basename(src))
+                        continue
+                    if tgt_abs.startswith(src_abs + os.sep):
+                        errors.append(
+                            f"{os.path.basename(src)}: cannot place a folder inside itself")
+                        continue
+                except Exception:
+                    pass
+            dst = os.path.join(target_for_src, os.path.basename(src))
             if os.path.normpath(src) == os.path.normpath(dst):
                 if is_copy:
                     # Ctrl+drop in same folder → duplicate with auto-name
                     dst = os.path.join(
-                        target_dir,
-                        _suggest_unique_name(target_dir,
+                        target_for_src,
+                        _suggest_unique_name(target_for_src,
                                              os.path.basename(src)))
                 else:
                     skipped.append(os.path.basename(src))
@@ -1843,8 +2409,8 @@ class FileManagerWindow(QWidget):
                     continue
                 if sticky_choice == _ConflictDialog.RENAME:
                     dst = os.path.join(
-                        target_dir,
-                        _suggest_unique_name(target_dir, os.path.basename(src)))
+                        target_for_src,
+                        _suggest_unique_name(target_for_src, os.path.basename(src)))
                 elif sticky_choice == _ConflictDialog.REPLACE:
                     pass  # fall through, shutil.{move,copy2} will overwrite
                 else:
@@ -1861,13 +2427,13 @@ class FileManagerWindow(QWidget):
                         # Guard: still conflicts? bump until unique so we
                         # don't silently overwrite when the user typed an
                         # existing name.
-                        if os.path.exists(os.path.join(target_dir, new_name)):
-                            new_name = _suggest_unique_name(target_dir, new_name)
-                        dst = os.path.join(target_dir, new_name)
+                        if os.path.exists(os.path.join(target_for_src, new_name)):
+                            new_name = _suggest_unique_name(target_for_src, new_name)
+                        dst = os.path.join(target_for_src, new_name)
                     # Replace: dst stays as-is, shutil overwrites.
             try:
                 if is_copy:
-                    shutil.copy2(src, dst)
+                    _copy_path_for_duplicate(src, dst)
                     self._copy_in_memory(src, dst)
                     copies[src] = dst
                     moved += 1
@@ -1993,8 +2559,7 @@ class FileManagerWindow(QWidget):
             if proj:
                 _am.save(proj, app.attrs_data)
                 if app.data is not None:
-                    import torch as _torch
-                    _torch.save(app.data, os.path.join(
+                    _am.atomic_torch_save(app.data, os.path.join(
                         _am.DATA_DIR, f"features_{proj}.pt"))
         except Exception:
             pass

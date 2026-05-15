@@ -4,10 +4,31 @@ The drag/drop conflict dialog and the "prune descendants" logic for
 folder-aware drag are easy to get wrong and easy to test in isolation.
 """
 import os
+import sys
+import types
+from types import SimpleNamespace
 
 import pytest
 
-from aisearch_file_manager import _suggest_unique_name, _prune_descendants
+# Keep this helper test pure: aisearch_file_manager only needs the extension
+# constants here, while aisearch_logic loads the CLIP model at import time.
+_real_logic = sys.modules.get("aisearch_logic")
+sys.modules["aisearch_logic"] = types.SimpleNamespace(
+    EXT_IMG=(".png", ".jpg", ".jpeg", ".webp", ".bmp"),
+    EXT_VID=(".mp4", ".mov", ".avi", ".mkv", ".webm"),
+)
+try:
+    from aisearch_file_manager import (
+        FileManagerWindow,
+        _suggest_unique_name,
+        _prune_descendants,
+        _drop_paths_allowed,
+    )
+finally:
+    if _real_logic is None:
+        sys.modules.pop("aisearch_logic", None)
+    else:
+        sys.modules["aisearch_logic"] = _real_logic
 
 
 def test_suggest_unique_name_when_target_empty(tmp_path):
@@ -70,3 +91,65 @@ def test_prune_descendants_handles_double_descent(tmp_path):
     pruned = _prune_descendants([str(outer), str(mid), str(leaf)])
     pruned_set = {os.path.normpath(p) for p in pruned}
     assert pruned_set == {os.path.normpath(str(outer))}
+
+
+def _bare_fm():
+    fm = FileManagerWindow.__new__(FileManagerWindow)
+    fm.app = SimpleNamespace(
+        data={"paths": []},
+        attrs_data={},
+        current_project=None,
+    )
+    fm.refresh_all = lambda: None
+    fm._update_main_table_paths = lambda _renames: None
+    return fm
+
+
+def test_move_files_into_ctrl_copy_duplicates_folder_in_same_parent(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "x.png").write_bytes(b"image")
+
+    fm = _bare_fm()
+    fm.move_files_into([str(folder)], str(tmp_path), mode="copy")
+
+    copied = tmp_path / "folder (1)"
+    assert copied.is_dir()
+    assert (copied / "x.png").read_bytes() == b"image"
+    assert folder.is_dir()
+
+
+def test_move_files_into_ctrl_copy_folder_dropped_on_itself_copies_there(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "x.png").write_bytes(b"image")
+
+    fm = _bare_fm()
+    fm.move_files_into([str(folder)], str(folder), mode="copy")
+
+    assert (folder / "folder" / "x.png").read_bytes() == b"image"
+    assert not (folder / "folder" / "folder").exists()
+    assert not (tmp_path / "folder (1)").exists()
+
+
+def test_common_drop_policy_allows_copy_onto_same_folder(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+
+    assert _drop_paths_allowed([str(folder)], str(folder), is_copy=True)
+
+
+def test_common_drop_policy_blocks_move_onto_same_folder(tmp_path):
+    folder = tmp_path / "folder"
+    folder.mkdir()
+
+    assert not _drop_paths_allowed([str(folder)], str(folder), is_copy=False)
+
+
+def test_common_drop_policy_blocks_folder_into_descendant(tmp_path):
+    folder = tmp_path / "folder"
+    child = folder / "child"
+    child.mkdir(parents=True)
+
+    assert not _drop_paths_allowed([str(folder)], str(child), is_copy=True)
+    assert not _drop_paths_allowed([str(folder)], str(child), is_copy=False)

@@ -102,7 +102,7 @@ class _PersonCard(QFrame):
         # ID label
         lbl = QLabel(f"P{pid}")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("color:#aaccff; font-size:10px; font-weight:bold;")
+        lbl.setStyleSheet("color:#aaccff; font-size:14px; font-weight:bold;")
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(lbl)
 
@@ -213,6 +213,9 @@ class _PersonGroup(QWidget):
     _SS_NORMAL    = "QWidget#_pg_hdr { background:#2a2d2a; border-radius:4px; }"
     _SS_DROP_CARD = ("QWidget#_pg_hdr { background:#252535; border:1px solid #5566bb; "
                      "border-radius:4px; }")
+    # Session-wide "don't ask again" flag for the reassign-into-taken-ID
+    # confirmation. Class-level so it's shared across every group card.
+    _reassign_skip_warn = False
 
     def __init__(self, pids: list, registry: dict, pid_to_path: dict,
                  save_name_cb, preview_cb, unlink_cb, changed_cb,
@@ -295,8 +298,8 @@ class _PersonGroup(QWidget):
         for p in sorted_pids:
             chip = QLabel(f"P{p}")
             chip.setStyleSheet(
-                "color:#aaccff; font-size:9px; background:#333; "
-                "border-radius:3px; padding:1px 5px;")
+                "color:#aaccff; font-size:13px; font-weight:bold; "
+                "background:#333; border-radius:3px; padding:1px 6px;")
             hdr_lay.addWidget(chip)
 
         # ── Reassign button ───────────────────────────────────────────────────
@@ -479,21 +482,31 @@ class _PersonGroup(QWidget):
         # build time — fresh enough for an immediate decision.
         registry = getattr(self, "_reassign_registry", {}) or {}
         own = {p.lower() for p in self._reassign_pids}
-        if new_id in registry and new_id not in own:
+        if new_id in registry and new_id not in own \
+                and not _PersonGroup._reassign_skip_warn:
+            from PyQt6.QtWidgets import QCheckBox as _QCB
             owner_name = registry.get(new_id, "")
             owner_str = f"{new_id} ({owner_name})" if owner_name else new_id
-            ans = QMessageBox.question(
-                self, _t("ID already taken / ID は使用中"),
+            _mb = QMessageBox(self)
+            _mb.setIcon(QMessageBox.Icon.Question)
+            _mb.setWindowTitle(_t("ID already taken / ID は使用中"))
+            _mb.setText(
                 _t(f"Person ID '{owner_str}' is already registered.\n\n"
                    f"Reassign anyway? Files in this group will be merged "
                    f"into the existing person. / "
                    f"人物ID '{owner_str}' は既に登録されています。\n\n"
                    f"このまま再割り当てしますか？このグループのファイルは "
-                   f"既存の人物に統合されます。"),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if ans != QMessageBox.StandardButton.Yes:
+                   f"既存の人物に統合されます。"))
+            _mb.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            _mb.setDefaultButton(QMessageBox.StandardButton.No)
+            _cb = _QCB(_t("Don't show this confirmation again / "
+                          "次回から確認しない"))
+            _mb.setCheckBox(_cb)
+            if _mb.exec() != QMessageBox.StandardButton.Yes:
                 return
+            if _cb.isChecked():
+                _PersonGroup._reassign_skip_warn = True
         self._reassign_cb(self._reassign_pids, new_id)
 
 
@@ -917,7 +930,18 @@ class _PersonMixin:
         faces      = db.get("faces", {})
         aliases      = attrs_mod.load_person_aliases()
         right_groups = attrs_mod.load_right_groups()
-        all_pids   = sorted(p for p in faces.keys() if p != "000")
+        # Cards come from the faces DB AND from any person_id that only
+        # exists in attrs (assigned via filename P-code or the preview
+        # P-field, never face-detected). Without the attrs sweep those
+        # people have no card, so the canvas "edit person" jump can't
+        # highlight or scroll to them.
+        _pid_set = {p for p in faces.keys() if p != "000"}
+        for _entry in (getattr(self.app, "attrs_data", {}) or {}).values():
+            if isinstance(_entry, dict):
+                _ep = (_entry.get("person_id") or "").strip()
+                if _ep and _ep != "000":
+                    _pid_set.add(_ep)
+        all_pids   = sorted(_pid_set)
 
         pid_to_path = {}
         # Primary: face DB source_path
@@ -938,7 +962,7 @@ class _PersonMixin:
                 pid_to_path=pid_to_path,
                 save_name_cb=self._save_person_name,
                 preview_cb=self._open_person_preview,
-                unlink_cb=self._unlink_person,
+                unlink_cb=self._dismantle_person,
                 changed_cb=self._rebuild_person_groups,
                 reorder_cb=self._save_column_order,
                 is_right=is_right,
@@ -1003,7 +1027,15 @@ class _PersonMixin:
                 if (getattr(c, "_pid", "") or "").strip().lower() == (pid or "").strip().lower():
                     self._select_person_card(c)
                     break
-        ph = getattr(getattr(self, "app", None), "preview_handler", None)
+        # Populate the main page with every file in this person's alias
+        # group so the user can browse them all, not just the one card.
+        _app = getattr(self, "app", None)
+        if _app is not None and hasattr(_app, "show_person_group"):
+            try:
+                _app.show_person_group(pid)
+            except Exception:
+                pass
+        ph = getattr(_app, "preview_handler", None)
         # Try source_path first
         if src and os.path.exists(src):
             if ph:
@@ -1125,6 +1157,48 @@ class _PersonMixin:
         attrs_mod.remove_person_from_aliases(pid)
         attrs_mod.remove_from_right_group(pid)
         self._rebuild_person_groups()
+        self._refresh_main_person_view()
+
+    def _dismantle_person(self, pid):
+        """× button on a grouped card. Plain detach isn't enough — the
+        file still has P<pid> baked into its name, so the filename
+        authority re-binds it to <pid> on the next scan ('it comes back
+        to the same PID'). Instead, reassign this card's files to a
+        fresh unused person ID: reassign_person_id renames the files on
+        disk too, so the new ID actually sticks. Then fully detach the
+        new ID from every group so it stands alone."""
+        proj = (getattr(self, "_person_tab_project", None)
+                or getattr(self.app, "current_project", ""))
+        new_id = attrs_mod.next_free_person_id(proj)
+        if new_id:
+            attrs_data = getattr(self.app, "attrs_data", {})
+            attrs_data = attrs_mod.reassign_person_id(
+                pid, new_id, proj, attrs_data)
+            attrs_mod.save(proj, attrs_data)
+            self.app.attrs_data = attrs_data
+            # reassign_person_id swapped pid→new_id inside the groups;
+            # detach new_id so the dismantled card is truly on its own.
+            attrs_mod.remove_person_from_aliases(new_id)
+            attrs_mod.remove_from_right_group(new_id)
+        else:
+            # ID space exhausted — fall back to a plain detach.
+            attrs_mod.remove_person_from_aliases(pid)
+            attrs_mod.remove_from_right_group(pid)
+        self._rebuild_person_groups()
+        self._refresh_main_person_view()
+        pw = getattr(getattr(self.app, "preview_handler", None), "window", None)
+        if pw and hasattr(pw, "_refresh_person_id_combo"):
+            pw._refresh_person_id_combo(force=True)
+
+    def _refresh_main_person_view(self):
+        """If the main page is showing a person-group listing, re-render
+        it so membership edits in this tab are reflected immediately."""
+        app = getattr(self, "app", None)
+        if app is not None and hasattr(app, "refresh_person_group_view"):
+            try:
+                app.refresh_person_group_view()
+            except Exception:
+                pass
 
     def _save_person_name(self, pid, name):
         proj = getattr(self.app, "current_project", "")
@@ -1183,7 +1257,7 @@ class _PersonMixin:
             pid_to_path=pid_to_path,
             save_name_cb=self._save_person_name,
             preview_cb=self._open_person_preview,
-            unlink_cb=self._unlink_person,
+            unlink_cb=self._dismantle_person,
             changed_cb=self._rebuild_person_groups,
         )
         lay = self._person_groups_vbox
@@ -1220,15 +1294,40 @@ class _PersonMixin:
                     target = c
                     break
             if target is None:
-                if retry < 8:
+                if retry < 15:
                     QTimer.singleShot(120, lambda: _try(retry + 1))
+                else:
+                    # Genuinely no card for this pid — don't fail
+                    # silently, the user is left wondering why the
+                    # jump did nothing.
+                    try:
+                        from PyQt6.QtWidgets import QMessageBox
+                        QMessageBox.information(
+                            self, _t("Person / 人物"),
+                            _t(f"No card found for P{pid}. / "
+                               f"P{pid} のカードが見つかりません。"))
+                    except Exception:
+                        pass
                 return
+            # If the card sits inside a collapsed group, expand it so
+            # the highlight + scroll are actually visible.
+            _grp = target.parent()
+            while _grp is not None and not isinstance(_grp, _PersonGroup):
+                _grp = _grp.parent()
+            if isinstance(_grp, _PersonGroup):
+                _arrow = getattr(_grp, "_arrow", None)
+                if _arrow is not None and not _arrow.isChecked():
+                    _arrow.setChecked(True)
             from PyQt6.QtWidgets import QScrollArea
             sa = target.parent()
             while sa is not None and not isinstance(sa, QScrollArea):
                 sa = sa.parent()
             if isinstance(sa, QScrollArea):
-                sa.ensureWidgetVisible(target, 50, 50)
+                # Defer the scroll one tick — if we just expanded a
+                # group the layout hasn't settled yet, so an immediate
+                # ensureWidgetVisible scrolls to the wrong offset.
+                QTimer.singleShot(0, lambda _sa=sa, _t=target:
+                                  _sa.ensureWidgetVisible(_t, 50, 50))
             self._select_person_card(target)
         if pid:
             _try()
@@ -1342,6 +1441,7 @@ class _PersonMixin:
         attrs_mod.save(proj, attrs_data)
         self.app.attrs_data = attrs_data
         self._rebuild_person_groups()
+        self._refresh_main_person_view()
         # Refresh preview combo if open
         pw = getattr(getattr(self.app, "preview_handler", None), "window", None)
         if pw and hasattr(pw, "_refresh_person_id_combo"):

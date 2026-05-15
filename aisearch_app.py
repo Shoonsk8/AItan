@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.5.4"
+VERSION = "2.5.8"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -362,7 +362,6 @@ class FileTable(QTableWidget):
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_src_row is not None:
             sel_rows = sorted({idx.row() for idx in self.selectionModel().selectedRows()})
-            press_on_selected = self._drag_src_row in sel_rows
             # Threshold check — start a real Qt drag with file-URL MIME so
             # external drop targets (FM window, file managers) can receive
             # the move. Internal drops (drop on another row to move into
@@ -385,9 +384,12 @@ class FileTable(QTableWidget):
                 self._drag_active  = False
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
                 return
-            if press_on_selected:
-                # Below threshold and press was on a selected row: suppress
-                # Qt's default rubberband / selection-changing handler.
+            # Below threshold and press was on any row: suppress MouseMove
+            # so Qt's ExtendedSelection doesn't read drift as a range-extend
+            # (which looks like shift+click to the user). Empty-area presses
+            # (_drag_src_row == -1) fall through so the rubber-band still
+            # works there. Mirrors the FM tree's drag-defer behavior.
+            if self._drag_src_row >= 0:
                 return
         super().mouseMoveEvent(event)
 
@@ -525,8 +527,12 @@ class AISearchApp(QMainWindow):
         self.attrs_data        = {}
         self._emb_meta_scanned = set()
         self._collapsed_groups = set()
+        self._fn_filter_text   = ""
         self._watcher          = None
         self._browse_dir       = None
+        # Set when the main table shows a Persons-tab alias group; lets
+        # the Persons tab refresh that view after membership edits.
+        self._person_group_view_pid = None
         # Resume position for stopped dup scans (survives restart via
         # dups_<PROJECT>_progress.json sidecar).
         self._dup_resume_index = 0
@@ -1141,7 +1147,70 @@ class AISearchApp(QMainWindow):
         _table_wrap_lay.addWidget(self.search_status_label)
         _table_wrap_lay.addWidget(self.search_progress)
         _table_wrap_lay.addWidget(self.row_position_label)
+        # Filename filter: substring match against basename. Hides
+        # non-matching rows but composes with group collapse so a
+        # collapsed group stays collapsed.
+        _fn_row = QWidget()
+        _fn_row_lay = QHBoxLayout(_fn_row)
+        _fn_row_lay.setContentsMargins(2, 0, 2, 2)
+        _fn_row_lay.setSpacing(4)
+        _fn_lbl = QLabel(_t("Filename / ファイル名:"))
+        self.fn_filter_input = QLineEdit()
+        self.fn_filter_input.setPlaceholderText(
+            _t("filter by filename… (Esc to clear)"))
+        self.fn_filter_input.setClearButtonEnabled(True)
+        self.fn_filter_input.textChanged.connect(self._on_fn_filter_changed)
+        # Esc clears the field and refocuses the table.
+        from PyQt6.QtGui import QShortcut as _QSc, QKeySequence as _QKs
+        _esc_sc = _QSc(_QKs("Escape"), self.fn_filter_input)
+        _esc_sc.setContext(Qt.ShortcutContext.WidgetShortcut)
+        _esc_sc.activated.connect(lambda: (self.fn_filter_input.clear(),
+                                           self.table.setFocus()))
+        _fn_row_lay.addWidget(_fn_lbl)
+        _fn_row_lay.addWidget(self.fn_filter_input, 1)
+        # "Disassemble non-samples" — only meaningful in the person-group
+        # view. Select the rows that are truly this person, click this,
+        # and every OTHER file gets disassembled (person_id cleared,
+        # P-code stripped) while the person's face pool is rebuilt from
+        # the selected samples. Hidden until show_person_group runs.
+        self.btn_disasm_nonsamples = QPushButton(
+            _t("✂ Keep selected as sample, disassemble rest / "
+               "✂ 選択をサンプルにして残りを解除"))
+        self.btn_disasm_nonsamples.setToolTip(_t(
+            "Person-group view only: the selected rows become this "
+            "person's samples; every other file is disassembled. / "
+            "パーソングループ表示専用：選択行をこの人物のサンプルにし、"
+            "他のファイルをすべて解除します。"))
+        self.btn_disasm_nonsamples.setStyleSheet(
+            "QPushButton { background:#5a2a2a; color:#ffcccc; "
+            "border:1px solid #aa5555; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#7a3a3a; }")
+        self.btn_disasm_nonsamples.clicked.connect(self._disassemble_nonsamples)
+        self.btn_disasm_nonsamples.setVisible(False)
+        # "Sort by sample face" — pick one row as the sample, the rest of
+        # the group is re-sorted by face-distance to it (closest first),
+        # colored green→red like dup mode. Wrong faces sink to the
+        # bottom where they're easy to select + disassemble.
+        self.btn_sort_by_sample = QPushButton(
+            _t("↕ Sort by sample face / ↕ サンプル顔で並替"))
+        self.btn_sort_by_sample.setToolTip(_t(
+            "Person-group view only: select one row as the sample; "
+            "the group re-sorts by face similarity to it. / "
+            "パーソングループ表示専用：1行をサンプルに選択すると、"
+            "顔の近さで並べ替えます。"))
+        self.btn_sort_by_sample.setStyleSheet(
+            "QPushButton { background:#2a3a5a; color:#cce0ff; "
+            "border:1px solid #5577aa; padding:3px 10px; font-weight:bold; }"
+            "QPushButton:hover { background:#3a4a7a; }")
+        self.btn_sort_by_sample.clicked.connect(self._sort_group_by_sample)
+        self.btn_sort_by_sample.setVisible(False)
+        _fn_row_lay.addWidget(self.btn_sort_by_sample)
+        _fn_row_lay.addWidget(self.btn_disasm_nonsamples)
+        _table_wrap_lay.addWidget(_fn_row)
         _table_wrap_lay.addWidget(self.table, stretch=1)
+        # Re-apply filter whenever rows are inserted (e.g. new search results)
+        self.table.model().rowsInserted.connect(
+            lambda *a: self._apply_filename_filter())
         self._main_splitter.addWidget(_table_wrap)
         # Header gets just enough; table gets the rest by default
         self._main_splitter.setStretchFactor(0, 0)
@@ -1253,6 +1322,15 @@ class AISearchApp(QMainWindow):
         self.btn_undo.setText(_t("↩ Undo / ↩ 元に戻す"))
         self.btn_undo.setToolTip(
             _t(self._undo_stack[-1]["desc"]) if self._undo_stack else _t("Nothing to undo / 元に戻す操作なし"))
+        # Apply Rules button — toggles between Apply Rules and Stop
+        # while running. refresh_language must pick the right one based
+        # on _apply_rules_running so the button doesn't stay in the
+        # previous language after a switch.
+        if hasattr(self, 'btn_apply_rules'):
+            if getattr(self, '_apply_rules_running', False):
+                self.btn_apply_rules.setText(_t("⏸ Stop / ⏸ 停止"))
+            else:
+                self.btn_apply_rules.setText(_t("🔧 Apply Rules / 🔧 規則適用"))
         # Inline attrs
         if hasattr(self, '_inline_note'):
             self._inline_note.setPlaceholderText(_t("Note… / ノート…"))
@@ -1757,7 +1835,7 @@ class AISearchApp(QMainWindow):
                 elif sub["type"] == "delete":
                     self._undo_delete(sub, save_db=False, save_attrs=False, select=False)
             if self.data:
-                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
             attrs_mod.save(self.current_project, self.attrs_data)
             self._rebuild_dup_display_data()
             self._save_dup_results()
@@ -1828,7 +1906,7 @@ class AISearchApp(QMainWindow):
                 if os.path.normpath(p) == os.path.normpath(new_path):
                     self.data["paths"][i] = old_path
                     if save_db:
-                        torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                        attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
         for r in range(self.table.rowCount()):
             if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(new_path):
@@ -1856,7 +1934,7 @@ class AISearchApp(QMainWindow):
                 self.data["paths"].append(orig_path)
                 self.data["embeddings"] = torch.cat([self.data["embeddings"], emb.unsqueeze(0)])
                 if save_db:
-                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                    attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
         row = min(action["row"], self.table.rowCount())
         self.table.insertRow(row)
         score_item = QTableWidgetItem(action["score"])
@@ -2010,6 +2088,41 @@ class AISearchApp(QMainWindow):
                                  | QItemSelectionModel.SelectionFlag.Deselect)
         self._recolor_dup_groups()
         self._highlight_unmarked_rows()
+        # Apply filename filter ON TOP — collapse-hidden rows stay
+        # hidden; visible rows that don't match get hidden too.
+        self._apply_filename_filter()
+
+    def _on_fn_filter_changed(self, text):
+        """Filename filter input changed — reset row visibility to base
+        state (group collapse / hide-confirmed), then hide non-matching
+        rows on top."""
+        self._fn_filter_text = text or ""
+        header = self.table.horizontalHeaderItem(0)
+        if header and header.text() == "Group":
+            # _apply_row_visibility handles the grouped case AND now
+            # calls _apply_filename_filter at the end.
+            self._apply_row_visibility()
+        else:
+            # Non-grouped (CLIP search results, etc.) — show every row
+            # first so a shrinking filter restores rows, then apply.
+            for r in range(self.table.rowCount()):
+                self.table.setRowHidden(r, False)
+            self._apply_filename_filter()
+
+    def _apply_filename_filter(self):
+        """Hide rows whose basename doesn't contain the filter
+        substring. Composes with group collapse — only touches rows
+        that are currently visible."""
+        needle = (self._fn_filter_text or "").strip().lower()
+        if not needle:
+            return
+        import os as _os
+        for r in range(self.table.rowCount()):
+            if self.table.isRowHidden(r):
+                continue
+            p = self.table.get_row_path(r) or ""
+            if needle not in _os.path.basename(p).lower():
+                self.table.setRowHidden(r, True)
 
     def _on_group_cell_click(self, row, col):
         if col != 0: return
@@ -2341,7 +2454,12 @@ class AISearchApp(QMainWindow):
                 return
             faces[pid]["source_path"] = os.path.abspath(path)
             attrs_mod.save_faces_db(proj, db)
+            try:
+                attrs_mod._faces_db_cache.pop(proj, None)
+            except Exception:
+                pass
             self._refresh_persons_tab_if_open()
+            self._refresh_row_rim_for_path(path)
             self.statusBar().showMessage(
                 _t(f"Rep pic for {pid} updated. / {pid} の代表画像を更新しました。"),
                 4000)
@@ -2406,6 +2524,7 @@ class AISearchApp(QMainWindow):
             except Exception:
                 pass
             self._refresh_persons_tab_if_open()
+            self._refresh_row_rim_for_path(path)
             self.statusBar().showMessage(
                 _t(f"BASE face for {pid} updated ({len(new_pool)} samples). / "
                    f"{pid} の基準顔を更新しました（{len(new_pool)} サンプル）。"),
@@ -2450,16 +2569,33 @@ class AISearchApp(QMainWindow):
             faces.setdefault(pid, {"embeddings": [], "source_path": ""})
             samples = list(faces[pid].get("embeddings", []))
             samples.append(enc.tolist())
+            # Track the source path of EVERY sample, not just the original
+            # base file (which is what `source_path` records). User: "you
+            # mark the base sample and samples but I do not see often,
+            # only one was marked." Without this list the row-rim only
+            # highlights the one base sample; siblings stay unmarked even
+            # though they ARE in the embeddings pool.
+            sample_paths = list(faces[pid].get("source_paths", []))
+            # Seed list with the original base source_path on first run
+            # so it stays markable too.
+            _orig_sp = faces[pid].get("source_path", "")
+            if _orig_sp and _orig_sp not in sample_paths:
+                sample_paths.append(_orig_sp)
+            if path not in sample_paths:
+                sample_paths.append(path)
             # Keep at most 20 samples — same cap as the auto-detect path
             if len(samples) > 20:
                 samples = samples[-20:]
+                sample_paths = sample_paths[-20:]
             faces[pid]["embeddings"] = samples
+            faces[pid]["source_paths"] = sample_paths
             attrs_mod.save_faces_db(proj, db)
             try:
                 attrs_mod._faces_db_cache.pop(proj, None)
             except Exception:
                 pass
             self._refresh_persons_tab_if_open()
+            self._refresh_row_rim_for_path(path)
             self.statusBar().showMessage(
                 _t(f"Added to {pid} (now {len(samples)} samples). / "
                    f"{pid} に追加しました（現在 {len(samples)} サンプル）。"),
@@ -2561,48 +2697,94 @@ class AISearchApp(QMainWindow):
                 _t("This file has no person_id assigned. / "
                    "このファイルには人物IDが割当されていません。"))
             return
-        ans = QMessageBox.question(
-            self, _t("Dismantle face data / 顔データ解除"),
-            _t(f"Remove this file's contribution to P{pid} from the "
-               f"faces DB and clear its person_id?\n\n"
-               f"P{pid} に対するこのファイルの寄与を顔DBから削除し、"
-               f"person_id を解除しますか？"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes)
-        if ans != QMessageBox.StandardButton.Yes:
-            return
+        if not getattr(self, "_dismantle_face_skip_warn", False):
+            from PyQt6.QtWidgets import QCheckBox as _QCB
+            # NOTE: _t() splits on ' / ' — the EN and JP halves MUST be
+            # joined by ' / ', not '\n\n', or the dialog shows both.
+            _mb = QMessageBox(self)
+            _mb.setIcon(QMessageBox.Icon.Question)
+            _mb.setWindowTitle(_t("Dismantle face data / 顔データ解除"))
+            _mb.setText(
+                _t(f"Remove this file's contribution to P{pid} from the "
+                   f"faces DB and clear its person_id? / "
+                   f"P{pid} に対するこのファイルの寄与を顔DBから削除し、"
+                   f"person_id を解除しますか？"))
+            _mb.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            _mb.setDefaultButton(QMessageBox.StandardButton.Yes)
+            _cb = _QCB(_t("Don't show this confirmation again / "
+                          "次回から確認しない"))
+            _mb.setCheckBox(_cb)
+            if _mb.exec() != QMessageBox.StandardButton.Yes:
+                return
+            if _cb.isChecked():
+                self._dismantle_face_skip_warn = True
         result = attrs_mod.dismantle_face_assignment(path, proj, pid)
         if result is None:
             QMessageBox.warning(self, _t("Dismantle / 解除"),
                 _t("Could not extract a face from this file. "
-                   "person_id was cleared anyway. / "
+                   "It will still be reassigned to a fresh ID. / "
                    "このファイルから顔を抽出できませんでした。"
-                   "person_id は解除しました。"))
-        # Clear person_id in attrs_data regardless — the user has
-        # asked to disassociate this file from any pid.
-        if path in self.attrs_data:
-            self.attrs_data[path]["person_id"] = ""
+                   "新しいIDへの再割当は行います。"))
+        # Reassign to an OPEN (free, unused) person ID and rename the
+        # file so the P-code in the filename points to the new ID. A
+        # plain clear isn't enough — the old P{pid} stays baked into the
+        # filename and the filename authority re-binds it on the next
+        # scan ("comes back to the same PID").
+        old_path = path
+        new_id = attrs_mod.next_free_person_id(proj)
+        if new_id:
+            entry = self.attrs_data.setdefault(path, {})
+            entry["person_id"] = new_id
+            new_path = attrs_mod.rename_with_person_id(
+                self.attrs_data, path, new_id,
+                flush_stores=True, project=proj)
             attrs_mod.save(proj, self.attrs_data)
+            path = new_path  # downstream refresh uses the renamed path
+        else:
+            # ID space exhausted — fall back to clearing person_id.
+            if path in self.attrs_data:
+                self.attrs_data[path]["person_id"] = ""
+                attrs_mod.save(proj, self.attrs_data)
+        # The file was renamed on disk — sync every view that still
+        # points at the old name, or the row vanishes (handle_preview
+        # drops rows whose path no longer exists on disk).
+        if new_id and path != old_path:
+            for _r in range(self.table.rowCount()):
+                if self.table.get_row_path(_r) == old_path:
+                    self.table.set_row_path(_r, path)
+            if self.data and "paths" in self.data \
+                    and old_path in self.data["paths"]:
+                self.data["paths"][self.data["paths"].index(old_path)] = path
+            fm_win = getattr(self, "_fm_win", None)
+            if fm_win is not None:
+                try:
+                    fm_win.refresh_all()
+                except Exception:
+                    pass
         # Refresh preview if it's open on this file
         try:
             pw = getattr(self.preview_handler, "window", None)
-            if pw and getattr(self.preview_handler, "current_path", None) == path:
+            if pw and getattr(self.preview_handler, "current_path", None) == old_path:
+                self.preview_handler.current_path = path
                 pw._refresh_attrs_inner(path)
         except Exception:
             pass
         self._refresh_persons_tab_if_open()
+        msg_parts = []
         if result:
-            msg_parts = []
             if result["samples_removed"]:
                 msg_parts.append(f"removed {result['samples_removed']} sample")
             if result["pid_deleted"]:
                 msg_parts.append(f"P{pid} had no samples left — pid deleted")
             elif result["source_path_cleared"]:
                 msg_parts.append(f"P{pid} rep pic cleared")
-            self.statusBar().showMessage(
-                _t(f"Dismantled: {', '.join(msg_parts) or 'attrs only'} / "
-                   f"解除: {', '.join(msg_parts) or 'attrs のみ'}"),
-                5000)
+        if new_id:
+            msg_parts.append(f"reassigned to open ID P{new_id}")
+        self.statusBar().showMessage(
+            _t(f"Dismantled: {', '.join(msg_parts) or 'attrs only'} / "
+               f"解除: {', '.join(msg_parts) or 'attrs のみ'}"),
+            5000)
 
     def _toggle_file_lock(self, path):
         """Flip entry["editable"] for a single file. Locked
@@ -3037,7 +3219,7 @@ class AISearchApp(QMainWindow):
                 known = set(os.path.normpath(p) for p in paths)
                 if moved_attrs_dirty:
                     _am_tmp.save(self.current_project, self.attrs_data)
-                torch.save(self.data,
+                _am_tmp.atomic_torch_save(self.data,
                            os.path.join(_am_tmp.DATA_DIR,
                                         f"features_{self.current_project}.pt"))
                 # Refresh table for moved files
@@ -3205,7 +3387,7 @@ class AISearchApp(QMainWindow):
                                                    update_clip_pt=False)
 
         if missing_idx or added:
-            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+            attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
             parts = []
             if added:       parts.append(f"{added} added")
             if missing_idx: parts.append(f"{len(missing_idx)} removed")
@@ -5062,8 +5244,11 @@ class AISearchApp(QMainWindow):
             faces = db.get("faces", {}) if isinstance(db, dict) else {}
             cache = getattr(self, "_face_sample_set_cache", None)
             if cache is None or cache[:2] != (proj, id(faces)):
-                # Rebuild — flatten every person's source_path into a set
-                # of normpath strings for O(1) membership tests.
+                # Rebuild — flatten every person's sample paths (the
+                # legacy single `source_path` + the new per-sample
+                # `source_paths` list) into a set of normpath strings
+                # for O(1) membership tests. The list makes all samples
+                # in a person's pool markable, not just the base.
                 paths = set()
                 for _fdata in faces.values():
                     if not isinstance(_fdata, dict):
@@ -5071,6 +5256,9 @@ class AISearchApp(QMainWindow):
                     sp = _fdata.get("source_path", "")
                     if sp:
                         paths.add(os.path.normpath(sp))
+                    for _sp in _fdata.get("source_paths", []) or []:
+                        if isinstance(_sp, str) and _sp:
+                            paths.add(os.path.normpath(_sp))
                 cache = (proj, id(faces), paths)
                 self._face_sample_set_cache = cache
             return os.path.normpath(full_path) in cache[2]
@@ -5123,6 +5311,27 @@ class AISearchApp(QMainWindow):
                 it.setIcon(_QI())
         except Exception:
             pass
+
+    def _refresh_row_rim_for_path(self, path):
+        """Refresh the rim icon of whatever table row currently shows
+        `path`, and mirror it into the FM window. Use after a face
+        sample / base / rep-pic change so the cyan sample marker
+        appears without a full reload. Drops the sample-path cache
+        first — _is_face_sample won't see the new DB otherwise."""
+        if not path:
+            return
+        self._face_sample_set_cache = None
+        _norm = os.path.normpath(path)
+        for r in range(self.table.rowCount()):
+            rp = self.table.get_row_path(r)
+            if rp and os.path.normpath(rp) == _norm:
+                self._refresh_row_rim(r)
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
 
     def _refresh_all_row_rims(self):
         """Walk every row and update its Name-cell rim icon. Cheap;
@@ -5335,6 +5544,11 @@ class AISearchApp(QMainWindow):
 
         self._search_running = True
         self.query_path = os.path.abspath(p)
+        # Leaving the person-group view — drop the tracked pid.
+        self._person_group_view_pid = None
+        if hasattr(self, "btn_disasm_nonsamples"):
+            self.btn_disasm_nonsamples.setVisible(False)
+            self.btn_sort_by_sample.setVisible(False)
 
         # Show image immediately — load at preview resolution (700px) only.
         # QImageReader.setScaledSize tells the JPEG decoder to use DCT scaling
@@ -5697,6 +5911,11 @@ class AISearchApp(QMainWindow):
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._update_mode_buttons("browse")
         self._update_header_layout_for_mode()
+        # A real directory browse — no longer the person-group view.
+        self._person_group_view_pid = None
+        if hasattr(self, "btn_disasm_nonsamples"):
+            self.btn_disasm_nonsamples.setVisible(False)
+            self.btn_sort_by_sample.setVisible(False)
 
         valid_exts = tuple(
             ext.lower() for ext in (logic.EXT_IMG + logic.EXT_VID))
@@ -5729,6 +5948,288 @@ class AISearchApp(QMainWindow):
             self._select_row(0)
             self.table.scrollToTop()
         self.table.setFocus()
+
+    def show_person_group(self, pid):
+        """Populate the main table with every file tagged with a
+        person_id in the same alias group as `pid`. Called when a face
+        card is clicked in the Persons settings tab — lets the user see
+        all of that person's files on the main page."""
+        pid = (pid or "").strip()
+        if not pid:
+            return
+        self._person_group_view_pid = pid
+        if hasattr(self, "btn_disasm_nonsamples"):
+            self.btn_disasm_nonsamples.setVisible(True)
+            self.btn_sort_by_sample.setVisible(True)
+        group = attrs_mod.get_alias_group(pid)
+        group_norm = {g.strip().lower() for g in group}
+        files = []
+        for fpath, entry in (self.attrs_data or {}).items():
+            _ep = (entry.get("person_id") or "").strip().lower()
+            if _ep and _ep in group_norm and os.path.exists(fpath):
+                files.append(fpath)
+        try:
+            files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        except OSError:
+            pass
+        # Present as a browse-style file listing (virtual — not a real
+        # directory, so _browse_dir stays None).
+        self._browse_dir = None
+        self.config["last_mode"] = "browse"
+        self._update_mode_buttons("browse")
+        self._update_header_layout_for_mode()
+        self.table.setHorizontalHeaderLabels(
+            ["#", _t("Size / サイズ"), _t("Name / 名前"),
+             _t("Path / パス"), _t("Date / 日付"), _t("Type / 種類")])
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        for i, fp in enumerate(files):
+            self._append_row(str(i + 1),
+                             logic.get_sz_readable(fp),
+                             os.path.basename(fp),
+                             self._mask_path(fp),
+                             fp)
+        self.table.setSortingEnabled(True)
+        if self.table.rowCount():
+            self._select_row(0)
+            self.table.scrollToTop()
+        self.table.setFocus()
+        # Bring the main window forward so the user sees the result.
+        self.raise_()
+        self.activateWindow()
+        _grp_label = ", ".join("P" + g for g in sorted(group))
+        self.statusBar().showMessage(
+            _t(f"Person group {_grp_label}: {len(files)} file(s) / "
+               f"パーソングループ {_grp_label}: {len(files)} 件"), 6000)
+
+    def refresh_person_group_view(self):
+        """Re-render the person-group listing if the main page is still
+        showing one. Called from the Persons tab after an edit changes
+        group membership (dismantle / unlink / reassign) so the main
+        page doesn't keep showing stale files."""
+        pid = getattr(self, "_person_group_view_pid", None)
+        if not pid:
+            return
+        # Our person-group view runs in "browse" mode with _browse_dir
+        # left None (a real directory browse sets _browse_dir). If the
+        # user has since navigated elsewhere, don't hijack their view.
+        if self.config.get("last_mode") != "browse" or self._browse_dir:
+            return
+        self.show_person_group(pid)
+
+    def _disassemble_nonsamples(self):
+        """Person-group view action: the currently-selected rows are the
+        verified samples for this person; every OTHER file in the view
+        is disassembled — person_id cleared, P-code stripped from the
+        filename — and the person's faces-DB pool is rebuilt from only
+        the selected samples. This is the manual reset for when face
+        detection over-assigned a person."""
+        from PyQt6.QtWidgets import QMessageBox
+        pid = getattr(self, "_person_group_view_pid", None)
+        if not pid:
+            return
+        proj = getattr(self, "current_project", None)
+        sel = set(self._selected_rows())
+        if not sel:
+            QMessageBox.information(
+                self, _t("Disassemble / 解除"),
+                _t("Select the row(s) that are truly this person first — "
+                   "they become the sample. / "
+                   "先にこの人物の行を選択してください（サンプルになります）。"))
+            return
+        sample_paths, nonsample_paths = [], []
+        for r in range(self.table.rowCount()):
+            p = self.table.get_row_path(r)
+            if not p:
+                continue
+            (sample_paths if r in sel else nonsample_paths).append(p)
+        if not sample_paths:
+            return
+        # Locked files are excluded from the disassembly — same rule as
+        # every other auto path.
+        locked = [p for p in nonsample_paths
+                  if not attrs_mod.is_editable(self.attrs_data, p)]
+        to_disasm = [p for p in nonsample_paths if p not in locked]
+        _msg = _t(f"Keep {len(sample_paths)} file(s) as the sample for "
+                  f"P{pid} and rebuild its face pool from them.\n\n"
+                  f"Disassemble the other {len(to_disasm)} file(s) "
+                  f"(clear person_id, strip P-code from filename)?")
+        if locked:
+            _msg += _t(f"\n\n{len(locked)} locked file(s) will be skipped.")
+        _msg += _t(" / "
+                   f"{len(sample_paths)} 件をP{pid}のサンプルにして顔プールを"
+                   f"再構築し、他の {len(to_disasm)} 件を解除しますか？")
+        if QMessageBox.question(
+                self, _t("Disassemble non-samples / 非サンプルを解除"), _msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        # Disassemble each non-sample: clear person_id, strip the P-code.
+        renamed = 0
+        for old in to_disasm:
+            entry = self.attrs_data.get(old)
+            if entry is not None:
+                entry["person_id"] = ""
+            new = attrs_mod.strip_person_from_filename(
+                self.attrs_data, old, proj, flush_stores=True)
+            if new != old:
+                renamed += 1
+        # Rebuild the person's pool from ONLY the selected samples.
+        pool = attrs_mod.rebuild_person_pool_from_samples(proj, pid, sample_paths)
+        attrs_mod.save(proj, self.attrs_data)
+        self._refresh_persons_tab_if_open()
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
+        # Re-render the view — non-samples no longer carry this pid, so
+        # they drop out and only the samples remain.
+        self.show_person_group(pid)
+        _embedded = pool.get("embedded", 0) if pool else 0
+        self.statusBar().showMessage(
+            _t(f"P{pid}: pool rebuilt from {_embedded} sample(s), "
+               f"{len(to_disasm)} disassembled ({renamed} renamed)"
+               f"{f', {len(locked)} locked skipped' if locked else ''} / "
+               f"P{pid}: {_embedded}件のサンプルでプール再構築、"
+               f"{len(to_disasm)}件を解除"), 7000)
+
+    def _face_dist_color(self, dist):
+        """Background color for a face-distance score cell. Tuned to the
+        face matcher's 0.5 boundary: green = clearly the same person,
+        amber = borderline, red = likely wrong, gray = no face found."""
+        from PyQt6.QtGui import QColor as _QC
+        if dist is None:
+            return _QC("#333333")
+        if dist <= 0.40:
+            return _QC("#1a5a1a")
+        if dist <= 0.52:
+            return _QC("#6a5a1a")
+        return _QC("#5a1a1a")
+
+    def _sort_group_by_sample(self):
+        """Person-group view: take the selected row as the sample face,
+        extract a face embedding for every file in the group, and
+        re-sort the table by face-distance to the sample (closest
+        first, no-face last). Extraction runs on a background thread
+        with a progress poll."""
+        import threading, queue as _queue
+        from PyQt6.QtWidgets import QMessageBox
+        pid = getattr(self, "_person_group_view_pid", None)
+        if not pid:
+            return
+        sel = self._selected_rows()
+        if not sel:
+            QMessageBox.information(
+                self, _t("Sort by sample / サンプルで並替"),
+                _t("Select one row to use as the sample face first. / "
+                   "先にサンプルにする行を1つ選択してください。"))
+            return
+        sample_path = self.table.get_row_path(sel[0])
+        if not sample_path:
+            return
+        paths = [self.table.get_row_path(r)
+                 for r in range(self.table.rowCount())]
+        paths = [p for p in paths if p]
+        if getattr(self, "_face_sort_running", False):
+            return
+        self._face_sort_running = True
+        self.btn_sort_by_sample.setEnabled(False)
+        self.search_status_label.setText(
+            _t(f"🙂 Scoring {len(paths)} faces against sample…"))
+        self.search_status_label.show()
+        self.search_progress.setRange(0, max(1, len(paths)))
+        self.search_progress.setValue(0)
+        self.search_progress.show()
+        _q = _queue.Queue()
+
+        def _worker(_sample=sample_path, _paths=paths):
+            result = attrs_mod.face_distances_to_sample(
+                _sample, _paths,
+                progress_cb=lambda done, total: _q.put(("progress", done)))
+            _q.put(("done", result))
+
+        def _poll():
+            if not getattr(self, "_face_sort_running", False):
+                return
+            last_progress, result, got_done = None, None, False
+            try:
+                while True:
+                    msg, payload = _q.get_nowait()
+                    if msg == "progress":
+                        last_progress = payload
+                    elif msg == "done":
+                        result, got_done = payload, True
+            except _queue.Empty:
+                pass
+            if last_progress is not None:
+                self.search_progress.setValue(last_progress)
+            if got_done:
+                self._face_sort_running = False
+                self.search_progress.hide()
+                self.search_status_label.hide()
+                self.btn_sort_by_sample.setEnabled(True)
+                self._finish_face_sort(sample_path, result)
+                return
+            QTimer.singleShot(80, _poll)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        QTimer.singleShot(80, _poll)
+
+    def _finish_face_sort(self, sample_path, dists):
+        """Re-populate the table from the {path: face_distance} map —
+        closest to the sample on top, no-face files at the bottom,
+        each row colored by distance."""
+        from PyQt6.QtWidgets import QMessageBox
+        if not dists:
+            QMessageBox.warning(
+                self, _t("Sort by sample / サンプルで並替"),
+                _t("Could not extract a face from the sample file. / "
+                   "サンプルファイルから顔を抽出できませんでした。"))
+            return
+        items = sorted(
+            dists.items(),
+            key=lambda kv: (kv[1] is None,
+                            kv[1] if kv[1] is not None else 0.0))
+        self.table.setHorizontalHeaderLabels(
+            [_t("Face dist / 顔距離"), _t("Size / サイズ"),
+             _t("Name / 名前"), _t("Path / パス"),
+             _t("Date / 日付"), _t("Type / 種類")])
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        _sample_norm = os.path.normpath(sample_path)
+        _n_face = 0
+        for p, d in items:
+            is_sample = os.path.normpath(p) == _sample_norm
+            if is_sample:
+                score_txt = "0.0000"
+            elif d is None:
+                score_txt = "—"
+            else:
+                score_txt = f"{d:.4f}"
+                _n_face += 1
+            row = self._append_row(score_txt, logic.get_sz_readable(p),
+                                   os.path.basename(p),
+                                   self._mask_path(p), p)
+            col = self._face_dist_color(0.0 if is_sample else d)
+            if col:
+                fg = self._contrast_fg(col)
+                for c in range(self.table.columnCount()):
+                    it = self.table.item(row, c)
+                    if it:
+                        it.setBackground(col)
+                        it.setForeground(fg)
+        if self.table.rowCount():
+            self._select_row(0)
+            self.table.scrollToTop()
+        self.table.setFocus()
+        _no_face = max(0, len(items) - _n_face - 1)
+        self.statusBar().showMessage(
+            _t(f"Sorted by face distance to "
+               f"{os.path.basename(sample_path)} — {_n_face} scored, "
+               f"{_no_face} no-face / 顔距離で並べ替え — "
+               f"{_n_face}件採点、{_no_face}件顔なし"), 7000)
 
     def _apply_rules_step(self):
         """Toggle the bulk Apply Rules walk.
@@ -6435,7 +6936,7 @@ class AISearchApp(QMainWindow):
         except Exception:
             pass
         try:
-            torch.save(self.data,
+            attrs_mod.atomic_torch_save(self.data,
                        os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
         except Exception:
             pass
@@ -6624,7 +7125,7 @@ class AISearchApp(QMainWindow):
             for i, p in enumerate(self.data["paths"]):
                 if os.path.normpath(p) == os.path.normpath(src_path):
                     self.data["paths"][i] = final_path
-                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                    attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                     break
 
         self._push_undo({"type": "move", "old_path": src_path, "new_path": final_path})
@@ -6676,7 +7177,7 @@ class AISearchApp(QMainWindow):
 
         self._post_move_dup_cleanup()
         if db_changed and self.data:
-            torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+            attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
 
     def _handle_external_drop_move(self, src_paths, target_row):
         """External drop (file manager → results table row) = move each
@@ -6725,7 +7226,7 @@ class AISearchApp(QMainWindow):
         if batch:
             self._push_undo(batch)
         if db_changed and self.data:
-            torch.save(
+            attrs_mod.atomic_torch_save(
                 self.data,
                 os.path.join(attrs_mod.DATA_DIR,
                              f"features_{self.current_project}.pt"))
@@ -6826,7 +7327,7 @@ class AISearchApp(QMainWindow):
                 if self.data and "paths" in self.data and old_path in self.data["paths"]:
                     idx = self.data["paths"].index(old_path)
                     self.data["paths"][idx] = new_path
-                    torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                    attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
                 if old_path in self.attrs_data:
                     self.attrs_data[new_path] = self.attrs_data.pop(old_path)
                 # Auto-lock on rename — same gesture as the preview
@@ -6970,7 +7471,7 @@ class AISearchApp(QMainWindow):
 
         if deleted_any:
             if self.data:
-                torch.save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                attrs_mod.atomic_torch_save(self.data, os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
             self._cleanup_singleton_groups()
             self._rebuild_dup_display_data()
             self._save_dup_results()
