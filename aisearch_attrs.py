@@ -5390,16 +5390,53 @@ def _close_mp_singletons():
 import atexit as _atexit_mp
 _atexit_mp.register(_close_mp_singletons)
 
+# Eye Aspect Ratio (EAR) — vertical eye opening / horizontal eye width.
+# Drops below ~0.20 when eyelids touch. Computed from four MediaPipe Face
+# Mesh landmarks per eye (refine_landmarks=False indices). The "left" /
+# "right" labels are from the viewer's perspective. _EAR_CLOSED is the
+# both-eyes threshold; one closed eye is treated as a wink, not "closed".
+_EAR_LEFT  = {"top": 159, "bot": 145, "outer": 33,  "inner": 133}
+_EAR_RIGHT = {"top": 386, "bot": 374, "outer": 263, "inner": 362}
+_EAR_CLOSED = 0.20
+
+def _eye_aspect_ratio(face_lm, eye):
+    try:
+        top   = face_lm[eye["top"]]
+        bot   = face_lm[eye["bot"]]
+        outer = face_lm[eye["outer"]]
+        inner = face_lm[eye["inner"]]
+    except (IndexError, KeyError):
+        return None
+    vert = abs(top.y - bot.y)
+    horz = abs(outer.x - inner.x)
+    if horz < 1e-6:
+        return None
+    return vert / horz
+
+def _eyes_closed_from_landmarks(face_lm):
+    """True = both eyes detected closed; False = at least one open;
+    None = can't tell (no landmarks or degenerate geometry)."""
+    if not face_lm:
+        return None
+    le = _eye_aspect_ratio(face_lm, _EAR_LEFT)
+    re = _eye_aspect_ratio(face_lm, _EAR_RIGHT)
+    if le is None or re is None:
+        return None
+    return le < _EAR_CLOSED and re < _EAR_CLOSED
+
+
 def detect_shot_and_pose(path):
-    """Run MediaPipe Face Mesh + Pose in a single pass and return (shot_tag, pose_tag).
-    Either value may be None if it cannot be determined.
+    """Run MediaPipe Face Mesh + Pose in a single pass and return
+    (shot_tag, pose_tag, eye_closed). Any element may be None if it
+    cannot be determined. eye_closed piggybacks on the Face Mesh pass
+    (no extra model run).
     Requires: pip install mediapipe"""
     if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
-        return None, None
+        return None, None, None
     try:
         img = cv2.imread(path)
         if img is None:
-            return None, None
+            return None, None, None
         # MediaPipe pose/shot detection doesn't need 4K precision — downscale
         # so a 4K original isn't held as ~50 MB raw + cvtColor copy. 1024 max
         # dimension preserves landmark accuracy.
@@ -5491,21 +5528,28 @@ def detect_shot_and_pose(path):
             elif knees:
                 shot_tag = "SAmfs"
 
-        return shot_tag, pose_tag
+        eye_closed = _eyes_closed_from_landmarks(face_lm)
+        return shot_tag, pose_tag, eye_closed
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def detect_pose_tag(path):
     """Convenience wrapper — returns pose tag only."""
-    _, pose = detect_shot_and_pose(path)
+    _, pose, _ = detect_shot_and_pose(path)
     return pose
 
 
 def detect_shot_tag(path):
     """Convenience wrapper — returns shot tag only."""
-    shot, _ = detect_shot_and_pose(path)
+    shot, _, _ = detect_shot_and_pose(path)
     return shot
+
+
+def detect_eye_closed_tag(path):
+    """Convenience wrapper — returns True/False/None for eyes-closed."""
+    _, _, eye_closed = detect_shot_and_pose(path)
+    return eye_closed
 
 def detect_ai_source(path):
     """Returns (source_tag, prompt, seed) or (None, None, None)."""
@@ -5978,8 +6022,13 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
     if not skip_heavy:
         _needs_fa = not get_coded_field(entry, "fa")
         _needs_cs = not get_coded_field(entry, "cs")
-        if _needs_fa or _needs_cs:
-            shot_tag, pose_tag = detect_shot_and_pose(path)
+        # Eye-closed always runs when the Face Mesh pass is going to happen
+        # anyway — it's a free piggyback. Skipped only when the file is
+        # locked (is_editable=False) so manual eye color won't get clobbered.
+        _eyes_editable = is_editable(attrs_data, path)
+        _do_eye_check = _eyes_editable
+        if _needs_fa or _needs_cs or _do_eye_check:
+            shot_tag, pose_tag, eye_closed = detect_shot_and_pose(path)
             if _needs_fa and pose_tag:
                 fa_dir = _POSE_TO_FA_DIR.get(pose_tag)
                 if fa_dir:
@@ -5989,6 +6038,18 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                 cs_shot = _SHOT_TO_CS_SHOT.get(shot_tag)
                 if cs_shot:
                     entry["camera_shot"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
+                    changed = True
+            # MediaPipe says both eyes closed → set E color position (rightmost
+            # digit) to "0" ("Closed / No eyes"). Preserves the "additional"
+            # digit (leftmost). Overrides any CLIP-detected color because
+            # color extracted from closed eyelids is meaningless. eye_closed
+            # is False or None when eyes look open / can't tell — leave alone.
+            if _do_eye_check and eye_closed is True:
+                cur_eyes = entry.get("eyes", "") or ""
+                additional = cur_eyes[0] if len(cur_eyes) >= 2 else "0"
+                new_eyes = additional + "0"
+                if cur_eyes != new_eyes:
+                    entry["eyes"] = new_eyes
                     changed = True
 
     # Audio detection — probe at most once per file. The audio value itself
