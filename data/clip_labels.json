@@ -619,7 +619,7 @@
   {
     "field": "e",
     "pos": 1,
-    "zero_is_none": true,
+    "zero_is_none": false,
     "threshold": 0.16,
     "options": [
       [

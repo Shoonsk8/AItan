@@ -3600,10 +3600,11 @@ CLIP_AUTO_DETECT = [
     ]},
     # ── Eye color ─────────────────────────────────────────────────────────────
     # Option "0" is an explicit closed-eyes label — CLIP scores it against the
-    # color labels, so the debug panel shows whether the picture reads as
-    # closed vs any color. zero_is_none is still True as a fallback (e.g.
-    # face not detected at all → "0").
-    {"field": "eyes", "pos": 1, "zero_is_none": True,  "threshold": 0.18, "options": [
+    # color labels. zero_is_none MUST be False here: with True, the scoring
+    # code nulls out a "0" winner (treating it as "couldn't detect"), so
+    # closed-eye detection would surface in the debug panel but never get
+    # written. False makes "0" a first-class value (like FA, SK, BG).
+    {"field": "eyes", "pos": 1, "zero_is_none": False, "threshold": 0.18, "options": [
         ("0", "a person with closed eyes eyelids shut down no iris or pupil visible sleeping or blinking face"),
         ("1", "a person with chocolate brown eyes warm dark iris"),
         ("2", "a person with vivid blue eyes bright sky blue or ocean blue iris"),

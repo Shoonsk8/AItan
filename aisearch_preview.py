@@ -3258,6 +3258,12 @@ class PreviewWindow(QWidget):
             _clip_inspect_on = app.config.get("clip_inspect_mode", "never") != "never"
             if not _clip_inspect_on:
                 _dbg("    CLIP skipped — clip_inspect_mode=never")
+            # Locked files are user-confirmed — auto detection won't touch
+            # them. Skip the ~12s CLIP encode entirely; the writes would be
+            # filtered downstream anyway. User unlocks the file to re-run.
+            if _clip_inspect_on and not attrs_mod.is_editable(app.attrs_data, path):
+                _clip_inspect_on = False
+                _dbg("    CLIP skipped — file is locked (editable=False)")
             # In Refresh-CLIP mode (overwrite=True), wipe the canonical
             # lowercase keys for every CLIP-detectable field BEFORE detection
             # runs. Without this, fields that CLIP doesn't detect this round
@@ -3416,13 +3422,30 @@ class PreviewWindow(QWidget):
                     _vs = "".join(_v)
                     if any(c != "0" for c in _vs) or _f in _detected_indices:
                         _updates[_f] = _vs
+                # "manually update wins, auto update lose": when the file is
+                # editable (auto-managed; not user-locked), an explicit "0"
+                # winner on a zero_is_none=False spec (e.g. eyes closed) is a
+                # real detection, not a fallback — so it should override prior
+                # auto-detected values. Locked files (editable=False) are
+                # treated as user-confirmed and never touched here. _force is
+                # the set of storage keys allowed to bypass both skip_fields
+                # and the "preserve existing non-zero" rule in the merge.
+                _file_editable = attrs_mod.is_editable(app.attrs_data, path)
+                _force = set()
+                if _file_editable:
+                    for _sp in _clip_specs:
+                        if (_sp.get("winner") == "0"
+                                and not _sp.get("zero_is_none", True)):
+                            _force.add(_sp.get("storage_key") or _sp["field"].lower())
                 # Honor skip_fields on the WRITE side: right-click "Update" on a
                 # specific box passes the other fields in skip_fields so they
                 # stay protected. Without this filter, _entry.update(_updates)
-                # overwrites every CLIP field on every refresh.
+                # overwrites every CLIP field on every refresh. Force-override
+                # fields bypass this filter.
                 if skip_fields:
                     _updates = {k: v for k, v in _updates.items()
-                                if k.lower() not in skip_fields}
+                                if k.lower() not in skip_fields
+                                or k.lower() in _force}
                 if _updates:
                     _entry = attrs_mod.get(app.attrs_data, path)
                     if overwrite:
@@ -3436,9 +3459,17 @@ class PreviewWindow(QWidget):
                             _existing = (_entry.get(_k) or "").zfill(_digits)
                             _merged = list(_existing)
                             _det_idxs = _detected_indices.get(_k, set())
+                            _is_force = _k in _force
                             for _i, _c in enumerate(_v.zfill(_digits)):
+                                # Force-override: explicit "0" detection (e.g.
+                                # closed-eyes) on a zero_is_none=False spec
+                                # replaces the prior digit regardless of its
+                                # current value. Only when the file is editable
+                                # (already gated when _force was built).
+                                if _is_force and _c == "0" and _i in _det_idxs:
+                                    _merged[_i] = _c
                                 # Fill empty position if new value is non-zero OR was detected
-                                if _merged[_i] == "0" and (_c != "0" or _i in _det_idxs):
+                                elif _merged[_i] == "0" and (_c != "0" or _i in _det_idxs):
                                     _merged[_i] = _c
                             _result = "".join(_merged)
                             # Store if any non-zero digit, OR real detections were made
@@ -3502,6 +3533,12 @@ class PreviewWindow(QWidget):
             if _face_mode == "never":
                 face_txt.append("(face inspect off)")
                 _dbg("      FACE skipped (face_inspect_mode=never)")
+            elif not attrs_mod.is_editable(app.attrs_data, path):
+                # Locked files are user-confirmed — auto detection won't
+                # touch them. Skip the face subprocess entirely (5-30s on
+                # CPU) just like CLIP. User unlocks to re-run.
+                face_txt.append("(file is locked)")
+                _dbg("      FACE skipped — file is locked (editable=False)")
             elif skip_fields and "person_id" in skip_fields:
                 face_txt.append("(ignored — already set)")
                 _dbg("      FACE skipped (person_id already set)")
