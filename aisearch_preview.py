@@ -3422,30 +3422,18 @@ class PreviewWindow(QWidget):
                     _vs = "".join(_v)
                     if any(c != "0" for c in _vs) or _f in _detected_indices:
                         _updates[_f] = _vs
-                # "manually update wins, auto update lose": when the file is
-                # editable (auto-managed; not user-locked), an explicit "0"
-                # winner on a zero_is_none=False spec (e.g. eyes closed) is a
-                # real detection, not a fallback — so it should override prior
-                # auto-detected values. Locked files (editable=False) are
-                # treated as user-confirmed and never touched here. _force is
-                # the set of storage keys allowed to bypass both skip_fields
-                # and the "preserve existing non-zero" rule in the merge.
-                _file_editable = attrs_mod.is_editable(app.attrs_data, path)
-                _force = set()
-                if _file_editable:
-                    for _sp in _clip_specs:
-                        if (_sp.get("winner") == "0"
-                                and not _sp.get("zero_is_none", True)):
-                            _force.add(_sp.get("storage_key") or _sp["field"].lower())
+                # User rule: AUTO detection never overwrites an existing value.
+                # The only force-override mechanism is filename rules whose
+                # pattern ends with "/" (path rules — apply_path_rules handles
+                # those with explicit override semantics). Anything else stays
+                # additive: fill empty positions only.
                 # Honor skip_fields on the WRITE side: right-click "Update" on a
                 # specific box passes the other fields in skip_fields so they
                 # stay protected. Without this filter, _entry.update(_updates)
-                # overwrites every CLIP field on every refresh. Force-override
-                # fields bypass this filter.
+                # overwrites every CLIP field on every refresh.
                 if skip_fields:
                     _updates = {k: v for k, v in _updates.items()
-                                if k.lower() not in skip_fields
-                                or k.lower() in _force}
+                                if k.lower() not in skip_fields}
                 if _updates:
                     _entry = attrs_mod.get(app.attrs_data, path)
                     if overwrite:
@@ -3459,17 +3447,12 @@ class PreviewWindow(QWidget):
                             _existing = (_entry.get(_k) or "").zfill(_digits)
                             _merged = list(_existing)
                             _det_idxs = _detected_indices.get(_k, set())
-                            _is_force = _k in _force
                             for _i, _c in enumerate(_v.zfill(_digits)):
-                                # Force-override: explicit "0" detection (e.g.
-                                # closed-eyes) on a zero_is_none=False spec
-                                # replaces the prior digit regardless of its
-                                # current value. Only when the file is editable
-                                # (already gated when _force was built).
-                                if _is_force and _c == "0" and _i in _det_idxs:
-                                    _merged[_i] = _c
-                                # Fill empty position if new value is non-zero OR was detected
-                                elif _merged[_i] == "0" and (_c != "0" or _i in _det_idxs):
+                                # Auto-merge: fill empty position only — never
+                                # overwrite an existing non-zero digit. Force
+                                # overrides come from path filename rules
+                                # ('/'-suffix) elsewhere.
+                                if _merged[_i] == "0" and (_c != "0" or _i in _det_idxs):
                                     _merged[_i] = _c
                             _result = "".join(_merged)
                             # Store if any non-zero digit, OR real detections were made

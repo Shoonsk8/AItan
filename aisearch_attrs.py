@@ -6062,18 +6062,20 @@ def auto_set_all(attrs_data, path, project, skip_heavy=False):
                 if cs_shot:
                     entry["camera_shot"] = cs_shot + "00"   # [Shot][Angle=0][Light=0]
                     changed = True
-            # MediaPipe says both eyes closed → set E color position (rightmost
-            # digit) to "0" ("Closed / No eyes"). Preserves the "additional"
-            # digit (leftmost). Overrides any CLIP-detected color because
-            # color extracted from closed eyelids is meaningless. eye_closed
-            # is False or None when eyes look open / can't tell — leave alone.
+            # MediaPipe says both eyes closed → set E color position
+            # (rightmost digit) to "0" ("Closed / No eyes"), but ONLY if
+            # the color digit is currently empty. User rule: auto never
+            # overwrites an existing value. Force overrides come from
+            # path filename rules ('/'-suffix) — handled elsewhere.
             if _do_eye_check and eye_closed is True:
                 cur_eyes = entry.get("eyes", "") or ""
                 additional = cur_eyes[0] if len(cur_eyes) >= 2 else "0"
-                new_eyes = additional + "0"
-                if cur_eyes != new_eyes:
-                    entry["eyes"] = new_eyes
-                    changed = True
+                cur_color  = cur_eyes[1] if len(cur_eyes) >= 2 else "0"
+                if cur_color == "0":
+                    new_eyes = additional + "0"
+                    if cur_eyes != new_eyes:
+                        entry["eyes"] = new_eyes
+                        changed = True
 
     # Audio detection — probe at most once per file. The audio value itself
     # is the "we already checked" marker: empty/missing = not probed, any
