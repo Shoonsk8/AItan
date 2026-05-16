@@ -122,6 +122,17 @@ Styles: `1dig`, `2dig`, `3dig`, `matrix`, `id`, `taglist`, `boolean`, `text`
 - Sentinel sources (Shot, Pose, CLIP fields HC/FA/SK/E/B/WH/PM/CS/BG) always pass through in `apply_metadata_rules`
 - CLIP detection is rule-driven: DB rebuild checks MetaMap rules for which fields to detect
 
+## Hard Rules (read before touching any write/merge code)
+
+### Auto detection never overwrites existing values
+Any auto-detection path — CLIP scoring, MediaPipe Face Mesh / Pose, face-recognition match, AI inspect, metadata scan — **must not overwrite a non-empty field value**. The merge semantic is "fill empty positions only" (`if cur_digit == "0": write new`).
+
+**Single exception:** filename rules whose `pattern` ends with `/` are **path rules** (e.g. `Folder/`). These match the file's parent folder and *are* allowed to override existing values via `apply_path_rules` in `aisearch_attrs.py`. This is the user's explicit declaration "everything under this folder gets this value" — don't reinvent it elsewhere.
+
+**Symptoms of breaking this rule:** detection result silently clobbering a user-confirmed value, eye color flipping after a refresh, hair length resetting on next scan, etc.
+
+**Don't add:** `_force` sets, `overwrite=True` defaults, "this case is special" carve-outs in merge logic, or write-without-empty-check helpers. If a new feature needs override semantics, route it through a path filename rule.
+
 ## Common Pitfalls
 
 - `TAG_GROUPS["Resolution"]` → **KeyError** — Resolution was removed, use `.get("Resolution", [])`
