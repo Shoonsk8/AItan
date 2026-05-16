@@ -3812,6 +3812,14 @@ class PreviewWindow(QWidget):
     def _fit_clip_face_tile(self, w):
         """Resize a CLIP or FACE FieldWidget to fit its full text content.
         Only shifts tiles that are in the same column (same x zone) and directly below."""
+        # Guard: the QTimer.singleShot(100, …) callback that schedules
+        # this can fire after the user navigated away and the FieldWidget
+        # was destroyed. Any attribute access then raises
+        # "wrapped C/C++ object of type FieldWidget has been deleted".
+        try:
+            _ = w.height()
+        except RuntimeError:
+            return
         te = getattr(w, "_te", None)
         if not te:
             return

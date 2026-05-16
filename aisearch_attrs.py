@@ -3748,10 +3748,27 @@ _clip_label_cache = None   # cached text embeddings, built on first use
 
 
 def _get_clip_label_cache():
-    """Build and cache text embeddings for all CLIP_AUTO_DETECT specs."""
+    """Build and cache text embeddings for all CLIP_AUTO_DETECT specs.
+
+    Defensive sanity check: if the cached tensors don't match the current
+    CLIP_AUTO_DETECT shape (different number of specs, or any spec's option
+    count differs from its cached embedding count), rebuild. Without this,
+    a spec change that didn't route through save_clip_labels (e.g. external
+    file edit picked up on next module-load, or in-process spec mutation)
+    leaves the cache one option short, and the cos_sim → enumerate(options)
+    loop walks past the end → CUDA gather "index out of bounds".
+    """
     global _clip_label_cache
     if _clip_label_cache is not None:
-        return _clip_label_cache
+        try:
+            if (len(_clip_label_cache) == len(CLIP_AUTO_DETECT)
+                    and all(emb.shape[0] == len(spec["options"])
+                            for emb, spec in zip(_clip_label_cache,
+                                                 CLIP_AUTO_DETECT))):
+                return _clip_label_cache
+        except Exception:
+            pass
+        _clip_label_cache = None   # stale — rebuild below
     try:
         import aisearch_logic as _logic
         cache = []
