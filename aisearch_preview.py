@@ -5192,8 +5192,14 @@ class PreviewWindow(QWidget):
                     _ok = bool(attrs_mod.embed_aitan_meta(_p, _e))
                 except Exception:
                     _ok = False
-                # Schedule UI refresh on main thread via signal
-                self._raw_refresh_signal.emit(_p, _ok)
+                # Schedule UI refresh on main thread via signal. The
+                # PreviewWindow may have been closed/destroyed while the
+                # embed worker was running — emitting on a deleted Qt
+                # object raises RuntimeError.
+                try:
+                    self._raw_refresh_signal.emit(_p, _ok)
+                except RuntimeError:
+                    pass
             threading.Thread(target=_embed_and_refresh, daemon=True).start()
         row = app._current_row()
         if row >= 0:
