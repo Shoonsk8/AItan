@@ -110,7 +110,7 @@ class SettingsView(_DbMixin, _PersonMixin, _AppearanceMixin, _AttrsMixin, _Filen
         # already shows the right tab (avoids the MetaMap flash).
         self.tabs.blockSignals(True)
         # Hide placeholder BEFORE removeTab so it doesn't briefly flash
-        # as a top-level "aisearch_main.py" ghost window between the
+        # as a top-level "aitan.py" ghost window between the
         # tab-detach and deleteLater(). Same pattern as the other
         # widget-tear-down sites.
         if placeholder is not None:

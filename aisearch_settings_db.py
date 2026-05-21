@@ -421,8 +421,16 @@ class _DbMixin:
                                 v_disk.add(os.path.abspath(os.path.join(d, f)))
                     else:
                         for r, subdirs, fs in os.walk(d):
-                            subdirs[:] = [s for s in subdirs if s != '_unreadable']
-                            if os.path.basename(r) == '_unreadable': continue
+                            # Skip the legacy '_unreadable' AND any folder whose
+                            # name begins with 'unreadable' (case-insensitive),
+                            # which catches 'unreadable', 'unreadable (copy)',
+                            # 'unreadable (Nth copy)', etc.
+                            subdirs[:] = [s for s in subdirs
+                                          if s != '_unreadable'
+                                          and not s.lower().startswith('unreadable')]
+                            _bn = os.path.basename(r)
+                            if _bn == '_unreadable' or _bn.lower().startswith('unreadable'):
+                                continue
                             for f in fs:
                                 if f.lower().endswith(valid_exts):
                                     v_disk.add(os.path.abspath(os.path.join(r, f)))
@@ -1647,7 +1655,7 @@ class _DbMixin:
                 try:
                     import cv2
                     from PyQt6.QtGui import QImage
-                    cap = cv2.VideoCapture(path)
+                    cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
                     ret, frame = cap.read(); cap.release()
                     if ret:
                         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

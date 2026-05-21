@@ -60,6 +60,7 @@ def load_config(project=None):
         "delete_confirm": True,
         "colors": DEFAULT_COLORS,
         "table_font_size":   10,
+        "video_join_font_size": 10,
         "attr_font_size":    10,
         "ui_font_size":      10,
         "project_font_size": 30,

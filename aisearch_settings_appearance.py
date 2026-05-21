@@ -279,7 +279,7 @@ class _AppearanceMixin:
                 if checked:
                     self.app.config["theme"] = name
                     cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
-                    import aisearch_main as _main
+                    import aitan as _main
                     _main.apply_theme(name)
                     self.app._apply_header_theme()
             rb.toggled.connect(_theme_changed)
@@ -308,6 +308,7 @@ class _AppearanceMixin:
             return row
 
         fl.addLayout(font_row(_t("List (table) / リスト（テーブル）"),     "table_font_size",   10))
+        fl.addLayout(font_row(_t("Video Join list / 動画結合リスト"),      "video_join_font_size", 10))
         fl.addLayout(font_row(_t("Attributes panel / 属性パネル"),        "attr_font_size",    10))
         fl.addLayout(font_row(_t("Project name / プロジェクト名"),         "project_font_size", 30))
         fl.addLayout(font_row(_t("General / 全般"),                       "ui_font_size",      10))

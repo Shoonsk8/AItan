@@ -1,5 +1,5 @@
 import os, torch, shutil, cv2, threading
-from PIL import Image
+from PIL import Image, ImageOps, ImageFile
 from sentence_transformers import SentenceTransformer, util
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -17,6 +17,13 @@ EXT_IMG = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
 EXT_VID = ('.mp4', '.mkv', '.mov', '.avi', '.webm')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+# Once CUDA throws a device-side assert, the context is poisoned for
+# the rest of the process — every subsequent .cuda call (including
+# moves and even some CPU ops that touch CUDA-allocated tensors) keeps
+# raising the same error. _cuda_dead flag pins the model to CPU after
+# the first failure so we don't churn through retries that can't ever
+# succeed.
+_cuda_dead = False
 # AISEARCH_SKIP_MODEL=1 — short-lived subprocesses (e.g. face_worker)
 # that don't need CLIP can skip the 15-25s model load. `model` stays
 # None; any code path that touches it will raise, which is the right
@@ -39,6 +46,11 @@ else:
             pass
         device = "cpu"
         model = SentenceTransformer(MODEL_NAME, device=device)
+    except Exception as e:
+        import sys as _sys
+        print(f"[aisearch] CLIP model load failed: {type(e).__name__}: {e}",
+              file=_sys.stderr, flush=True)
+        model = None
 
 
 def load_db_logic(name):
@@ -61,6 +73,42 @@ def load_db_logic(name):
             # just slower. Leave embeddings on CPU.
             pass
     return (data, db_path)
+
+
+def load_image_rgb(path, max_pixels=None):
+    """Decode an image path into a PIL RGB image.
+
+    PIL is the preferred path because it preserves formats Qt/OpenCV may
+    reject and applies EXIF orientation. If PIL cannot decode it, fall
+    back to OpenCV's imdecode over raw bytes, which handles some files
+    that cv2.imread(path) misses.
+    """
+    Image.MAX_IMAGE_PIXELS = None
+    ImageFile.LOAD_TRUNCATED_IMAGES = True
+    try:
+        img = Image.open(path)
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+        if max_pixels and img.width * img.height > max_pixels:
+            side = int(max_pixels ** 0.5)
+            img.thumbnail((side, side), Image.LANCZOS)
+        return img
+    except Exception as pil_error:
+        try:
+            import numpy as _np
+            with open(path, "rb") as f:
+                data = _np.frombuffer(f.read(), dtype=_np.uint8)
+            bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if bgr is None:
+                raise pil_error
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            img = Image.fromarray(rgb)
+            if max_pixels and img.width * img.height > max_pixels:
+                side = int(max_pixels ** 0.5)
+                img.thumbnail((side, side), Image.LANCZOS)
+            return img
+        except Exception:
+            raise pil_error
 
 def get_sz_readable(p):
     """人間が読みやすいサイズ表記"""
@@ -110,7 +158,7 @@ def get_video_thumbnail_rgb(path, first_only: bool = False):
     # frame as a "first" entry whenever we decode "both" (see end of function).
     import numpy as np
     with NATIVE_VISION_LOCK:
-        cap = cv2.VideoCapture(path)
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         try:
             ret1, frame1 = cap.read()
             ret2, frame2 = False, None
@@ -173,7 +221,7 @@ def _video_first_frame_pil(path):
     Tries cv2 across several frames, then falls back to ffmpeg via subprocess
     so codecs cv2 can't handle (HEVC/AV1 in some builds) still work.
     MUST be called only from inside NATIVE_VISION_LOCK."""
-    cap = cv2.VideoCapture(path)
+    cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
     try:
         for _ in range(10):
             ret, frame = cap.read()
@@ -221,10 +269,7 @@ def extract_feature(path):
         img = Image.fromarray(rgb)
     else:
         try:
-            Image.MAX_IMAGE_PIXELS = None
-            img = Image.open(path).convert('RGB')
-            if img.width * img.height > 4000 * 4000:
-                img.thumbnail((2048, 2048), Image.LANCZOS)
+            img = load_image_rgb(path, max_pixels=2048 * 2048)
         except Exception as e_img:
             # Image open failed — could be a misnamed video. Try the
             # video path as a fallback (cv2/ffmpeg, first frame).
@@ -252,7 +297,25 @@ def extract_feature(path):
         img.thumbnail((512, 512), Image.LANCZOS)
     # torch.no_grad() prevents autograd graph buildup — without this each
     # encode keeps activations alive in memory, leaks ~hundreds of MB.
+    global _cuda_dead, model, device
+    if model is None:
+        print(f"[extract_feature] CLIP model is not loaded  path={path}",
+              file=_sys.stderr, flush=True)
+        return None
     import torch as _torch
+    # CUDA already poisoned earlier in this process — go straight to CPU
+    # without touching cuda again. Saves the failed-GPU-then-failed-CPU
+    # double error spam on every subsequent file.
+    if _cuda_dead:
+        try:
+            with _torch.no_grad():
+                emb = model.encode(img, convert_to_tensor=True)
+            return emb
+        except Exception as e_cpu:
+            print(f"[extract_feature] CPU encode failed: "
+                  f"{type(e_cpu).__name__}: {e_cpu}  path={path}",
+                  file=_sys.stderr, flush=True)
+            return None
     try:
         with _torch.no_grad():
             emb = model.encode(img, convert_to_tensor=True).to(device)
@@ -261,19 +324,36 @@ def extract_feature(path):
         # GPU encode failed. Most common cause: CUDA in asserted state
         # after an earlier OOM or kernel fault, which silently poisons
         # every subsequent encode. Don't write the file off as
-        # "unreadable/corrupt" — it opened cleanly above. Retry on CPU
-        # so the scan keeps producing real embeddings.
+        # "unreadable/corrupt" — it opened cleanly above. Move the model
+        # to CPU permanently (CUDA context is unrecoverable mid-process)
+        # then retry. Was: passed device="cpu" to encode while keeping
+        # the model on cuda — the model's internal layers still poked
+        # the dead CUDA context, so the retry always failed too.
         print(f"[extract_feature] CLIP encode failed on device={device} "
-              f"({type(e_gpu).__name__}: {e_gpu}), retrying on CPU  path={path}",
+              f"({type(e_gpu).__name__}: {e_gpu}), moving model to CPU  path={path}",
               file=_sys.stderr, flush=True)
+        _cuda_dead = True
+        try:
+            model = model.to("cpu")
+            device = "cpu"
+        except Exception as e_mv:
+            # CUDA so corrupted that even tensor moves raise. Fall back
+            # to a fresh CPU model load (15-25s one-time cost). If THAT
+            # fails too, we're done — return None and let the scan skip.
+            print(f"[extract_feature] model.to('cpu') failed ({e_mv}); "
+                  f"reloading CLIP fresh on CPU",
+                  file=_sys.stderr, flush=True)
+            try:
+                model = SentenceTransformer(MODEL_NAME, device="cpu")
+                device = "cpu"
+            except Exception as e_re:
+                print(f"[extract_feature] fresh CPU model load failed: "
+                      f"{type(e_re).__name__}: {e_re}  path={path}",
+                      file=_sys.stderr, flush=True)
+                return None
         try:
             with _torch.no_grad():
-                # device="cpu" param overrides the model's loaded device for
-                # this call. Slower per-file than GPU but reliable when CUDA
-                # is broken. Returns a CPU tensor; caller (extract_feature's
-                # consumers) only need it for similarity math and don't
-                # require GPU residency.
-                emb = model.encode(img, convert_to_tensor=True, device="cpu")
+                emb = model.encode(img, convert_to_tensor=True)
             return emb
         except Exception as e_cpu:
             print(f"[extract_feature] CPU retry also failed: "

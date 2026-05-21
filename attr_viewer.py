@@ -2104,7 +2104,7 @@ class AnchorBox(QWidget):
 
     def setParent(self, parent=None, *args):
         """Override: a parentless QWidget is shown as a top-level window
-        with title "aisearch_main.py" — the "ghost app" the user sees
+        with title "aitan.py" — the "ghost app" the user sees
         flash when the canvas rebuilds. Hide ourselves before detaching
         so Qt's window manager never gets a chance to render the box
         as its own window between setParent(None) and deleteLater()."""
@@ -2445,7 +2445,7 @@ class AttrViewerWidget(QWidget):
         for w in self.widgets:
             # Hide first — Qt makes a parentless QWidget a top-level
             # window, so without this AnchorBox briefly flashes as its
-            # own window titled "aisearch_main.py" until deleteLater()
+            # own window titled "aitan.py" until deleteLater()
             # actually runs.
             w.hide()
             w.setParent(None)
@@ -3102,7 +3102,7 @@ class AttrViewerWidget(QWidget):
         if layoutable:
             bottom = max(w.y() + w.height() for w in layoutable)
             right  = max(w.x() + w.width()  for w in layoutable)
-            self.canvas.setMinimumHeight(max(1000, bottom + 40))
+            self.canvas.setMinimumHeight(bottom + 40)
             self.canvas.setMinimumWidth(max(1400, right + 40))
         self.canvas.update()
 

@@ -727,7 +727,7 @@ class PreviewWindow(QWidget):
 
     def _build_attr_panel(self):
         # Created parentless and reparented later via _attr_scroll.setWidget;
-        # hide immediately so it can't flash as a top-level "aisearch_main.py"
+        # hide immediately so it can't flash as a top-level "aitan.py"
         # ghost window between construction and the setWidget reparent.
         panel = QWidget()
         panel.hide()
@@ -793,6 +793,15 @@ class PreviewWindow(QWidget):
         self._person_id_combo.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._person_id_combo.setMaxVisibleItems(20)
         self._person_id_combo.currentIndexChanged.connect(self._on_person_combo_changed)
+        # Editable combo: when the user TYPES an ID (e.g. "001") and
+        # moves focus away or presses Enter without picking from the
+        # dropdown, currentIndexChanged never fires because no item gets
+        # selected. Without this hookup the typed value is lost — the
+        # next nav's auto-rename reads the prior stored pid, so the file
+        # gets renamed with a different number than what the user typed.
+        self._person_id_combo.lineEdit().editingFinished.connect(
+            lambda: self._on_person_combo_changed(
+                self._person_id_combo.currentIndex()))
         rA.addWidget(self._person_id_combo, stretch=1)
         self._person_id_label = self._person_id_combo   # backward-compat alias
 
@@ -1635,14 +1644,17 @@ class PreviewWindow(QWidget):
                 except Exception:
                     _fn_cfg = {}
                 _ar_on = bool(_fn_cfg.get("auto_rename", False))
+                _locked = not attrs_mod.is_editable(_app.attrs_data, _old)
                 _ar_dbg(f"autorename: leaving={os.path.basename(_old)} "
-                        f"auto_rename={_ar_on} user_edited={_ue}")
+                        f"auto_rename={_ar_on} user_edited={_ue} locked={_locked}")
                 _bn_old = os.path.basename(_old)
-                if not _ar_on:
+                if _locked:
+                    _status(f"Autorename: skipped — {_bn_old} is locked")
+                elif not _ar_on:
                     _status(f"Autorename: OFF ({_bn_old})")
                 elif not _ue:
                     _status(f"Autorename: skipped — {_bn_old} not edited this session")
-                if _ar_on and _ue:
+                if _ar_on and _ue and not _locked:
                     _wr = False
                     try:
                         _wr = attrs_mod.would_rename(_app.attrs_data, _old, _proj)
@@ -1666,6 +1678,12 @@ class PreviewWindow(QWidget):
                                     6000)
                         elif _new == _old:
                             _status(f"Autorename: no change for {_bn_old}")
+                        try:
+                            import psutil as _ps_ar
+                            _rss_ar = _ps_ar.Process().memory_info().rss/(1024*1024)
+                            _ar_dbg(f"autorename: rss-after-rename={_rss_ar:.0f}MB")
+                        except Exception:
+                            pass
                         if _new and _new != _old:
                             if _app.data and "paths" in _app.data and _old in _app.data["paths"]:
                                 _app.data["paths"][_app.data["paths"].index(_old)] = _new
@@ -2849,20 +2867,28 @@ class PreviewWindow(QWidget):
     # ── Person combo ─────────────────────────────────────────────────────────
 
     def _on_person_combo_changed(self, idx):
-        """When user selects a person from the dropdown, fill the P001 and name fields."""
-        if idx <= 0:
-            return
-        fid = self._person_id_combo.itemData(idx)
+        """Called when user picks a dropdown item OR (via editingFinished
+        wrapper) when user TYPES a new ID and moves focus away."""
+        fid = ""
+        if idx > 0:
+            fid = self._person_id_combo.itemData(idx) or ""
         if not fid:
-            # Editable combo: the user TYPED a custom ID that isn't a
-            # known person, so the inserted item carries no itemData.
-            # Fall back to the typed text — without this the combo
-            # shows the new number but person_id silently keeps the old
-            # value (user typed 037, file stayed 046).
+            # Either the placeholder is selected, OR the user TYPED a
+            # custom ID that isn't a known person (inserted item carries
+            # no itemData, or never got inserted because no Enter was
+            # pressed). Fall back to the line edit's current text.
             _txt = self._person_id_combo.currentText().strip()
             fid = _norm_pid(_txt.split()[0]) if _txt else ""
         if not fid:
             return
+        # No-op when the typed value matches what's already stored — the
+        # editingFinished signal fires every focus-out, including when
+        # nothing changed (e.g. user tabbed past without editing).
+        if self._attr_path:
+            _stored = (self.handler.app.attrs_data.get(self._attr_path) or {}).get(
+                "person_id", "")
+            if _stored == fid:
+                return
         app = self.handler.app
         # Capture the file's CURRENT person before we overwrite it —
         # if this was the old person's only file, it's now empty and
@@ -3167,6 +3193,14 @@ class PreviewWindow(QWidget):
         # the source of slow navigation / memory growth.
         if os.environ.get("AISEARCH_NO_INSPECT"):
             return
+        # Video Join mode does NOT use CLIP/face attribute detection — it
+        # only matches edge frames. Skip the whole inspect so navigation
+        # stays fast (CLIP encode alone is ~7s per file).
+        try:
+            if self.handler.app.config.get("last_mode") == "videojoin":
+                return
+        except Exception:
+            pass
         # Hard switch check — if BOTH face and CLIP inspect modes are
         # "never", the user has turned AI fully off. Bail immediately
         # regardless of caller. User: "I turned off then why is it
@@ -3223,7 +3257,12 @@ class PreviewWindow(QWidget):
             return
         try:
             from aisearch_debug import dbg as _dbg
-            _dbg(f"_on_inspect START overwrite={overwrite} skip={skip_fields}")
+            try:
+                import psutil as _ps_outer
+                _rss_outer = f"rss={_ps_outer.Process().memory_info().rss/(1024*1024):.0f}MB"
+            except Exception:
+                _rss_outer = ""
+            _dbg(f"_on_inspect START overwrite={overwrite} skip={skip_fields} {_rss_outer}")
         except Exception:
             pass
         clip_out = getattr(self, "_clip_inspect_edit", None)
@@ -3242,10 +3281,23 @@ class PreviewWindow(QWidget):
                 from aisearch_debug import dbg as _dbg
             except Exception:
                 _dbg = lambda *a, **kw: None
+            try:
+                import psutil as _ps
+                _proc_self = _ps.Process()
+                def _rss():
+                    return f"rss={_proc_self.memory_info().rss/(1024*1024):.0f}MB"
+            except Exception:
+                def _rss():
+                    return ""
+            # Collected across CLIP+FACE; one save at end of _run instead of
+            # up to 3 inline saves. Each save serializes the whole attrs JSON
+            # (~18MB on disk → ~100MB transient Python dict copy), so cutting
+            # from N→1 saves materially reduces per-inspect memory churn.
+            _dirty = False
 
             # ── CLIP ────────────────────────────────────────────────────────
             _t_clip = _time.time()
-            _dbg("    CLIP START")
+            _dbg(f"    CLIP START {_rss()}")
             clip_txt = []
             clip_field_txt = {}   # field.upper() → list of lines
             _CLIP_CANVAS_FIELDS = ("HC", "FA", "SK", "PM", "E", "CS", "BG", "X", "CL", "A")
@@ -3469,7 +3521,7 @@ class PreviewWindow(QWidget):
                     for _cf in _CLIP_CANVAS_FIELDS:
                         if _cf in clip_field_txt:
                             _entry[f"CLIP_{_cf}"] = _cap("\n".join(clip_field_txt[_cf]))
-                    attrs_mod.save(app.current_project, app.attrs_data)
+                    _dirty = True
                     QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
                                              Qt.ConnectionType.QueuedConnection,
                                              Q_ARG(str, path))
@@ -3489,7 +3541,7 @@ class PreviewWindow(QWidget):
                 for _cf in _CLIP_CANVAS_FIELDS:
                     if _cf in clip_field_txt:
                         _entry[f"CLIP_{_cf}"] = _cap("\n".join(clip_field_txt[_cf]))
-                attrs_mod.save(app.current_project, app.attrs_data)
+                _dirty = True
                 QMetaObject.invokeMethod(self, "_refresh_attrs_from_thread",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, path))
@@ -3500,11 +3552,11 @@ class PreviewWindow(QWidget):
                                                  Q_ARG(str, f"CLIP_{_cf}"),
                                                  Q_ARG(str, _cap("\n".join(clip_field_txt[_cf]))))
 
-            _dbg(f"    CLIP END   total={(_time.time()-_t_clip)*1000:.1f}ms")
+            _dbg(f"    CLIP END   total={(_time.time()-_t_clip)*1000:.1f}ms {_rss()}")
 
             # ── Face ────────────────────────────────────────────────────────
             _t_face = _time.time()
-            _dbg("    FACE START")
+            _dbg(f"    FACE START {_rss()}")
             face_txt = []
             _detected_pid = None
             # Skip face detection if (a) the AI mode has face turned off, or
@@ -3629,7 +3681,7 @@ class PreviewWindow(QWidget):
                     _pw_lines = []
                 if _pw_lines:
                     _entry["FACE_PW"] = "\n".join(_pw_lines)
-                attrs_mod.save(app.current_project, app.attrs_data)
+                _dirty = True
                 QMetaObject.invokeMethod(self, "_update_canvas_text_widget",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(str, "FACE"),
@@ -3689,7 +3741,16 @@ class PreviewWindow(QWidget):
                 QMetaObject.invokeMethod(_apply_btn, "setEnabled",
                                          Qt.ConnectionType.QueuedConnection,
                                          Q_ARG(bool, True))
-            _dbg(f"    FACE END   total={(_time.time()-_t_face)*1000:.1f}ms")
+            _dbg(f"    FACE END   total={(_time.time()-_t_face)*1000:.1f}ms {_rss()}")
+
+            # Consolidated save: instead of writing the 18MB+ attrs JSON up
+            # to three times per inspect (once per CLIP branch + once for
+            # FACE), accumulate _dirty and write once here.
+            if _dirty:
+                try:
+                    attrs_mod.save(app.current_project, app.attrs_data)
+                except Exception as _e:
+                    _dbg(f"    save FAILED: {_e}")
 
         _inspect_t0 = _time.time()
         def _run_guarded():
@@ -3721,7 +3782,12 @@ class PreviewWindow(QWidget):
                     pass
                 try:
                     from aisearch_debug import dbg as _dbg
-                    _dbg(f"_on_inspect END   total={(_time.time()-_inspect_t0)*1000:.1f}ms")
+                    try:
+                        import psutil as _ps_end
+                        _rss_end = f"rss={_ps_end.Process().memory_info().rss/(1024*1024):.0f}MB"
+                    except Exception:
+                        _rss_end = ""
+                    _dbg(f"_on_inspect END   total={(_time.time()-_inspect_t0)*1000:.1f}ms {_rss_end}")
                 except Exception:
                     pass
 
@@ -3839,7 +3905,7 @@ class PreviewWindow(QWidget):
         canvas = getattr(sc, "canvas", None)
         if canvas:
             bottom = max((cw.y() + cw.height() for cw in sc.widgets if cw.isVisible()), default=0)
-            canvas.setMinimumHeight(max(1000, bottom + 40))
+            canvas.setMinimumHeight(bottom + 40)
 
     @pyqtSlot(str, str)
     def _update_canvas_text_widget(self, key: str, text: str):
@@ -5454,7 +5520,12 @@ class PreviewWindow(QWidget):
             self._save_attrs()
             path = self._attr_path  # refresh — _save_attrs may have renamed the file
             if not os.path.exists(path): return
-            if self._chk_auto_rename.isChecked():
+            # Locked files (editable=False) are excluded from the bake-time
+            # auto-rename. Without this guard, opening the preview on a
+            # locked file and clicking Bake would still rename it — defeating
+            # the lock the user set explicitly (or that auto-set after a
+            # manual rename).
+            if self._chk_auto_rename.isChecked() and attrs_mod.is_editable(app.attrs_data, path):
                 pid = _norm_pid(attrs_mod.get(app.attrs_data, path).get("person_id", "") or "")
                 if not pid:
                     persons = [pe.text().strip() for pe in self._p_edits if pe.text().strip()]
@@ -5898,7 +5969,12 @@ class PreviewHandler:
             self._render(path, is_video)
             try:
                 from aisearch_debug import dbg as _dbg
-                _dbg(f"  _render: {(_time.time()-_t)*1000:.1f}ms")
+                try:
+                    import psutil as _ps_r
+                    _rss_r = f" rss={_ps_r.Process().memory_info().rss/(1024*1024):.0f}MB"
+                except Exception:
+                    _rss_r = ""
+                _dbg(f"  _render: {(_time.time()-_t)*1000:.1f}ms{_rss_r}")
             except Exception:
                 pass
         def _timed_refresh():
@@ -5916,7 +5992,12 @@ class PreviewHandler:
             QTimer.singleShot(0, self.window._deferred_build_attr_panel)
         try:
             from aisearch_debug import dbg as _dbg
-            _dbg(f"preview.show DISPATCHED total_setup={(_time.time()-self._show_t0)*1000:.1f}ms")
+            try:
+                import psutil as _ps_d
+                _rss_d = f" rss={_ps_d.Process().memory_info().rss/(1024*1024):.0f}MB"
+            except Exception:
+                _rss_d = ""
+            _dbg(f"preview.show DISPATCHED total_setup={(_time.time()-self._show_t0)*1000:.1f}ms{_rss_d}")
         except Exception:
             pass
         # Note: _render() already calls setMaximumHeight(nh) synchronously,
@@ -6014,7 +6095,63 @@ class PreviewHandler:
         front_page.open_in_nemo(self.app.table.get_row_path(row))
 
     def _delete_file(self):
-        self.app.delete_file()
+        # Operate on the currently-previewed file. If it has a matching
+        # row in the main table, select that row first and run the standard
+        # delete pipeline (so undo/embed-cleanup/table refresh all happen).
+        # Otherwise (file came in via FM, no table row), trash directly and
+        # clean up app state inline.
+        path = self.current_path
+        if not path or not os.path.exists(path):
+            return
+        table = getattr(self.app, "table", None)
+        if table is not None and hasattr(table, "get_row_path"):
+            norm = os.path.normpath(os.path.abspath(path))
+            for row in range(table.rowCount()):
+                rp = table.get_row_path(row)
+                if rp and os.path.normpath(os.path.abspath(rp)) == norm:
+                    table.clearSelection()
+                    table.selectRow(row)
+                    self.app.delete_file()
+                    return
+        # Fallback: not in main table.
+        if not attrs_mod.is_editable(self.app.attrs_data, path):
+            QMessageBox.warning(self.window, _t("Locked / ロック中"),
+                                _t(f"Locked: {os.path.basename(path)}"))
+            return
+        if self.app.config.get("delete_confirm", True):
+            if not self.app._confirm_trash():
+                return
+        import aisearch_front_page as _fp
+        trash_path, err = _fp.trash_file(path)
+        if err or trash_path is None:
+            QMessageBox.warning(self.window, "Delete failed", err or "unknown error")
+            return
+        # Clean up in-memory state. Reuse FM's helper when the FM is open
+        # (covers data + attrs + any FM views); otherwise inline minimal.
+        fm_win = getattr(self.app, "_fm_win", None)
+        if fm_win is not None and hasattr(fm_win, "_remove_from_app_state"):
+            try:
+                fm_win._remove_from_app_state(path)
+            except Exception:
+                pass
+        else:
+            try:
+                self.app.attrs_data.pop(path, None)
+            except Exception:
+                pass
+            try:
+                if self.app.data and "paths" in self.app.data and path in self.app.data["paths"]:
+                    _i = self.app.data["paths"].index(path)
+                    _keep = [i for i in range(len(self.app.data["paths"])) if i != _i]
+                    self.app.data["paths"] = [self.app.data["paths"][i] for i in _keep]
+                    self.app.data["embeddings"] = self.app.data["embeddings"][_keep]
+            except Exception:
+                pass
+        try:
+            self.app.statusBar().showMessage(
+                _t(f"Trashed: {os.path.basename(path)} / ゴミ箱へ"), 4000)
+        except Exception:
+            pass
 
     def _toggle_always_on_top(self, checked):
         self.window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)
@@ -6260,9 +6397,9 @@ class PreviewHandler:
                     # Load via PIL thumbnail — decodes only at display resolution.
                     # draft() uses JPEG DCT scaling; BOX filter is fast for downscaling.
                     try:
-                        img = Image.open(path)
+                        import aisearch_logic as _lg
                         max_dim = int(max(vw, vh) * max(self.zoom_factor, 1.0))
-                        img.draft('RGB', (max_dim * 2, max_dim * 2))
+                        img = _lg.load_image_rgb(path, max_pixels=(max_dim * 2) * (max_dim * 2))
                         img.thumbnail((max_dim, max_dim), Image.BOX)
                         self._cached_pixmap = _pil_to_pixmap(img)
                     except Exception:
@@ -6291,6 +6428,16 @@ class PreviewHandler:
             if (sp.orientation() == Qt.Orientation.Vertical
                     and self.window._attr_scroll.isVisible()):
                 self.window.scroll_area.setMaximumHeight(nh)
+                # Zoom-in path: setMaximumHeight only caps the upper bound;
+                # if the splitter handle is currently allocating less than nh
+                # to the image pane (e.g. user zoomed in via wheel), the image
+                # can't actually grow. Force the splitter to allocate nh to
+                # the top pane when nh exceeds the current allocation.
+                cur_h = self.window.scroll_area.height()
+                if nh > cur_h:
+                    total = sp.size().height()
+                    bottom_size = max(0, total - nh - sp.handleWidth())
+                    sp.setSizes([nh, bottom_size])
             else:
                 self.window.scroll_area.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
         except Exception as e:

@@ -9,7 +9,7 @@
 
 LOCK_FILE="/tmp/aisearch-$(id -u).lock"
 DROP_FILE="/tmp/aisearch-$(id -u).drop"
-APP_DIR="/mnt/1TBSSD/AIsearch"
+APP_DIR="/mnt/1TBSSD/AItan"
 
 # Try to acquire the lock non-blocking via a separate fd. If it fails, the
 # Python instance is holding it — we're a "secondary" launch.
@@ -32,4 +32,4 @@ flock -u 9
 exec 9>&-
 
 # No primary instance — start the Python app, passing through any args.
-exec "$APP_DIR/venv/bin/python" "$APP_DIR/aisearch_main.py" "$@"
+exec "$APP_DIR/venv/bin/python" "$APP_DIR/aitan.py" "$@"

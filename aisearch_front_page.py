@@ -11,13 +11,18 @@ from attr_viewer import _lang_label as _t
 VERSION = "2.5.4"
 
 
+def _quiet_popen(args):
+    return subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+
+
 def get_thumbnail_pixmap(path, size=(350, 350)):
     """Returns (QPixmap or None, error_message or None)."""
     if not path or not os.path.exists(path):
         return None, "File not found"
     try:
         if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi')):
-            cap = cv2.VideoCapture(path)
+            cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
             mid = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.5)
             cap.set(cv2.CAP_PROP_POS_FRAMES, max(mid, 0))
             ret, frame = cap.read()
@@ -44,7 +49,7 @@ def open_external_viewer(path, keep_open=True):
     if sys.platform == "win32":
         os.startfile(path); return
     if sys.platform == "darwin":
-        subprocess.Popen(["open", path]); return
+        _quiet_popen(["open", path]); return
     # Linux: try dedicated apps, fall back to xdg-open
     is_video = path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm'))
     cmd = "celluloid" if is_video else "xviewer"
@@ -52,9 +57,9 @@ def open_external_viewer(path, keep_open=True):
         try: subprocess.run(["pkill", cmd], stderr=subprocess.DEVNULL)
         except: pass
     try:
-        subprocess.Popen([cmd, path])
+        _quiet_popen([cmd, path])
     except FileNotFoundError:
-        subprocess.Popen(["xdg-open", path])
+        _quiet_popen(["xdg-open", path])
 
 
 def create_context_menu(parent_widget, app_instance):
@@ -198,9 +203,9 @@ def open_in_nemo(path):
     import sys
     abs_path = os.path.abspath(path)
     if sys.platform == "win32":
-        subprocess.Popen(["explorer", "/select,", abs_path]); return
+        _quiet_popen(["explorer", "/select,", abs_path]); return
     if sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", abs_path]); return
+        _quiet_popen(["open", "-R", abs_path]); return
     # Linux: nemo / thunar / dolphin all support --select to highlight
     # a specific file within its parent folder. Nautilus uses the file
     # path directly. Fall back to opening the parent folder.
@@ -212,10 +217,10 @@ def open_in_nemo(path):
         ("dolphin",  [parent]),
     ):
         try:
-            subprocess.Popen([fm] + args); return
+            _quiet_popen([fm] + args); return
         except FileNotFoundError:
             continue
-    subprocess.Popen(["xdg-open", parent])
+    _quiet_popen(["xdg-open", parent])
 
 
 def execute_manual_move(old_path, target_dir, data, project_name, mode="size_check", parent_win=None):

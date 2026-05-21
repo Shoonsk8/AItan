@@ -746,7 +746,7 @@ class _FilenameMixin:
                 print(f"[fn-reload] error: {_e}")
             # Clear existing rows — hide() before setParent(None) so the
             # detached row doesn't briefly flash as a top-level
-            # "aisearch_main.py" window between detach and deleteLater().
+            # "aitan.py" window between detach and deleteLater().
             for _, _, _, _, rw in list(self._fn_rows):
                 rw.hide(); rw.setParent(None); rw.deleteLater()
             self._fn_rows.clear()

@@ -51,9 +51,10 @@ def _load_image_or_video_frame(path):
 def _try_image(path):
     """Attempt PIL image decode. Returns RGB array or None."""
     try:
-        from PIL import UnidentifiedImageError
-        import face_recognition as _fr
-        return _fr.load_image_file(path)
+        import numpy as _np
+        import aisearch_logic as _lg
+        img = _lg.load_image_rgb(path)
+        return _np.asarray(img)
     except Exception:
         return None
 
@@ -61,7 +62,7 @@ def _try_image(path):
 def _decode_video_first_frame(path):
     """ffmpeg/cv2 first-frame decode. Returns RGB array or None."""
     try:
-        cap = cv2.VideoCapture(path)
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         ok, frame = cap.read()
         cap.release()
         if not ok or frame is None:
@@ -168,7 +169,7 @@ def detect_file_attrs(path):
     Returns dict with lowercase keys e.g. {'o': '09', 'r': 'a8', 'k': '30'}."""
     result = {}
     try:
-        cap = cv2.VideoCapture(path)
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             return result
         width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -1477,7 +1478,7 @@ def dismantle_face_assignment(path, project, pid):
         # Decode image (or first video frame)
         if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
             import cv2
-            cap = cv2.VideoCapture(path)
+            cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
             ret, frame = cap.read()
             cap.release()
             if not ret or frame is None:
@@ -2698,7 +2699,7 @@ def _fmt_size(b):
 
 def _extract_video_meta(path, meta):
     try:
-        cap = cv2.VideoCapture(path)
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -5339,7 +5340,7 @@ def apply_pose_to_filename(path, pose_tag, project=None):
 def detect_resolution_tag(path):
     try:
         if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
-            cap = cv2.VideoCapture(path)
+            cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
@@ -5457,9 +5458,15 @@ def detect_shot_and_pose(path):
     if path.lower().endswith(('.mp4', '.mkv', '.mov', '.avi', '.webm')):
         return None, None, None
     try:
-        img = cv2.imread(path)
-        if img is None:
-            return None, None, None
+        try:
+            import numpy as _np
+            import aisearch_logic as _lg
+            img = cv2.cvtColor(_np.asarray(_lg.load_image_rgb(path)),
+                               cv2.COLOR_RGB2BGR)
+        except Exception:
+            img = cv2.imread(path)
+            if img is None:
+                return None, None, None
         # MediaPipe pose/shot detection doesn't need 4K precision — downscale
         # so a 4K original isn't held as ~50 MB raw + cvtColor copy. 1024 max
         # dimension preserves landmark accuracy.

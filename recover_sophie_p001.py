@@ -24,7 +24,7 @@ import shutil
 
 ROOT          = "/mnt/1TBSSD/AIX/Sophie/0Base/face/00-20"
 PROJECT       = "AIX"
-DATA_DIR      = "/mnt/1TBSSD/AIsearch/data"
+DATA_DIR      = "/mnt/1TBSSD/AItan/data"
 ATTRS_JSON    = os.path.join(DATA_DIR, f"attrs_{PROJECT}.json")
 FEATURES_PT   = os.path.join(DATA_DIR, f"features_{PROJECT}.pt")
 TARGET_PID    = "001"

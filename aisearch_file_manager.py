@@ -90,9 +90,13 @@ def open_default(path):
         if sys.platform == "win32":
             os.startfile(path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
+            subprocess.Popen(["open", path],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
         else:
-            subprocess.Popen(["xdg-open", path])
+            subprocess.Popen(["xdg-open", path],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -103,7 +107,9 @@ def open_with(cmd, path):
     import subprocess
     try:
         args = cmd if isinstance(cmd, list) else [cmd]
-        subprocess.Popen(args + [path])
+        subprocess.Popen(args + [path],
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
     except (FileNotFoundError, Exception):
         pass
 
@@ -141,6 +147,16 @@ def _stamp_rim(pixmap, color, width=3):
                pixmap.width() - width, pixmap.height() - width)
     p.end()
     return pixmap
+
+
+def _pil_image_to_qpixmap(img):
+    """Convert a PIL RGB image to QPixmap without relying on Qt file decode."""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    data = img.tobytes("raw", "RGB")
+    qimg = QImage(data, img.width, img.height, img.width * 3,
+                  QImage.Format.Format_RGB888).copy()
+    return QPixmap.fromImage(qimg)
 
 
 # Rim color per (is_video, locked) state. User-overridable via
@@ -252,11 +268,16 @@ def _make_thumb_pixmap(path, size):
                     max(1, int(orig.height() * sc))))
             img = reader.read()
             if img.isNull():
-                return None
-            px = QPixmap.fromImage(img).scaled(
-                size, size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
+                pil_img = logic.load_image_rgb(path, max_pixels=(size * 4) * (size * 4))
+                px = _pil_image_to_qpixmap(pil_img).scaled(
+                    size, size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+            else:
+                px = QPixmap.fromImage(img).scaled(
+                    size, size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
         # NOTE: rim is now stamped at icon-apply time (so lock-state
         # changes can update the rim without invalidating the cache).
         # The cached pixmap stays plain.
@@ -934,6 +955,23 @@ class _FMTreeList(QTreeWidget):
         mime = QMimeData()
         mime.setUrls(urls)
         drag = QDrag(self)
+        # Single-image drag: attach image bytes so web apps / chat boxes
+        # receive a picture instead of the text URL "file:///…". Also
+        # gives the drag cursor a thumbnail. Skipped for multi-select
+        # drags (web apps that accept multi-image upload use the URL
+        # list anyway).
+        if len(paths) == 1:
+            _ext = os.path.splitext(paths[0])[1].lower()
+            if _ext in logic.EXT_IMG:
+                _qi = QImage(paths[0])
+                if not _qi.isNull():
+                    mime.setImageData(_qi)
+                    _px = QPixmap.fromImage(_qi).scaled(
+                        128, 128,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+                    drag.setPixmap(_px)
+                    drag.setHotSpot(QPoint(_px.width()//2, _px.height()//2))
         drag.setMimeData(mime)
         # Default action mirrors what the user gestured at drag-start:
         # Ctrl held → Copy (so Qt shows the +copy cursor immediately),
@@ -1039,7 +1077,9 @@ class _FMTreeList(QTreeWidget):
                 # The in-app preview can't seek/scrub like a real player.
                 try:
                     import subprocess
-                    subprocess.Popen(["xdg-open", target])
+                    subprocess.Popen(["xdg-open", target],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
                 except Exception:
                     pass
             else:
@@ -2649,30 +2689,49 @@ class FileManagerWindow(QWidget):
         """Remove a trashed path from app.data, attrs_data, and the main
         window's visible table (so search / browse / dup results don't
         show ghost rows for files we just trashed)."""
+        try:
+            from aisearch_debug import dbg as _rm_dbg
+        except Exception:
+            _rm_dbg = lambda *a, **kw: None
         app = self.app
+        _rm_dbg(f"_remove_from_app_state path={os.path.basename(path)!r}")
         try:
             if app.data and "paths" in app.data and path in app.data["paths"]:
                 idx = app.data["paths"].index(path)
                 keep = [i for i in range(len(app.data["paths"])) if i != idx]
                 app.data["paths"] = [app.data["paths"][i] for i in keep]
                 app.data["embeddings"] = app.data["embeddings"][keep]
-        except Exception:
-            pass
+                _rm_dbg(f"  removed from app.data[paths] at idx={idx}")
+            else:
+                _rm_dbg(f"  NOT in app.data[paths] (data={bool(app.data)} key_present={app.data and path in app.data.get('paths', [])})")
+        except Exception as _e:
+            _rm_dbg(f"  app.data removal raised: {_e}")
         try:
+            had = path in app.attrs_data
             app.attrs_data.pop(path, None)
-        except Exception:
-            pass
+            _rm_dbg(f"  attrs_data.pop had_key={had}")
+        except Exception as _e:
+            _rm_dbg(f"  attrs_data.pop raised: {_e}")
         # Drop matching rows from the main table.
         try:
             table = getattr(app, "table", None)
             if table is not None and hasattr(table, "get_row_path"):
                 norm = os.path.normpath(os.path.abspath(path))
+                _rm_dbg(f"  table.rowCount={table.rowCount()} target_norm={norm!r}")
+                _removed = 0
+                _sample = []
                 for row in range(table.rowCount() - 1, -1, -1):
                     rp = table.get_row_path(row)
+                    if rp and len(_sample) < 3:
+                        _sample.append((row, os.path.normpath(os.path.abspath(rp))))
                     if rp and os.path.normpath(os.path.abspath(rp)) == norm:
                         table.removeRow(row)
-        except Exception:
-            pass
+                        _removed += 1
+                _rm_dbg(f"  rows_removed={_removed} sample_paths={_sample}")
+            else:
+                _rm_dbg(f"  no table or no get_row_path (table={table is not None})")
+        except Exception as _e:
+            _rm_dbg(f"  table removal raised: {_e}")
 
     # ── Cleanup ──────────────────────────────────────────────────────────────
     def closeEvent(self, ev):

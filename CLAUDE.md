@@ -2,14 +2,14 @@
 
 ## What This Is
 PyQt6 desktop app for AI-powered image/video search, tagging, and organization.
-Version 2.4.3. Entry point: `aisearch_main.py`. Launched via desktop icon using:
-`/mnt/1TBSSD/AIsearch/venv/bin/python /mnt/1TBSSD/AIsearch/aisearch_main.py`
+Version 2.4.3. Entry point: `aitan.py`. Launched via desktop icon using:
+`/mnt/1TBSSD/AItan/venv/bin/python /mnt/1TBSSD/AItan/aitan.py`
 
 ## File Map
 
 | File | Role |
 |------|------|
-| `aisearch_main.py` | Entry point, theme setup, creates `AISearchApp` |
+| `aitan.py` | Entry point, theme setup, creates `AISearchApp` |
 | `aisearch_app.py` | Main window (`AISearchApp`): search table, inline attr panel, undo, DB load, settings |
 | `aisearch_preview.py` | Preview window (`PreviewWindow`): media display, full attr panel with collapsible sections + hex combos |
 | `aisearch_settings.py` | Settings dialog (`SettingsView`): 9 tabs — coordinates mixins below |

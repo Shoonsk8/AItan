@@ -79,7 +79,7 @@ pip install git+https://github.com/openai/CLIP.git
 ### Step 4 — Run the app
 
 ```bash
-python aisearch_main.py
+python aitan.py
 ```
 
 ---

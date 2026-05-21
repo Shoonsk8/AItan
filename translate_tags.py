@@ -317,6 +317,6 @@ def translate_file(path):
 
 if __name__ == "__main__":
     import glob
-    for p in glob.glob("/mnt/1TBSSD/AIsearch/data/attrs_tags*.json"):
+    for p in glob.glob("/mnt/1TBSSD/AItan/data/attrs_tags*.json"):
         n = translate_file(p)
         print(f"{os.path.basename(p)}: {n} labels translated")
