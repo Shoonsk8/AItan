@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                               QMessageBox, QDialog, QCheckBox, QApplication,
                               QLineEdit, QSpinBox, QProgressBar, QComboBox, QTextEdit,
                               QGridLayout, QListWidget, QListWidgetItem)
-from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QPixmap, QShortcut, QKeySequence, QIcon, QCursor, QDrag, QColor, QFont
 
 from sentence_transformers import util as st_util
@@ -23,7 +23,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.6"
+VERSION = "2.7"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -210,6 +210,11 @@ class DropZoneLabel(QLabel):
 
     def dropEvent(self, event):
         _url_drop_handler(event, self._drop_callback)
+
+
+class _JoinCancelled(Exception):
+    """Raised from a join progress callback when the user hits Stop —
+    aborts aitsugi.join_videos mid-run."""
 
 
 class DropZoneFrame(QFrame):
@@ -554,6 +559,10 @@ class AISearchApp(QMainWindow):
         self._vj_left          = None
         self._vj_right         = None
         self._vj_source        = None
+        self._vj_session_dir   = None
+        self._vj_join_results  = []     # finished join outputs (green rows)
+        self._vj_joining       = False  # a join thread is currently running
+        self._vj_cancel        = False  # request to stop the running join
         self._vj_prev_candidates = set()
         self._vj_next_candidates = set()
         self._vj_candidate_scores = {}
@@ -594,6 +603,10 @@ class AISearchApp(QMainWindow):
 
     def eventFilter(self, obj, event):
         """Return arrow-key focus to the table after clicking toolbar controls."""
+        if obj is getattr(self, "_vj_search_area", None):
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Delete:
+                self._vj_delete_list_items()
+                return True
         if event.type() == QEvent.Type.FocusIn:
             if (not isinstance(obj, AISearchApp._INPUT_TYPES)
                     and isinstance(obj, (QPushButton, QCheckBox))
@@ -613,6 +626,7 @@ class AISearchApp(QMainWindow):
         # Header — 4 horizontal sections in a QSplitter so each is resizable.
         from PyQt6.QtWidgets import QSplitter as _QSplitter
         self.header = QFrame()
+        self.header.setObjectName("headerWidget")
         h_layout = QHBoxLayout(self.header)
         h_layout.setContentsMargins(15, 10, 15, 10)
         self._header_splitter = _QSplitter(Qt.Orientation.Horizontal)
@@ -643,6 +657,7 @@ class AISearchApp(QMainWindow):
 
         # Info panel
         self.info_widget = QWidget()
+        self.info_widget.setObjectName("infoWidget")
         info_layout = QVBoxLayout(self.info_widget)
         info_layout.setContentsMargins(15, 0, 15, 0)
 
@@ -775,28 +790,166 @@ class AISearchApp(QMainWindow):
         self.btn_video_join.clicked.connect(lambda: self._enter_video_join_mode())
         mode_col.addWidget(self.btn_video_join)
 
+        # Secondary Video Join buttons need an explicit style — without one
+        # they render as flat text (no button chrome) and don't look
+        # clickable. Grey for utilities, a checked-state colour for toggles.
+        _VJ_BTN_SS = (
+            "QPushButton { background-color: #6c757d; color: white; "
+            "font-weight: bold; padding: 6px 10px; border: none; "
+            "border-radius: 3px; } "
+            "QPushButton:hover { background-color: #7c858d; }")
+        _VJ_TOGGLE_SS = (
+            "QPushButton { background-color: #6c757d; color: white; "
+            "font-weight: bold; padding: 6px 10px; border: 2px solid transparent; "
+            "border-radius: 3px; } "
+            "QPushButton:hover { background-color: #7c858d; } "
+            "QPushButton:checked { background-color: #d4882a; "
+            "border: 2px solid white; }")
+
         self.btn_vj_search_area = QPushButton(_t("📁 Search Area / 📁 検索範囲"))
         self.btn_vj_search_area.setToolTip(_t(
             "Choose the folder Video Join searches for matching files / "
             "動画結合が一致ファイルを探すフォルダを選択"))
+        self.btn_vj_search_area.setStyleSheet(_VJ_BTN_SS)
         self.btn_vj_search_area.clicked.connect(self._vj_choose_search_area)
         self.btn_vj_search_area.hide()
         mode_col.addWidget(self.btn_vj_search_area)
+
+        self.btn_vj_recursive = QPushButton(_t("🔁 Recursive / 🔁 サブフォルダも"))
+        self.btn_vj_recursive.setToolTip(_t(
+            "Include sub-folders in the Video Join search area / "
+            "検索範囲にサブフォルダを含める"))
+        self.btn_vj_recursive.setCheckable(True)
+        self.btn_vj_recursive.setChecked(
+            bool(self.config.get("video_join_recursive", False)))
+        self.btn_vj_recursive.setStyleSheet(_VJ_TOGGLE_SS)
+        self.btn_vj_recursive.toggled.connect(self._vj_toggle_recursive)
+        self.btn_vj_recursive.hide()
+        mode_col.addWidget(self.btn_vj_recursive)
 
         self.btn_vj_gen_pic = QPushButton(_t("🖼 Generate Picture / 🖼 静止画を生成"))
         self.btn_vj_gen_pic.setToolTip(_t(
             "Generate a still picture from the source video's edge frame / "
             "ソース動画の端フレームから静止画を生成"))
+        self.btn_vj_gen_pic.setStyleSheet(_VJ_BTN_SS)
         self.btn_vj_gen_pic.clicked.connect(self._vj_generate_pic)
         self.btn_vj_gen_pic.hide()
         mode_col.addWidget(self.btn_vj_gen_pic)
 
+        self._vj_options_widget = QWidget()
+        _vj_opts = QVBoxLayout(self._vj_options_widget)
+        _vj_opts.setContentsMargins(0, 0, 0, 0)
+        _vj_opts.setSpacing(3)
+
+        _vj_opts_row1 = QHBoxLayout()
+        _vj_opts_row1.setSpacing(3)
+        self.vj_transition_spin = QSpinBox()
+        self.vj_transition_spin.setRange(-1, 120)
+        self.vj_transition_spin.setValue(self.config.get("video_join_transition", -1))
+        self.vj_transition_spin.setSpecialValueText("Auto")
+        self.vj_transition_spin.setSuffix("f")
+        self.vj_transition_spin.setToolTip(_t("Seam transition frames / 接ぎ目フレーム数"))
+        self.vj_mode_combo = QComboBox()
+        self.vj_mode_combo.wheelEvent = lambda e: e.ignore()
+        self.vj_mode_combo.addItem("Auto", "auto")
+        self.vj_mode_combo.addItem("Cut", "cut")
+        self.vj_mode_combo.addItem("Add", "add")
+        _mi = self.vj_mode_combo.findData(self.config.get("video_join_mode", "auto"))
+        if _mi >= 0:
+            self.vj_mode_combo.setCurrentIndex(_mi)
+        _vj_opts_row1.addWidget(QLabel(_t("Seam / 接ぎ目")))
+        _vj_opts_row1.addWidget(self.vj_transition_spin)
+        _vj_opts_row1.addWidget(QLabel(_t("Mode / モード")))
+        _vj_opts_row1.addWidget(self.vj_mode_combo, 1)
+        _vj_opts.addLayout(_vj_opts_row1)
+
+        _vj_opts_row2 = QHBoxLayout()
+        _vj_opts_row2.setSpacing(3)
+        self.vj_size_combo = QComboBox()
+        self.vj_size_combo.wheelEvent = lambda e: e.ignore()
+        self.vj_size_combo.setEditable(True)
+        for label, data in [("1280x720", "1280x720"), ("1920x1080", "1920x1080"),
+                            ("1080x1920", "1080x1920"), ("720x1280", "720x1280"),
+                            ("A", "a"), ("B", "b"), ("Auto", "auto")]:
+            self.vj_size_combo.addItem(label, data)
+        _sz = self.config.get("video_join_size", "auto")
+        _si = self.vj_size_combo.findData(_sz)
+        if _si >= 0:
+            self.vj_size_combo.setCurrentIndex(_si)
+        else:
+            self.vj_size_combo.setCurrentText(str(_sz))
+        self.vj_aspect_combo = QComboBox()
+        self.vj_aspect_combo.wheelEvent = lambda e: e.ignore()
+        for label, data in [("Crop", "cover"), ("Fit", "contain"), ("Pad", "pad"),
+                            ("Auto", "auto"), ("Stretch", "stretch")]:
+            self.vj_aspect_combo.addItem(label, data)
+        _ai = self.vj_aspect_combo.findData(self.config.get("video_join_aspect", "contain"))
+        if _ai >= 0:
+            self.vj_aspect_combo.setCurrentIndex(_ai)
+        self.vj_fps_combo = QComboBox()
+        self.vj_fps_combo.wheelEvent = lambda e: e.ignore()
+        self.vj_fps_combo.setEditable(True)
+        for label, data in [("Auto", "auto"), ("24", "24"), ("30", "30"),
+                            ("60", "60"), ("A", "a"), ("B", "b")]:
+            self.vj_fps_combo.addItem(label, data)
+        _fps = self.config.get("video_join_fps", "auto")
+        _fi = self.vj_fps_combo.findData(_fps)
+        if _fi >= 0:
+            self.vj_fps_combo.setCurrentIndex(_fi)
+        else:
+            self.vj_fps_combo.setCurrentText(str(_fps))
+        _vj_opts_row2.addWidget(QLabel(_t("Size / サイズ")))
+        _vj_opts_row2.addWidget(self.vj_size_combo)
+        _vj_opts_row2.addWidget(QLabel(_t("Fit / 合わせ")))
+        _vj_opts_row2.addWidget(self.vj_aspect_combo)
+        _vj_opts_row2.addWidget(QLabel("FPS"))
+        _vj_opts_row2.addWidget(self.vj_fps_combo)
+        _vj_opts.addLayout(_vj_opts_row2)
+        self.vj_transition_spin.valueChanged.connect(self._vj_save_options)
+        self.vj_mode_combo.currentIndexChanged.connect(self._vj_save_options)
+        self.vj_size_combo.currentTextChanged.connect(self._vj_save_options)
+        self.vj_aspect_combo.currentIndexChanged.connect(self._vj_save_options)
+        self.vj_fps_combo.currentTextChanged.connect(self._vj_save_options)
+        self._vj_options_widget.hide()
+
+        # Join Selected is the primary Video Join action — make it a bold,
+        # unmistakable green button so it stands out as THE thing to click.
         self.btn_join_selected = QPushButton(_t("🔗 Join Selected / 🔗 選択を結合"))
         self.btn_join_selected.setToolTip(_t(
-            "Join the selected videos in row order / 選択した動画を行順に結合"))
+            "Join the checked candidates with the source — one output each. "
+            "No candidates checked → joins the left/right pair. / "
+            "チェックした候補をソースと結合（候補ごとに出力）。未チェックなら左右ペアを結合。"))
+        # Green = idle "Join", red = "Stop" while a join runs (_vj_join_done
+        # / _vj_join_btn_busy swap between them).
+        self._vj_join_ss = (
+            "QPushButton { background-color: #2f9e44; color: white; "
+            "font-weight: bold; padding: 8px 10px; border: 2px solid white; "
+            "border-radius: 3px; } "
+            "QPushButton:hover { background-color: #37b24d; }")
+        self._vj_stop_ss = (
+            "QPushButton { background-color: #c0392b; color: white; "
+            "font-weight: bold; padding: 8px 10px; border: 2px solid white; "
+            "border-radius: 3px; } "
+            "QPushButton:hover { background-color: #e74c3c; }")
+        self.btn_join_selected.setStyleSheet(self._vj_join_ss)
         self.btn_join_selected.clicked.connect(self._join_selected_videos)
         self.btn_join_selected.hide()
         mode_col.addWidget(self.btn_join_selected)
+
+        _vj_sel_row = QHBoxLayout()
+        self.btn_vj_select_all = QPushButton(_t("☑ All / ☑ 全選択"))
+        self.btn_vj_select_all.setToolTip(_t("Check every candidate / 全候補にチェック"))
+        self.btn_vj_select_all.setStyleSheet(_VJ_BTN_SS)
+        self.btn_vj_select_all.clicked.connect(lambda: self._vj_set_all_checks(True))
+        self.btn_vj_deselect_all = QPushButton(_t("☐ None / ☐ 全解除"))
+        self.btn_vj_deselect_all.setToolTip(_t("Uncheck every candidate / 全候補のチェックを外す"))
+        self.btn_vj_deselect_all.setStyleSheet(_VJ_BTN_SS)
+        self.btn_vj_deselect_all.clicked.connect(lambda: self._vj_set_all_checks(False))
+        self.btn_vj_select_all.hide()
+        self.btn_vj_deselect_all.hide()
+        _vj_sel_row.addWidget(self.btn_vj_select_all)
+        _vj_sel_row.addWidget(self.btn_vj_deselect_all)
+        mode_col.addLayout(_vj_sel_row)
 
         mode_and_dup.addLayout(mode_col)
 
@@ -1124,6 +1277,11 @@ class AISearchApp(QMainWindow):
             cfg.save_config(self.config, getattr(self, "current_project", None))
         self._chk_disable_preview.toggled.connect(_on_disable_preview_toggle)
         _s4_layout.addWidget(self._chk_disable_preview, alignment=Qt.AlignmentFlag.AlignRight)
+        self._vj_options_title = QLabel(_t("Video Join Options / 動画結合オプション"))
+        self._vj_options_title.setStyleSheet("font-weight:bold; color:#f0c36d;")
+        self._vj_options_title.hide()
+        _s4_layout.addWidget(self._vj_options_title, alignment=Qt.AlignmentFlag.AlignRight)
+        _s4_layout.addWidget(self._vj_options_widget)
         _s4_layout.addStretch()
         self._header_splitter.addWidget(_section4)
 
@@ -1275,12 +1433,18 @@ class AISearchApp(QMainWindow):
         _fn_row_lay.addWidget(self.btn_disasm_nonsamples)
         _table_wrap_lay.addWidget(_fn_row)
         self._vj_search_area = QListWidget()
+        self._vj_search_area.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         # No QListWidget::item QSS rule — a styled ::item makes Qt ignore
         # programmatic item.setBackground(), which is what colors the
         # blue/red candidate rows.
         self._vj_search_area.setStyleSheet(self._vj_search_area_stylesheet())
         self._vj_search_area.itemDoubleClicked.connect(self._vj_candidate_activated)
         self._vj_search_area.itemClicked.connect(self._vj_candidate_clicked)
+        self._vj_search_area.currentItemChanged.connect(
+            lambda current, _previous: self._vj_candidate_focused(current))
+        self._vj_search_area.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._vj_search_area.customContextMenuRequested.connect(self._on_vj_right_click)
+        self._vj_search_area.installEventFilter(self)
         self._vj_search_area.hide()
         _table_wrap_lay.addWidget(self._vj_search_area, stretch=1)
         _table_wrap_lay.addWidget(self.table, stretch=1)
@@ -1499,6 +1663,13 @@ class AISearchApp(QMainWindow):
             # Selection highlight = gold, deliberately NOT blue/red/green
             # so it never collides with the left/right/single row colors.
             "QListWidget::item:selected { background:#e0a020; color:#1a1a1a; }"
+            # A styled QListWidget won't draw the check indicator unless
+            # ::indicator is styled explicitly — without this the Batch Join
+            # checkboxes are invisible.
+            "QListWidget::indicator { width:18px; height:18px; "
+            "border:2px solid #aab; border-radius:3px; background:#1c2024; }"
+            "QListWidget::indicator:checked { background:#e0a020; "
+            "border:2px solid #e0a020; }"
         )
 
     def _apply_header_theme(self, font_size_only=False, pfs=None):
@@ -1544,7 +1715,11 @@ class AISearchApp(QMainWindow):
         if os.environ.get("AISEARCH_DEBUG_BG"):
             print(f"[_apply_header_theme] project={getattr(self,'current_project',None)!r} "
                   f"proj_color={_proj_color!r} bg={_bg_color}")
-        self.header.setStyleSheet(f"background-color: {header_bg};")
+        # ID-scoped so the background applies ONLY to the header frame and
+        # does not bleed into child buttons (an unscoped rule kills their
+        # button chrome — they end up looking like plain text labels).
+        self.header.setStyleSheet(
+            f"#headerWidget {{ background-color: {header_bg}; }}")
         # The right-pad widget paints reliably via palette+stylesheet — use
         # the same mechanism on EVERY thumbnail-related widget so they all
         # show the project color uniformly. Border lives only on thumb_outer.
@@ -1570,7 +1745,8 @@ class AISearchApp(QMainWindow):
         for _cell in getattr(self, "_strip_cells", []):
             _cell._bg_color = _bg_color
             _cell.update()
-        self.info_widget.setStyleSheet(f"background-color: {header_bg};")
+        self.info_widget.setStyleSheet(
+            f"#infoWidget {{ background-color: {header_bg}; }}")
         self.lbl_base_dir.setStyleSheet(f"color: {base_color};")
         self.lbl_dup_status.setStyleSheet(f"color: {status_color};")
         self.btn_hide_confirmed.setStyleSheet(hide_ss)
@@ -2007,6 +2183,10 @@ class AISearchApp(QMainWindow):
                 self.table.item(r, 3).setText(self._mask_path(old_path))
                 if select: self._select_row(r)
                 break
+        if self.config.get("last_mode") == "videojoin":
+            self._vj_state_replace_path(new_path, old_path)
+            self._vj_set_pair(self._vj_left, self._vj_right)
+            self._vj_select_path_in_list(old_path)
 
     def _undo_delete(self, action, save_db=True, save_attrs=True, select=True):
         orig_path, trash_path = action["orig_path"], action["trash_path"]
@@ -2051,6 +2231,15 @@ class AISearchApp(QMainWindow):
                 if self.table.item(row, col):
                     self.table.item(row, col).setBackground(bg)
         if select: self._select_row(row)
+        if self.config.get("last_mode") == "videojoin":
+            if action.get("vj_row_type") == "joined":
+                results = getattr(self, "_vj_join_results", None)
+                if results is None:
+                    results = self._vj_join_results = []
+                if all(os.path.normpath(p) != os.path.normpath(orig_path) for p in results):
+                    results.append(orig_path)
+            self._vj_set_pair(self._vj_left, self._vj_right)
+            self._vj_select_path_in_list(orig_path)
         if save_db:
             self._rebuild_dup_display_data()
             self._save_dup_results()
@@ -3035,6 +3224,10 @@ class AISearchApp(QMainWindow):
             self._apply_header_theme()
         except Exception:
             pass
+        try:
+            self.reload_fonts()
+        except Exception:
+            pass
         # Also update last_project in global config so startup knows which project
         _g = cfg.load_config()
         _g["last_project"] = name
@@ -3270,6 +3463,7 @@ class AISearchApp(QMainWindow):
 
         paths = self.data.get("paths", [])
         exts  = logic.EXT_IMG + logic.EXT_VID
+        known_sizes = getattr(self, "_watch_known_sizes", {})
 
         # ── Detect missing files ──────────────────────────────────────────────
         missing_idx = [i for i, p in enumerate(paths) if not os.path.exists(p)]
@@ -3298,27 +3492,51 @@ class AISearchApp(QMainWindow):
         _wdbg(f"watch_scan known_paths={len(paths)} missing={len(missing_idx)} "
               f"new_files={len(new_files)} sample_new={new_files[:3]}")
 
-        # ── Match moved files by filename before removing them ────────────────
+        # ── Match moved/externally-renamed files before removing them ─────────
         # If a missing file has a unique basename match among new files, treat
-        # it as a move: reuse the embedding, transfer attrs, skip re-extraction.
+        # it as a move. Nemo/external rename changes the basename, so for
+        # locked files also accept a unique same-folder + same-size candidate;
+        # that preserves editable=False instead of creating a fresh unlocked
+        # entry at the new path.
         if missing_idx and new_files:
             import aisearch_attrs as _am_tmp
             new_by_name = {}
+            new_by_dir_size = {}
             for fp in new_files:
                 new_by_name.setdefault(os.path.basename(fp), []).append(fp)
+                try:
+                    key = (os.path.dirname(os.path.abspath(fp)), os.path.getsize(fp))
+                    new_by_dir_size.setdefault(key, []).append(fp)
+                except OSError:
+                    pass
 
             moved_attrs_dirty = False
+            moved_renames = {}
             handled_missing = set()
             handled_new = set()
             for i in missing_idx:
                 old_path = paths[i]
                 candidates = new_by_name.get(os.path.basename(old_path), [])
+                if len(candidates) != 1:
+                    old_entry = self.attrs_data.get(old_path) or {}
+                    if old_entry.get("editable") is False:
+                        old_dir = os.path.dirname(os.path.abspath(old_path))
+                        old_size = known_sizes.get(old_path)
+                        if old_size is not None:
+                            candidates = new_by_dir_size.get((old_dir, old_size), [])
+                        if len(candidates) != 1:
+                            same_dir = [
+                                fp for fp in new_files
+                                if os.path.dirname(os.path.abspath(fp)) == old_dir
+                            ]
+                            candidates = same_dir if len(same_dir) == 1 else []
                 if len(candidates) == 1:
                     new_path = candidates[0]
                     self.data["paths"][i] = new_path
                     if old_path in self.attrs_data:
                         self.attrs_data[new_path] = self.attrs_data.pop(old_path)
                         moved_attrs_dirty = True
+                    moved_renames[old_path] = new_path
                     handled_missing.add(i)
                     handled_new.add(new_path)
 
@@ -3329,6 +3547,9 @@ class AISearchApp(QMainWindow):
                 known = set(os.path.normpath(p) for p in paths)
                 if moved_attrs_dirty:
                     _am_tmp.save(self.current_project, self.attrs_data)
+                if moved_renames:
+                    _am_tmp.flush_path_renames_to_stores(
+                        moved_renames, self.current_project, update_clip_pt=False)
                 _am_tmp.atomic_torch_save(self.data,
                            os.path.join(_am_tmp.DATA_DIR,
                                         f"features_{self.current_project}.pt"))
@@ -3489,6 +3710,15 @@ class AISearchApp(QMainWindow):
             # Always update prev sizes — even if an exception cut the loop short.
             # Without this, files remain "first sight" forever on the next scan.
             self._watch_prev_sizes = _next_sizes
+            _known_sizes = {}
+            for _p in self.data.get("paths", []):
+                if not _p or not os.path.exists(_p):
+                    continue
+                try:
+                    _known_sizes[_p] = os.path.getsize(_p)
+                except OSError:
+                    pass
+            self._watch_known_sizes = _known_sizes
             _wdbg(f"watch_scan loop_end added={added} retry={len(retry_files)} "
                   f"prev_sz_seen={len(_prev_sizes)} new_sz_recorded={len(_next_sizes)}")
 
@@ -3504,36 +3734,50 @@ class AISearchApp(QMainWindow):
             if added:       parts.append(f"{added} added")
             if missing_idx: parts.append(f"{len(missing_idx)} removed")
             self.statusBar().showMessage(f"Auto-updated: {', '.join(parts)}.", 4000)
+            # Video Join mode: index the new files silently. The watch
+            # arrival is still shown in the preview window, but the main
+            # page is NOT changed — navigating would lose the left/right
+            # pair + edge-search results.
+            _in_videojoin = self.config.get("last_mode") == "videojoin"
             if added and added_final_paths:
                 # added_final_paths already has the correct final path for each new file
                 # (after any auto-renames), so no need to reconstruct via scan_renames.
                 added_final_paths.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
                 newest = added_final_paths[-1]
-                def _browse_to_arrival(p=newest):
-                    if hasattr(self, '_search_cancel'):
-                        self._search_cancel[0] = True
-                    self._search_running = False
-                    self._lock_preview = False  # ensure preview updates even if search was cancelled
-                    self._enter_browse_mode(os.path.dirname(os.path.abspath(p)))
-                    target = os.path.normpath(p)
-                    _found_row = -1
-                    for row in range(self.table.rowCount()):
-                        rpath = self.table.get_row_path(row)
-                        if rpath and os.path.normpath(rpath) == target:
-                            self._select_row(row)
-                            self.table.scrollToTop()
-                            _found_row = row
-                            break
-                    # Always force a direct preview show so the new file is displayed
-                    # even if row selection didn't fire (e.g. same row already selected,
-                    # or file was moved to a different directory by auto-rename).
-                    self.preview_handler.show(p)
-                    # Trigger CLIP inspect if mode = "on watch receive"
-                    if self.config.get("clip_inspect_mode") == "watch":
-                        pw = self.preview_handler.window
-                        if pw:
-                            pw._on_inspect()
-                QTimer.singleShot(0, _browse_to_arrival)
+                if _in_videojoin:
+                    # Show the arrival in preview only — no navigation.
+                    def _vj_preview_arrival(p=newest):
+                        try:
+                            self.preview_handler.show(p)
+                        except Exception:
+                            pass
+                    QTimer.singleShot(0, _vj_preview_arrival)
+                else:
+                    def _browse_to_arrival(p=newest):
+                        if hasattr(self, '_search_cancel'):
+                            self._search_cancel[0] = True
+                        self._search_running = False
+                        self._lock_preview = False  # ensure preview updates even if search was cancelled
+                        self._enter_browse_mode(os.path.dirname(os.path.abspath(p)))
+                        target = os.path.normpath(p)
+                        _found_row = -1
+                        for row in range(self.table.rowCount()):
+                            rpath = self.table.get_row_path(row)
+                            if rpath and os.path.normpath(rpath) == target:
+                                self._select_row(row)
+                                self.table.scrollToTop()
+                                _found_row = row
+                                break
+                        # Always force a direct preview show so the new file is displayed
+                        # even if row selection didn't fire (e.g. same row already selected,
+                        # or file was moved to a different directory by auto-rename).
+                        self.preview_handler.show(p)
+                        # Trigger CLIP inspect if mode = "on watch receive"
+                        if self.config.get("clip_inspect_mode") == "watch":
+                            pw = self.preview_handler.window
+                            if pw:
+                                pw._on_inspect()
+                    QTimer.singleShot(0, _browse_to_arrival)
 
         # Re-check pending files after 3s
         if retry_files:
@@ -5669,12 +5913,25 @@ class AISearchApp(QMainWindow):
     def on_drop(self, path):
         # Video Join mode: a drop sets the working file and stays in
         # Video Join — it does NOT run a similarity search / switch modes.
+        # Video Join joins videos, so the drop must be a video, not an image.
+        # A drop directly on a header cell is routed to _vj_cell_drop (which
+        # targets that exact left/right side); this general handler fires for
+        # drops on the placeholder / border / table — it sets the LEFT side
+        # and keeps the RIGHT, without re-listing the table.
         if self.config.get("last_mode") == "videojoin":
+            if not path.lower().endswith(tuple(logic.EXT_VID)):
+                self.statusBar().showMessage(
+                    _t("Video Join needs a video file — drop a video, not an image. / "
+                       "動画結合には動画ファイルが必要です — 画像ではなく動画をドロップ。"), 6000)
+                return
             self._vj_source = path
-            try:
-                self._update_filmstrip_cells([path], selected_path=path)
-            except Exception:
-                pass
+            # A dropped file defines the working search area. Re-list the
+            # Video Join corpus from that file's folder so edge search looks
+            # beside the dropped video, not in the previous folder.
+            self._vj_left = path
+            drop_dir = os.path.dirname(os.path.abspath(path)) or os.getcwd()
+            self._enter_video_join_mode(drop_dir)
+            self._vj_set_pair(path, self._vj_right)
             try:
                 if getattr(self, "preview_handler", None):
                     self.preview_handler.show(path)
@@ -6052,8 +6309,17 @@ class AISearchApp(QMainWindow):
             self.btn_apply_rules.setVisible(mode == "browse")
         if hasattr(self, "btn_join_selected"):
             self.btn_join_selected.setVisible(mode == "videojoin")
+        if hasattr(self, "btn_vj_select_all"):
+            self.btn_vj_select_all.setVisible(mode == "videojoin")
+            self.btn_vj_deselect_all.setVisible(mode == "videojoin")
         if hasattr(self, "btn_vj_search_area"):
             self.btn_vj_search_area.setVisible(mode == "videojoin")
+        if hasattr(self, "btn_vj_recursive"):
+            self.btn_vj_recursive.setVisible(mode == "videojoin")
+        if hasattr(self, "_vj_options_widget"):
+            self._vj_options_widget.setVisible(mode == "videojoin")
+        if hasattr(self, "_vj_options_title"):
+            self._vj_options_title.setVisible(mode == "videojoin")
         if hasattr(self, "btn_vj_gen_pic") and mode != "videojoin":
             self.btn_vj_gen_pic.hide()
         if hasattr(self, "_table_wrap"):
@@ -6173,15 +6439,101 @@ class AISearchApp(QMainWindow):
         if folder and os.path.isdir(folder):
             self._enter_video_join_mode(folder)
 
-    def _enter_video_join_mode(self, directory=None):
+    def _vj_toggle_recursive(self, checked):
+        """Recursive toggle — persist the choice and re-list the current
+        search area so sub-folders are included (or excluded)."""
+        self.config["video_join_recursive"] = bool(checked)
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+        if self.config.get("last_mode") == "videojoin" and self._browse_dir:
+            self._enter_video_join_mode(self._browse_dir)
+
+    def _vj_combo_choice(self, combo):
+        index = combo.currentIndex()
+        text = combo.currentText().strip()
+        if index >= 0 and text == combo.itemText(index):
+            data = combo.currentData()
+            return str(data) if data is not None else text
+        return text
+
+    def _vj_save_options(self, *args):
+        if not hasattr(self, "vj_transition_spin"):
+            return
+        self.config["video_join_transition"] = self.vj_transition_spin.value()
+        self.config["video_join_mode"] = self.vj_mode_combo.currentData()
+        self.config["video_join_aspect"] = self.vj_aspect_combo.currentData()
+        self.config["video_join_size"] = self._vj_combo_choice(self.vj_size_combo)
+        self.config["video_join_fps"] = self._vj_combo_choice(self.vj_fps_combo)
+        cfg.save_config(self.config, getattr(self, "current_project", None))
+
+    def _vj_current_options(self):
+        if not hasattr(self, "vj_transition_spin"):
+            return -1, "auto", "contain", "auto", "auto"
+        return (
+            self.vj_transition_spin.value(),
+            self.vj_mode_combo.currentData(),
+            self.vj_aspect_combo.currentData(),
+            self._vj_combo_choice(self.vj_size_combo),
+            self._vj_combo_choice(self.vj_fps_combo),
+        )
+
+    def _vj_resolve_output_size(self, choice, video_a, video_b):
+        choice = (choice or "auto").strip().lower().replace(" ", "")
+        if choice == "auto":
+            return None
+        import aitsugi
+        if choice == "a":
+            info = aitsugi.get_video_info(video_a)
+            return info.width, info.height
+        if choice == "b":
+            info = aitsugi.get_video_info(video_b)
+            return info.width, info.height
+        parts = choice.split("x")
+        if len(parts) != 2:
+            raise ValueError("Size must be Auto, A, B, or WIDTHxHEIGHT")
+        width, height = int(parts[0]), int(parts[1])
+        if width <= 0 or height <= 0:
+            raise ValueError("Size dimensions must be positive")
+        return width, height
+
+    def _vj_resolve_output_fps(self, choice, video_a, video_b):
+        choice = (choice or "auto").strip().lower().replace("fps", "").strip()
+        if choice == "auto":
+            return None
+        import aitsugi
+        if choice == "a":
+            return aitsugi.get_video_info(video_a).fps
+        if choice == "b":
+            return aitsugi.get_video_info(video_b).fps
+        fps = float(choice)
+        if fps <= 0:
+            raise ValueError("FPS must be positive")
+        return fps
+
+    def _enter_video_join_mode(
+            self, directory=None, seed_path=None, force_seed=False,
+            preserve_session=False):
         """Browse-style folder view restricted to videos, with the
         Join Selected action. Mirrors _enter_browse_mode but lists only
         video files and sets last_mode='videojoin'."""
+        previous_mode = self.config.get("last_mode")
+        media_exts = tuple(ext.lower() for ext in (logic.EXT_VID + logic.EXT_IMG))
+
+        selected_source = None
+        if (seed_path and os.path.exists(seed_path)
+                and os.path.splitext(seed_path)[1].lower() in media_exts):
+            selected_source = os.path.abspath(seed_path)
+
         if directory is None:
-            row = self._current_row()
-            if row >= 0:
-                path = self.table.get_row_path(row)
-                directory = os.path.dirname(os.path.abspath(path)) if path else None
+            if selected_source:
+                directory = os.path.dirname(os.path.abspath(selected_source))
+            elif self._vj_session_dir and os.path.isdir(self._vj_session_dir):
+                directory = self._vj_session_dir
+            else:
+                row = self._current_row()
+                if row >= 0:
+                    candidate = self.table.get_row_path(row)
+                    if candidate and os.path.exists(candidate):
+                        directory = os.path.dirname(os.path.abspath(candidate))
             if not directory and self.base_dirs:
                 directory = self.base_dirs[0]
             if not directory:
@@ -6194,20 +6546,44 @@ class AISearchApp(QMainWindow):
         if not directory or not os.path.isdir(directory):
             return
 
-        selected_source = None
-        row = self._current_row()
-        if row >= 0:
-            selected_source = self.table.get_row_path(row)
-            if selected_source and os.path.splitext(selected_source)[1].lower() not in logic.EXT_VID:
-                selected_source = None
+        has_existing_session = bool(
+            self._vj_left
+            or self._vj_right
+            or getattr(self, "_vj_matches", None)
+            or getattr(self, "_vj_join_results", None)
+        )
+        session_same_dir = (
+            bool(self._vj_session_dir)
+            and os.path.abspath(self._vj_session_dir) == os.path.abspath(directory)
+        )
+        fresh_entry = False if preserve_session else (
+            force_seed or (
+                previous_mode != "videojoin" and not (has_existing_session and session_same_dir)
+            )
+        )
+        if fresh_entry:
+            self._vj_left = None
+            self._vj_right = None
+            self._vj_source = selected_source
+            self._vj_matches = []
+            self._vj_join_results = []
+            self._vj_prev_candidates = set()
+            self._vj_next_candidates = set()
+            self._vj_candidate_scores = {}
+            self._vj_color = "blue"
+        self._vj_session_dir = directory
 
         self._browse_dir = directory
-        self._vj_left = None
-        self._vj_right = None
-        self._vj_source = None
-        self._vj_prev_candidates = set()
-        self._vj_next_candidates = set()
-        self._vj_candidate_scores = {}
+        # Show the current search-area folder on the button so it's always
+        # visible (basename on the button, full path in the tooltip).
+        if hasattr(self, "btn_vj_search_area"):
+            _bn = os.path.basename(directory.rstrip(os.sep)) or directory
+            self.btn_vj_search_area.setText(_t(f"📁 {_bn}"))
+            self.btn_vj_search_area.setToolTip(
+                _t(f"Video Join search area: {directory}\n"
+                   f"Click to change. / クリックで変更"))
+        # Preserve an existing Video Join session when returning to the same
+        # search area. A new source is only seeded by explicit send/drop flows.
         self.config["last_mode"] = "videojoin"
         cfg.save_config(self.config, getattr(self, "current_project", None))
         self._update_mode_buttons("videojoin")
@@ -6218,17 +6594,31 @@ class AISearchApp(QMainWindow):
             self.btn_sort_by_sample.setVisible(False)
 
         # List videos AND images — a matching "start picture" already in
-        # the group must be findable by the edge search.
-        media_exts = tuple(ext.lower() for ext in (logic.EXT_VID + logic.EXT_IMG))
+        # the group must be findable by the edge search. When the Recursive
+        # toggle is on, walk sub-folders too.
+        recursive = (hasattr(self, "btn_vj_recursive")
+                     and self.btn_vj_recursive.isChecked())
+        raw = []
         try:
-            entries = os.listdir(directory)
+            if recursive:
+                for root, _dirs, fns in os.walk(directory):
+                    for f in fns:
+                        if f.lower().endswith(media_exts):
+                            raw.append(os.path.join(root, f))
+            else:
+                for f in os.listdir(directory):
+                    fp = os.path.join(directory, f)
+                    if f.lower().endswith(media_exts) and os.path.isfile(fp):
+                        raw.append(fp)
         except PermissionError:
             return
-        files = sorted(
-            (os.path.join(directory, f) for f in entries
-             if f.lower().endswith(media_exts)
-             and os.path.isfile(os.path.join(directory, f))),
-            key=lambda p: os.path.getmtime(p), reverse=True)
+
+        def _mtime(p):
+            try:
+                return os.path.getmtime(p)
+            except OSError:
+                return 0.0
+        files = sorted(raw, key=_mtime, reverse=True)
 
         self.table.setHorizontalHeaderLabels(["#", _t("Size / サイズ"), _t("Name / 名前"), _t("Path / パス"), _t("Date / 日付"), _t("Type / 種類")])
         self.table.setSortingEnabled(False)
@@ -6241,14 +6631,61 @@ class AISearchApp(QMainWindow):
                              fp)
         self.table.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
         self.table.setSortingEnabled(True)
-        if not selected_source and files:
-            selected_source = files[0]
-        self._vj_source = selected_source
-        if selected_source:
-            self._update_filmstrip_cells([selected_source], selected_path=selected_source)
+        if fresh_entry and selected_source:
+            selected_norm = os.path.normpath(selected_source)
+            for r in range(self.table.rowCount()):
+                if os.path.normpath(self.table.get_row_path(r) or "") == selected_norm:
+                    self.table.selectRow(r)
+                    break
+        # Existing same-folder session: preserve pair/results. Fresh explicit
+        # send/drop entry: show the seeded source in the Video Join header.
+        if not fresh_entry and (self._vj_left or self._vj_right or getattr(self, "_vj_matches", None)):
+            self._vj_set_pair(self._vj_left, self._vj_right)
+        else:
+            self._vj_source = selected_source
+            if selected_source:
+                self._update_filmstrip_cells([selected_source], selected_path=selected_source)
+            else:
+                self._update_filmstrip_cells([])
         self.statusBar().showMessage(
             _t(f"Video Join: {len(files)} videos — double-click the green thumbnail's right side for next / "
                f"動画結合: {len(files)}本 — 緑サムネ右側をダブルクリックで次を検索"), 6000)
+
+    def _send_to_video_join(self, path, side=None):
+        """Explicit context-menu handoff into Video Join.
+
+        This is intentionally the only row-focus based way to add a file to
+        the current Video Join combination, so accidental clicks in other modes
+        do not change an existing join combination/results. When side is
+        provided by the context menu, do not guess: put the file exactly on
+        that side.
+        """
+        media_exts = tuple(ext.lower() for ext in logic.EXT_VID)
+        if (not path or not os.path.isfile(path)
+                or os.path.splitext(path)[1].lower() not in media_exts):
+            self.statusBar().showMessage(
+                _t("Send to Video Join needs a video file. / 動画結合へ送るには動画ファイルが必要です。"),
+                5000)
+            return
+        path = os.path.abspath(path)
+        directory = os.path.dirname(path)
+        self._enter_video_join_mode(directory, preserve_session=True)
+        self._vj_source = path
+        if side == "left":
+            self._vj_set_pair(path, self._vj_right)
+        elif side == "right":
+            self._vj_set_pair(self._vj_left, path)
+        else:
+            self._vj_designate(path)
+        self._vj_select_path_in_list(path)
+        try:
+            if getattr(self, "preview_handler", None):
+                self.preview_handler.show(path)
+        except Exception:
+            pass
+        self.statusBar().showMessage(
+            _t(f"Sent to Video Join: {os.path.basename(path)} / 動画結合へ送信: {os.path.basename(path)}"),
+            6000)
 
     def _on_drop_zone_double_click(self, event):
         if self.config.get("last_mode") == "videojoin":
@@ -6258,23 +6695,23 @@ class AISearchApp(QMainWindow):
         if hasattr(self.drop_zone, "_drop_callback"):
             event.accept()
 
-    def _vj_current_video_path(self):
+    def _vj_current_media_path(self):
         row = self._current_row()
-        if row < 0:
-            return None
-        path = self.table.get_row_path(row)
-        if path and os.path.splitext(path)[1].lower() in logic.EXT_VID and os.path.exists(path):
-            return path
         path = getattr(self, "_vj_source", None)
-        if path and os.path.splitext(path)[1].lower() in logic.EXT_VID and os.path.exists(path):
+        media_exts = tuple(logic.EXT_VID + logic.EXT_IMG)
+        if path and os.path.splitext(path)[1].lower() in media_exts and os.path.exists(path):
             return path
+        if row >= 0:
+            path = self.table.get_row_path(row)
+            if path and os.path.splitext(path)[1].lower() in media_exts and os.path.exists(path):
+                return path
         return None
 
     def _vj_search_from_thumbnail(self, event):
-        source = self._vj_current_video_path()
+        source = self._vj_current_media_path()
         if not source:
             self.statusBar().showMessage(
-                _t("Select a video row first. / 先に動画行を選択してください。"), 5000)
+                _t("Select a video or picture row first. / 先に動画または画像行を選択してください。"), 5000)
             return
         side = "start" if event.position().x() < (self.drop_zone.width() / 2) else "end"
         if side == "start":
@@ -6286,15 +6723,29 @@ class AISearchApp(QMainWindow):
 
     def _vj_thumb_double_click(self, path, event, cell, idx=0):
         """Decide search direction:
-        - PAIR shown (2 boxes): left box (idx 0) → previous, right box → next.
-        - SINGLE thumbnail: there's no left/right box, so use the click x —
-          left half → previous, right half → next."""
+        Every thumbnail is split START|END: left half → previous,
+        right half → next. Use the displayed pixmap rect, not the whole
+        QLabel, because letterboxing margins can otherwise misread a click."""
+        # Stale-callback guard (matches _vj_cell_drop): after the user
+        # switches to Search mode the cells still carry this VJ double-
+        # click handler until _update_filmstrip_cells re-wires them.
+        # Fall through to the regular thumb click in that case.
+        if self.config.get("last_mode") != "videojoin":
+            self._click_thumb(path)
+            event.accept()
+            return
         self._vj_source = path
         self._jump_to_path(path)
-        if getattr(self, "_vj_pair_active", False):
-            prev = (idx == 0)
-        else:
-            prev = event.position().x() < (cell.width() / 2)
+        click_x = float(event.position().x())
+        split_x = cell.width() / 2
+        try:
+            pm = cell.pixmap()
+            if pm is not None and not pm.isNull():
+                x0 = max(0.0, (cell.width() - pm.width()) / 2.0)
+                split_x = x0 + (pm.width() / 2.0)
+        except Exception:
+            pass
+        prev = click_x < split_x
         if prev:
             self._vj_find_edge_candidates(path, source_edge="start",
                                           candidate_edge="end", color="blue")
@@ -6302,6 +6753,42 @@ class AISearchApp(QMainWindow):
             self._vj_find_edge_candidates(path, source_edge="end",
                                           candidate_edge="start", color="red")
         event.accept()
+
+    def _vj_cell_drop(self, path, idx):
+        """A video dropped onto a Video Join header cell. idx 0 = LEFT,
+        idx 1 = RIGHT — replace ONLY that side; the other side is kept.
+        The dropped file's folder becomes the active search area."""
+        # Stale-callback guard: strip cells keep their VJ drop wiring until
+        # the next _update_filmstrip_cells fires. After the user clicks
+        # 🔍 Search, the cells are still wired here even though last_mode
+        # is now "search" — without this guard, a drop on those still-
+        # visible thumbs would re-enter Video Join (video drop) or bounce
+        # with the "needs a video" message (image drop). Route the drop
+        # to the generic on_drop handler so it acts on the new mode.
+        if self.config.get("last_mode") != "videojoin":
+            self.on_drop(path)
+            return
+        if not path or not path.lower().endswith(tuple(logic.EXT_VID)):
+            self.statusBar().showMessage(
+                _t("Video Join needs a video file — drop a video, not an image. / "
+                   "動画結合には動画ファイルが必要です — 画像ではなく動画をドロップ。"), 6000)
+            return
+        self._vj_source = path
+        if idx == 1:
+            self._vj_set_pair(self._vj_left, path)
+        else:
+            self._vj_set_pair(path, self._vj_right)
+        drop_dir = os.path.dirname(os.path.abspath(path)) or os.getcwd()
+        self._enter_video_join_mode(drop_dir)
+        if idx == 1:
+            self._vj_set_pair(self._vj_left, path)
+        else:
+            self._vj_set_pair(path, self._vj_right)
+        try:
+            if getattr(self, "preview_handler", None):
+                self.preview_handler.show(path)
+        except Exception:
+            pass
 
     def _vj_find_edge_candidates(self, source, source_edge, candidate_edge, color):
         try:
@@ -6431,10 +6918,13 @@ class AISearchApp(QMainWindow):
         hdr = [p for p in (left, right) if p and os.path.exists(p)]
         if hdr:
             self._update_filmstrip_cells(hdr, selected_path=(left or right))
-        # Candidate list: rebuild fully from state.
-        self._vj_render_list()
+        else:
+            self._update_filmstrip_cells([])
+        # Candidate list: rebuild fully from state. Only a fresh search should
+        # move the list viewport; choosing a row must not jump it to the top.
+        self._vj_render_list(scroll_to_first=(matches is not None))
 
-    def _vj_render_list(self):
+    def _vj_render_list(self, scroll_to_first=False):
         """Rebuild the candidate list from _vj_left / _vj_right /
         _vj_matches / _vj_color. LEFT row blue, RIGHT row red, candidate
         rows shaded within the search-direction color family."""
@@ -6443,22 +6933,38 @@ class AISearchApp(QMainWindow):
             return
         matches = getattr(self, "_vj_matches", []) or []
         color = getattr(self, "_vj_color", "blue")
+        # Snapshot which candidate paths are checked — a rebuild (every
+        # _vj_set_pair) would otherwise reset all the Batch Join checkboxes.
+        _checked = set()
+        _current_path = None
+        for _i in range(sa.count()):
+            _it = sa.item(_i)
+            if _it is not None and _it is sa.currentItem():
+                _current_path = _it.data(Qt.ItemDataRole.UserRole)
+            if _it is not None and _it.checkState() == Qt.CheckState.Checked:
+                _cp = _it.data(Qt.ItemDataRole.UserRole)
+                if _cp:
+                    _checked.add(os.path.normpath(_cp))
         sa.clear()
         if matches:
-            _htext = (f"Found {len(matches)} candidates. Double-click a row to use it. / "
-                      f"{len(matches)}件見つかりました。行をダブルクリックで使用。")
+            _htext = (f"Found {len(matches)} candidates. Double-click a row to play it. / "
+                      f"{len(matches)}件見つかりました。行をダブルクリックで再生。")
         else:
             _htext = ("No matching file found — click 'Generate Picture' to make a still. / "
                       "一致するファイルがありません — 「静止画を生成」で静止画を作成。")
+        # QListWidgetItem is checkable by default — strip that flag from the
+        # header and anchor rows so ONLY candidate rows show a checkbox.
+        _no_check = ~Qt.ItemFlag.ItemIsUserCheckable
         header = QListWidgetItem(_t(_htext))
-        header.setFlags(header.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        header.setFlags(header.flags() & ~Qt.ItemFlag.ItemIsSelectable & _no_check)
         sa.addItem(header)
         white = QColor("#ffffff")
-        # LEFT (blue) / RIGHT (red) anchor rows — always mirror _vj_left/right.
+        # LEFT (blue) / RIGHT (red) anchor rows always show the current pair.
         if self._vj_left and os.path.exists(self._vj_left):
             it = QListWidgetItem(f"LEFT    {os.path.basename(self._vj_left)}")
             it.setToolTip(self._vj_left)
             it.setData(Qt.ItemDataRole.UserRole, self._vj_left)
+            it.setFlags(it.flags() & _no_check)
             it.setBackground(QColor("#2244cc"))
             it.setForeground(white)
             sa.addItem(it)
@@ -6466,6 +6972,7 @@ class AISearchApp(QMainWindow):
             it = QListWidgetItem(f"RIGHT   {os.path.basename(self._vj_right)}")
             it.setToolTip(self._vj_right)
             it.setData(Qt.ItemDataRole.UserRole, self._vj_right)
+            it.setFlags(it.flags() & _no_check)
             it.setBackground(QColor("#c42020"))
             it.setForeground(white)
             sa.addItem(it)
@@ -6474,11 +6981,23 @@ class AISearchApp(QMainWindow):
         dark, mid, pale = (("#2244cc", "#6f95dd", "#bcd0f0") if color == "blue"
                            else ("#c42020", "#dd7676", "#eec4c4"))
         first_cand = sa.count()
+        _restore_item = None
         for score, raw_score, path in matches:
-            item = QListWidgetItem(f"{score:.3f} / {raw_score:.1f}    {os.path.basename(path)}")
+            _norm = os.path.normpath(path)
+            _is_left = bool(self._vj_left and _norm == os.path.normpath(self._vj_left))
+            _is_right = bool(self._vj_right and _norm == os.path.normpath(self._vj_right))
+            text = f"{score:.3f} / {raw_score:.1f}    {os.path.basename(path)}"
+            item = QListWidgetItem(text)
             item.setToolTip(path)
             item.setData(Qt.ItemDataRole.UserRole, path)
             item.setData(Qt.ItemDataRole.UserRole + 1, color)
+            # Checkbox so the user can pick which candidates Batch Join
+            # uses — restore the check if it survived a rebuild.
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if os.path.normpath(path) in _checked
+                else Qt.CheckState.Unchecked)
             if os.path.splitext(path)[1].lower() in logic.EXT_IMG:
                 bg, fg = QColor(mid), white
             else:
@@ -6489,38 +7008,437 @@ class AISearchApp(QMainWindow):
                 except Exception:
                     exact = False
                 bg, fg = (QColor(dark), white) if exact else (QColor(pale), QColor("#1a1a1a"))
+            if _is_left:
+                bg, fg = QColor("#2244cc"), white
+            elif _is_right:
+                bg, fg = QColor("#c42020"), white
             item.setBackground(bg)
             item.setForeground(fg)
             sa.addItem(item)
-        if matches and sa.count() > first_cand:
+            if _current_path and os.path.normpath(_current_path) == _norm:
+                _restore_item = item
+        # Finished join outputs live below the original source/candidate list.
+        # Green = a complete single video (color rule).
+        for jp in (getattr(self, "_vj_join_results", []) or []):
+            if not (jp and os.path.exists(jp)):
+                continue
+            jit = QListWidgetItem(f"✅ Joined    {os.path.basename(jp)}")
+            jit.setToolTip(jp)
+            jit.setData(Qt.ItemDataRole.UserRole, jp)
+            jit.setData(Qt.ItemDataRole.UserRole + 2, "joined")
+            jit.setFlags(jit.flags() & _no_check)
+            jit.setBackground(QColor("#2f7d32"))
+            jit.setForeground(white)
+            sa.addItem(jit)
+            if _current_path and os.path.normpath(_current_path) == os.path.normpath(jp):
+                _restore_item = jit
+        if _restore_item is not None:
+            sa.setCurrentItem(_restore_item)
+        elif scroll_to_first and matches and sa.count() > first_cand:
             sa.setCurrentRow(first_cand)
             sa.scrollToItem(sa.item(first_cand),
                             QAbstractItemView.ScrollHint.PositionAtTop)
         sa.viewport().update()
 
     def _vj_candidate_clicked(self, item):
-        """Click a list row → commit that file into its slot through the
-        single source of truth. A blue (previous) candidate goes LEFT, a
-        red (next) candidate goes RIGHT; the other slot keeps its file.
-        Clicking a LEFT/RIGHT anchor row just previews — no pair change."""
+        """Click a list row → preview only. Double-click commits it.
+
+        This keeps the candidate list stable: a single click must not move a
+        file to a top LEFT/RIGHT row or scroll the list away from the search
+        results the user is looking at."""
+        self._vj_candidate_focused(item)
+
+    def _vj_candidate_focused(self, item):
+        """Mirror the focused Video Join row into preview and thumbnails.
+
+        This is a temporary focus view only. It does not change _vj_left /
+        _vj_right; double-click is still the commit action."""
+        if item is None:
+            return
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path or not os.path.exists(path):
             return
+        row_type = item.data(Qt.ItemDataRole.UserRole + 2)
+        if row_type == "joined":
+            paths = [path]
+            if paths:
+                self._update_filmstrip_cells(paths, selected_path=path)
+            try:
+                self.preview_handler.show(path)
+            except Exception:
+                pass
+            return
         color = item.data(Qt.ItemDataRole.UserRole + 1)
         if color == "blue":
-            self._vj_set_pair(path, self._vj_right)
+            paths = [p for p in (path, self._vj_right) if p and os.path.exists(p)]
         elif color == "red":
-            self._vj_set_pair(self._vj_left, path)
-        # else: anchor row — leave the pair as is, just preview below.
+            paths = [p for p in (self._vj_left, path) if p and os.path.exists(p)]
+        else:
+            paths = [p for p in (self._vj_left, self._vj_right) if p and os.path.exists(p)]
+            if not paths:
+                paths = [path]
+        if paths:
+            self._update_filmstrip_cells(paths, selected_path=path)
         try:
             self.preview_handler.show(path)
         except Exception:
             pass
 
     def _vj_candidate_activated(self, item):
-        # Double-click does the same as single-click — commit via the
-        # single source of truth.
-        self._vj_candidate_clicked(item)
+        """Double-click a Video Join list row to play/open that file."""
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if not path or not os.path.exists(path):
+            return
+        try:
+            front_page.open_external_viewer(
+                path, keep_open=self.keep_viewer_open)
+        except Exception as e:
+            self.statusBar().showMessage(
+                _t(f"Could not play: {e} / 再生できません"), 5000)
+
+    def _vj_delete_list_items(self):
+        """Move selected Video Join list files to trash.
+
+        This works for candidates, LEFT/RIGHT anchors, generated stills, and
+        joined outputs. Header/status rows have no path and are ignored.
+        """
+        sa = getattr(self, "_vj_search_area", None)
+        if sa is None:
+            return
+        selected = sa.selectedItems()
+        if not selected and sa.currentItem() is not None:
+            selected = [sa.currentItem()]
+        paths = []
+        seen = set()
+        row_types = {}
+        for item in selected:
+            path = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            if not path or not os.path.exists(path):
+                continue
+            norm = os.path.normpath(path)
+            if norm not in seen:
+                seen.add(norm)
+                paths.append(path)
+                row_types[norm] = item.data(Qt.ItemDataRole.UserRole + 2)
+        if not paths:
+            return
+        if self.config.get("delete_confirm", True) and not self._confirm_trash():
+            return
+
+        batch = []
+        errors = []
+        trashed_paths = []
+        data_changed = False
+        for path in paths:
+            row = -1
+            for r in range(self.table.rowCount()):
+                if os.path.normpath(self.table.get_row_path(r) or "") == os.path.normpath(path):
+                    row = r
+                    break
+            emb = None
+            if self.data and "paths" in self.data and path in self.data["paths"]:
+                idx = self.data["paths"].index(path)
+                try:
+                    emb = self.data["embeddings"][idx].clone()
+                except Exception:
+                    emb = None
+            row_snap = {
+                "row": row if row >= 0 else self.table.rowCount(),
+                "score": "0.0",
+                "size": logic.get_sz_readable(path) if os.path.exists(path) else "",
+                "name": os.path.basename(path),
+                "masked_path": self._mask_path(path),
+                "sim_data": None,
+                "bg_color": QColor(),
+            }
+            if row >= 0:
+                row_snap.update({
+                    "score":       self.table.item(row, 0).text() if self.table.item(row, 0) else "0.0",
+                    "size":        self.table.item(row, 1).text() if self.table.item(row, 1) else "",
+                    "name":        self.table.item(row, 2).text() if self.table.item(row, 2) else os.path.basename(path),
+                    "masked_path": self.table.item(row, 3).text() if self.table.item(row, 3) else self._mask_path(path),
+                    "sim_data":    self.table.item(row, 0).data(Qt.ItemDataRole.UserRole + 1) if self.table.item(row, 0) else None,
+                    "bg_color":    self.table.item(row, 0).background() if self.table.item(row, 0) else QColor(),
+                })
+
+            trash_path, err = front_page.trash_file(path)
+            if trash_path is None:
+                errors.append(f"{os.path.basename(path)}: {err or 'Could not move file to trash.'}")
+                continue
+
+            batch.append({"type": "delete", "orig_path": path,
+                          "trash_path": trash_path,
+                          "attrs": self.attrs_data.get(path),
+                          "vj_row_type": row_types.get(os.path.normpath(path)),
+                          "emb": emb, **row_snap})
+            trashed_paths.append(path)
+            self.attrs_data.pop(path, None)
+
+            if self.data and "paths" in self.data and path in self.data["paths"]:
+                idx = self.data["paths"].index(path)
+                keep = [i for i in range(len(self.data["paths"])) if i != idx]
+                self.data["paths"] = [self.data["paths"][i] for i in keep]
+                try:
+                    self.data["embeddings"] = self.data["embeddings"][keep]
+                except Exception:
+                    pass
+                data_changed = True
+            if row >= 0:
+                self.table.removeRow(row)
+
+        if batch:
+            try:
+                self._push_undo(batch if len(batch) > 1 else batch[0])
+            except Exception:
+                pass
+        try:
+            attrs_mod.save(self.current_project, self.attrs_data)
+        except Exception:
+            pass
+        if data_changed and self.data:
+            try:
+                attrs_mod.atomic_torch_save(
+                    self.data,
+                    os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+            except Exception:
+                pass
+
+        deleted_norms = {os.path.normpath(p) for p in trashed_paths}
+        if deleted_norms:
+            self._vj_join_results = [
+                p for p in (getattr(self, "_vj_join_results", []) or [])
+                if os.path.normpath(p) not in deleted_norms
+            ]
+            self._vj_matches = [
+                m for m in (getattr(self, "_vj_matches", []) or [])
+                if len(m) < 3 or os.path.normpath(m[2]) not in deleted_norms
+            ]
+            self._vj_prev_candidates = {
+                p for p in getattr(self, "_vj_prev_candidates", set())
+                if p not in deleted_norms
+            }
+            self._vj_next_candidates = {
+                p for p in getattr(self, "_vj_next_candidates", set())
+                if p not in deleted_norms
+            }
+            self._vj_candidate_scores = {
+                p: v for p, v in getattr(self, "_vj_candidate_scores", {}).items()
+                if p not in deleted_norms
+            }
+            if self._vj_left and os.path.normpath(self._vj_left) in deleted_norms:
+                self._vj_left = None
+            if self._vj_right and os.path.normpath(self._vj_right) in deleted_norms:
+                self._vj_right = None
+            if getattr(self, "_vj_source", None) and os.path.normpath(self._vj_source) in deleted_norms:
+                self._vj_source = self._vj_left or self._vj_right
+
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None and trashed_paths:
+            try:
+                fm_win.remove_paths(trashed_paths)
+            except Exception:
+                pass
+        self._vj_set_pair(self._vj_left, self._vj_right)
+        if errors:
+            QMessageBox.warning(
+                self, _t("Delete failed / 削除失敗"),
+                _t("\n".join(errors)))
+        if trashed_paths:
+            self.statusBar().showMessage(
+                _t(f"Deleted {len(trashed_paths)} Video Join file(s)."), 5000)
+
+    def _vj_rename_list_item(self, from_menu=False):
+        """Rename the current Video Join list file.
+
+        Video Join hides the normal table, so F2/context Rename needs to act
+        on the selected QListWidget row instead of the hidden table row.
+        """
+        sa = getattr(self, "_vj_search_area", None)
+        item = sa.currentItem() if sa is not None else None
+        old_path = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not old_path or not os.path.exists(old_path):
+            return
+        if not attrs_mod.is_editable(self.attrs_data, old_path):
+            QMessageBox.warning(
+                self, _t("Locked / ロック中"),
+                _t("This file is locked and cannot be renamed. / このファイルはロック中のため改名できません。"))
+            return
+
+        def _do_rename():
+            from PyQt6.QtWidgets import QInputDialog
+            old_name = os.path.basename(old_path)
+            new_name, ok = QInputDialog.getText(
+                self, _t("Rename / 改名"),
+                _t("New file name / 新しいファイル名"),
+                text=old_name)
+            if not ok:
+                return
+            new_name = new_name.strip()
+            if not new_name or new_name == old_name:
+                return
+            new_path = os.path.join(os.path.dirname(old_path), new_name)
+            try:
+                os.rename(old_path, new_path)
+                if self.data and "paths" in self.data:
+                    for i, p in enumerate(self.data["paths"]):
+                        if os.path.normpath(p) == os.path.normpath(old_path):
+                            self.data["paths"][i] = new_path
+                            attrs_mod.atomic_torch_save(
+                                self.data,
+                                os.path.join(attrs_mod.DATA_DIR, f"features_{self.current_project}.pt"))
+                            break
+                if old_path in self.attrs_data:
+                    self.attrs_data[new_path] = self.attrs_data.pop(old_path)
+                self.attrs_data.setdefault(new_path, {})["editable"] = False
+                attrs_mod.save(self.current_project, self.attrs_data)
+                attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
+
+                old_norm = os.path.normpath(old_path)
+                new_norm = os.path.normpath(new_path)
+                self._vj_join_results = [
+                    new_path if os.path.normpath(p) == old_norm else p
+                    for p in (getattr(self, "_vj_join_results", []) or [])
+                ]
+                self._vj_matches = [
+                    (m[0], m[1], new_path) if len(m) >= 3 and os.path.normpath(m[2]) == old_norm else m
+                    for m in (getattr(self, "_vj_matches", []) or [])
+                ]
+                if old_norm in getattr(self, "_vj_prev_candidates", set()):
+                    self._vj_prev_candidates.discard(old_norm)
+                    self._vj_prev_candidates.add(new_norm)
+                if old_norm in getattr(self, "_vj_next_candidates", set()):
+                    self._vj_next_candidates.discard(old_norm)
+                    self._vj_next_candidates.add(new_norm)
+                if old_norm in getattr(self, "_vj_candidate_scores", {}):
+                    self._vj_candidate_scores[new_norm] = self._vj_candidate_scores.pop(old_norm)
+                if self._vj_left and os.path.normpath(self._vj_left) == old_norm:
+                    self._vj_left = new_path
+                if self._vj_right and os.path.normpath(self._vj_right) == old_norm:
+                    self._vj_right = new_path
+                if getattr(self, "_vj_source", None) and os.path.normpath(self._vj_source) == old_norm:
+                    self._vj_source = new_path
+
+                for r in range(self.table.rowCount()):
+                    if os.path.normpath(self.table.get_row_path(r) or "") == old_norm:
+                        self.table.set_row_path(r, new_path)
+                        if self.table.item(r, 2):
+                            self.table.item(r, 2).setText(new_name)
+                        if self.table.item(r, 3):
+                            self.table.item(r, 3).setText(self._mask_path(new_path))
+                        break
+                if getattr(self.preview_handler, "current_path", None) == old_path:
+                    self.preview_handler.current_path = new_path
+                self._push_undo({"type": "move", "old_path": old_path, "new_path": new_path})
+                self._vj_set_pair(self._vj_left, self._vj_right)
+                fm = getattr(self, "_fm_win", None)
+                if fm is not None:
+                    try:
+                        fm.refresh_all()
+                    except Exception:
+                        pass
+                self.statusBar().showMessage(_t(f"Renamed: {new_name}"), 5000)
+            except Exception as e:
+                QMessageBox.critical(self, _t("Rename Error / 改名エラー"), str(e))
+
+        QTimer.singleShot(50 if from_menu else 0, _do_rename)
+
+    def _vj_state_replace_path(self, old_path, new_path):
+        """Update every Video Join in-memory reference after rename/move."""
+        old_norm = os.path.normpath(old_path)
+        new_norm = os.path.normpath(new_path)
+        self._vj_join_results = [
+            new_path if os.path.normpath(p) == old_norm else p
+            for p in (getattr(self, "_vj_join_results", []) or [])
+        ]
+        self._vj_matches = [
+            (m[0], m[1], new_path)
+            if len(m) >= 3 and os.path.normpath(m[2]) == old_norm else m
+            for m in (getattr(self, "_vj_matches", []) or [])
+        ]
+        if old_norm in getattr(self, "_vj_prev_candidates", set()):
+            self._vj_prev_candidates.discard(old_norm)
+            self._vj_prev_candidates.add(new_norm)
+        if old_norm in getattr(self, "_vj_next_candidates", set()):
+            self._vj_next_candidates.discard(old_norm)
+            self._vj_next_candidates.add(new_norm)
+        if old_norm in getattr(self, "_vj_candidate_scores", {}):
+            self._vj_candidate_scores[new_norm] = self._vj_candidate_scores.pop(old_norm)
+        if self._vj_left and os.path.normpath(self._vj_left) == old_norm:
+            self._vj_left = new_path
+        if self._vj_right and os.path.normpath(self._vj_right) == old_norm:
+            self._vj_right = new_path
+        if getattr(self, "_vj_source", None) and os.path.normpath(self._vj_source) == old_norm:
+            self._vj_source = new_path
+        for r in range(self.table.rowCount()):
+            if os.path.normpath(self.table.get_row_path(r) or "") == old_norm:
+                self.table.set_row_path(r, new_path)
+                if self.table.item(r, 2):
+                    self.table.item(r, 2).setText(os.path.basename(new_path))
+                if self.table.item(r, 3):
+                    self.table.item(r, 3).setText(self._mask_path(new_path))
+                break
+        handler = getattr(self, "preview_handler", None)
+        if handler is not None and getattr(handler, "current_path", None) == old_path:
+            handler.current_path = new_path
+
+    def _vj_select_path_in_list(self, path):
+        sa = getattr(self, "_vj_search_area", None)
+        if sa is None or not path:
+            return
+        target = os.path.normpath(path)
+        for i in range(sa.count()):
+            item = sa.item(i)
+            ip = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            if ip and os.path.normpath(ip) == target:
+                sa.setCurrentItem(item)
+                item.setSelected(True)
+                sa.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                return
+
+    def _vj_current_list_path(self):
+        sa = getattr(self, "_vj_search_area", None)
+        item = sa.currentItem() if sa is not None else None
+        path = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return path if path and os.path.exists(path) else None
+
+    def _vj_move_list_item(self):
+        old_path = self._vj_current_list_path()
+        if not old_path:
+            return
+        _last = getattr(self, "last_move_dir", None)
+        if _last and os.path.isdir(_last):
+            start = _last
+        elif os.path.isdir(os.path.dirname(old_path)):
+            start = os.path.dirname(old_path)
+        else:
+            start = os.path.expanduser("~")
+        new_path, self.data, err, chosen_dir = front_page.select_and_move_file(
+            self, old_path, self.data, self.current_project, start,
+            mode=self.config.get("move_conflict", "size_check"))
+        if new_path:
+            self.last_move_dir = chosen_dir
+            self.config["last_move_dir"] = chosen_dir
+            cfg.save_config(self.config, getattr(self, "current_project", None))
+            if old_path in self.attrs_data:
+                self.attrs_data[new_path] = self.attrs_data.pop(old_path)
+            elif new_path not in self.attrs_data:
+                self.attrs_data[new_path] = {}
+            attrs_mod.save(self.current_project, self.attrs_data)
+            attrs_mod.update_path_in_all_stores(old_path, new_path, self.current_project)
+            self._push_undo({"type": "move", "old_path": old_path, "new_path": new_path})
+            self._vj_state_replace_path(old_path, new_path)
+            self._vj_set_pair(self._vj_left, self._vj_right)
+            self._vj_select_path_in_list(new_path)
+            fm = getattr(self, "_fm_win", None)
+            if fm is not None:
+                try:
+                    fm.refresh_all()
+                except Exception:
+                    pass
+        elif err and err != "cancelled":
+            QMessageBox.critical(
+                self, _t("Move Error / 移動エラー"),
+                _t(f"Could not move file: {err} / ファイルを移動できません: {err}"))
 
     def _vj_mark_product_in_list(self, product_path):
         if not hasattr(self, "_vj_search_area") or not product_path:
@@ -6550,11 +7468,9 @@ class AISearchApp(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, _t("Video Join / 動画結合"), str(exc))
             return
-        folder = os.path.dirname(os.path.abspath(source)) or "."
-        suffix = "_first_scene.jpg" if side == "start" else "_last_scene.jpg"
-        existing = os.path.join(folder, f"{safe_output_stem(source)}{suffix}")
 
         def _use(pic):
+            self._vj_protect_output(pic)
             if side == "start":
                 self._vj_set_pair(pic, self._vj_right)
             else:
@@ -6565,6 +7481,7 @@ class AISearchApp(QMainWindow):
                 pass
 
         # Already generated → use it, skip the dialog.
+        existing = self._vj_existing_scene_pic(source, side)
         if os.path.exists(existing):
             _use(existing)
             self.statusBar().showMessage(
@@ -6595,15 +7512,73 @@ class AISearchApp(QMainWindow):
         self.statusBar().showMessage(
             _t(f"Generated still: {os.path.basename(pic)}"), 6000)
 
+    def _vj_existing_scene_pic(self, source, side):
+        """Return an already-generated scene JPG for source/side, if present.
+
+        AItsugi's extractor uses numbered_output_path(), so repeated earlier
+        runs may have created *_first_scene_1.jpg, *_last_scene_2.jpg, etc.
+        Prefer the unnumbered file; otherwise use the newest numbered still."""
+        if not source or side not in ("start", "end"):
+            return ""
+        try:
+            from AItsugi import safe_output_stem
+        except Exception:
+            return ""
+        folder = os.path.dirname(os.path.abspath(source)) or "."
+        marker = "_first_scene" if side == "start" else "_last_scene"
+        base = os.path.join(folder, f"{safe_output_stem(source)}{marker}.jpg")
+        if os.path.exists(base):
+            return base
+        try:
+            import glob
+            pattern = os.path.join(folder, f"{safe_output_stem(source)}{marker}_*.jpg")
+            hits = [p for p in glob.glob(pattern) if os.path.exists(p)]
+            if hits:
+                hits.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                return hits[0]
+        except Exception:
+            pass
+        return ""
+
+    def _vj_get_or_create_scene_pic(self, source, side):
+        existing = self._vj_existing_scene_pic(source, side)
+        if existing:
+            return existing, True
+        if side == "start":
+            from AItsugi import extract_first_scene_jpg
+            return extract_first_scene_jpg(source), False
+        from AItsugi import extract_last_scene_jpg
+        return extract_last_scene_jpg(source), False
+
+    def _vj_show_generated_pic_row(self, pic, side, reused=False):
+        if not hasattr(self, "_vj_search_area"):
+            return
+        self._vj_search_area.clear()
+        _side_lbl = "left" if side == "start" else "right"
+        _action = "Using existing" if reused else "Generated"
+        item = QListWidgetItem(_t(f"{_action} {_side_lbl}-side still:\n{os.path.basename(pic)}"))
+        item.setToolTip(pic)
+        item.setData(Qt.ItemDataRole.UserRole, pic)
+        item.setBackground(QColor("#2f7d32"))
+        item.setForeground(QColor("#ffffff"))
+        self._vj_search_area.addItem(item)
+        self._vj_search_area.setCurrentRow(0)
+
     def _vj_show_gen_pic_button(self, source, side):
         """No edge match found — surface the Generate Picture button so the
         user can make a still from the source's start/end frame."""
         self._vj_gen_source = source
         self._vj_gen_side = side   # "start" or "end"
         if hasattr(self, "btn_vj_gen_pic"):
-            self.btn_vj_gen_pic.setText(_t(
-                "🖼 Generate START Picture / 🖼 START静止画を生成" if side == "start"
-                else "🖼 Generate END Picture / 🖼 END静止画を生成"))
+            existing = self._vj_existing_scene_pic(source, side)
+            if existing:
+                self.btn_vj_gen_pic.setText(_t(
+                    "🖼 Use START Picture / 🖼 START静止画を使用" if side == "start"
+                    else "🖼 Use END Picture / 🖼 END静止画を使用"))
+            else:
+                self.btn_vj_gen_pic.setText(_t(
+                    "🖼 Generate START Picture / 🖼 START静止画を生成" if side == "start"
+                    else "🖼 Generate END Picture / 🖼 END静止画を生成"))
             self.btn_vj_gen_pic.show()
 
     def _vj_generate_pic(self):
@@ -6614,35 +7589,25 @@ class AISearchApp(QMainWindow):
         if not source or not os.path.exists(source) or side not in ("start", "end"):
             return
         try:
-            if side == "start":
-                from AItsugi import extract_first_scene_jpg
-                pic = extract_first_scene_jpg(source)
-                self._vj_left = pic
-            else:
-                from AItsugi import extract_last_scene_jpg
-                pic = extract_last_scene_jpg(source)
-                self._vj_right = pic
+            pic, reused = self._vj_get_or_create_scene_pic(source, side)
         except Exception as exc:
             QMessageBox.critical(self, _t("Generate picture failed / 静止画生成失敗"), str(exc))
             return
+        if side == "start":
+            self._vj_left = pic
+        else:
+            self._vj_right = pic
+        self._vj_protect_output(pic)
         if hasattr(self, "btn_vj_gen_pic"):
             self.btn_vj_gen_pic.hide()
-        if hasattr(self, "_vj_search_area"):
-            self._vj_search_area.clear()
-            _side_lbl = "left" if side == "start" else "right"
-            item = QListWidgetItem(_t(f"Generated {_side_lbl}-side still:\n{os.path.basename(pic)}"))
-            item.setToolTip(pic)
-            item.setData(Qt.ItemDataRole.UserRole, pic)
-            item.setBackground(QColor("#2f7d32"))
-            item.setForeground(QColor("#ffffff"))
-            self._vj_search_area.addItem(item)
+        self._vj_show_generated_pic_row(pic, side, reused)
         try:
             self.preview_handler.show(pic)
         except Exception:
             pass
         self._vj_refresh_pair_thumbs(selected_path=pic)
         self.statusBar().showMessage(
-            _t(f"Generated still: {os.path.basename(pic)}"), 6000)
+            _t(f"{'Using existing' if reused else 'Generated'} still: {os.path.basename(pic)}"), 6000)
 
     def _vj_offer_end_pic(self, source):
         reply = QMessageBox.question(
@@ -6656,26 +7621,19 @@ class AISearchApp(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            from AItsugi import extract_last_scene_jpg
-            pic = extract_last_scene_jpg(source)
+            pic, reused = self._vj_get_or_create_scene_pic(source, "end")
         except Exception as exc:
             QMessageBox.critical(self, _t("Generate picture failed / 静止画生成失敗"), str(exc))
             return
         self._vj_right = pic
-        if hasattr(self, "_vj_search_area"):
-            self._vj_search_area.clear()
-            item = QListWidgetItem(_t(f"Generated right-side still picture:\n{os.path.basename(pic)}"))
-            item.setToolTip(pic)
-            item.setData(Qt.ItemDataRole.UserRole, pic)
-            item.setBackground(QColor("#2f7d32"))
-            item.setForeground(QColor("#ffffff"))
-            self._vj_search_area.addItem(item)
-            self._vj_search_area.setCurrentRow(0)
+        self._vj_protect_output(pic)
+        self._vj_show_generated_pic_row(pic, "end", reused)
         try:
             self.preview_handler.show(pic)
         except Exception:
             pass
-        self.statusBar().showMessage(_t(f"Generated right-side still: {os.path.basename(pic)}"), 6000)
+        self.statusBar().showMessage(
+            _t(f"{'Using existing' if reused else 'Generated'} right-side still: {os.path.basename(pic)}"), 6000)
 
     def _vj_offer_start_pic(self, source):
         reply = QMessageBox.question(
@@ -6689,26 +7647,19 @@ class AISearchApp(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            from AItsugi import extract_first_scene_jpg
-            pic = extract_first_scene_jpg(source)
+            pic, reused = self._vj_get_or_create_scene_pic(source, "start")
         except Exception as exc:
             QMessageBox.critical(self, _t("Generate picture failed / 静止画生成失敗"), str(exc))
             return
         self._vj_left = pic
-        if hasattr(self, "_vj_search_area"):
-            self._vj_search_area.clear()
-            item = QListWidgetItem(_t(f"Generated left-side still picture:\n{os.path.basename(pic)}"))
-            item.setToolTip(pic)
-            item.setData(Qt.ItemDataRole.UserRole, pic)
-            item.setBackground(QColor("#2f7d32"))
-            item.setForeground(QColor("#ffffff"))
-            self._vj_search_area.addItem(item)
-            self._vj_search_area.setCurrentRow(0)
+        self._vj_protect_output(pic)
+        self._vj_show_generated_pic_row(pic, "start", reused)
         try:
             self.preview_handler.show(pic)
         except Exception:
             pass
-        self.statusBar().showMessage(_t(f"Generated left-side still: {os.path.basename(pic)}"), 6000)
+        self.statusBar().showMessage(
+            _t(f"{'Using existing' if reused else 'Generated'} left-side still: {os.path.basename(pic)}"), 6000)
 
     def _vj_designate(self, path):
         """Video Join double-click cycle: 1st click → LEFT (blue rim),
@@ -6746,41 +7697,195 @@ class AISearchApp(QMainWindow):
         source of truth from the current _vj_left/_vj_right."""
         self._vj_set_pair(self._vj_left, self._vj_right)
 
+    def _vj_set_all_checks(self, checked):
+        """Check / uncheck every candidate row in the Video Join list."""
+        sa = getattr(self, "_vj_search_area", None)
+        if sa is None:
+            return
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for i in range(sa.count()):
+            it = sa.item(i)
+            if it is not None and (it.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                it.setCheckState(state)
+
     def _join_selected_videos(self):
-        """Join the designated LEFT (blue) → RIGHT (red) videos via the
-        AItsugi optical-flow engine, on a background thread. Output is
-        joined_<left-stem>.mp4 next to the left video."""
-        left, right = self._vj_left, self._vj_right
-        if not left or not right:
-            QMessageBox.information(
-                self, _t("Video Join / 動画結合"),
-                _t("Select a video, double-click its left thumbnail for previous candidates or right thumbnail for next candidates, then double-click a colored candidate row. / "
-                   "動画を選び、左サムネで前候補・右サムネで次候補を探し、色付き候補行をダブルクリックしてください。"))
+        """Join videos via the AItsugi optical-flow engine on a background
+        thread.
+        - If any candidates are CHECKED in the list → batch join (the
+          source with each checked candidate, one output per candidate).
+        - Else if 2+ video rows are selected in the table → chain-join
+          them in row order.
+        - Else → join the designated LEFT → RIGHT pair."""
+        if getattr(self, "_vj_joining", False):
+            # A join is already running — this click is a STOP request.
+            self._vj_cancel = True
+            self.statusBar().showMessage(
+                _t("Stopping join… / 結合を中止しています…"), 5000)
             return
-        if (os.path.splitext(left)[1].lower() not in logic.EXT_VID
-                or os.path.splitext(right)[1].lower() not in logic.EXT_VID):
-            QMessageBox.information(
-                self, _t("Video Join / 動画結合"),
-                _t("The right side is a still picture, not a video, so there is nothing to join yet. / "
-                   "右側は静止画なので、まだ動画結合はできません。"))
-            return
-        if not (os.path.exists(left) and os.path.exists(right)):
-            QMessageBox.warning(
-                self, _t("Video Join / 動画結合"),
-                _t("A designated video no longer exists. / 指定した動画が見つかりません。"))
-            return
+        # Checked candidates take priority — that's the batch-join path.
+        sa = getattr(self, "_vj_search_area", None)
+        if sa is not None:
+            for i in range(sa.count()):
+                it = sa.item(i)
+                if it is not None and it.checkState() == Qt.CheckState.Checked:
+                    self._vj_batch_join()
+                    return
+        vid_exts = tuple(ext.lower() for ext in logic.EXT_VID)
+        # Multi-select rows take priority — that's the multi-join path.
+        sel = []
+        for r in self._selected_rows():
+            p = self.table.get_row_path(r)
+            if p and os.path.exists(p) and p.lower().endswith(vid_exts):
+                sel.append(p)
+        if len(sel) >= 2:
+            paths = sel
+        else:
+            left, right = self._vj_left, self._vj_right
+            if not (left and right and os.path.exists(left or "")
+                    and os.path.exists(right or "")):
+                QMessageBox.information(
+                    self, _t("Video Join / 動画結合"),
+                    _t("Select 2+ video rows to join, or designate a left+right pair. / "
+                       "2本以上の動画行を選択するか、左右ペアを指定してください。"))
+                return
+            if (os.path.splitext(left)[1].lower() not in vid_exts
+                    or os.path.splitext(right)[1].lower() not in vid_exts):
+                QMessageBox.information(
+                    self, _t("Video Join / 動画結合"),
+                    _t("A side is a still picture, not a video. / 片側が静止画です。"))
+                return
+            paths = [left, right]
+
+        names = "\n".join(f"{i+1}. {os.path.basename(p)}" for i, p in enumerate(paths))
         if QMessageBox.question(
                 self, _t("Join / 結合"),
-                _t(f"Join in this order?\n\nLEFT:  {os.path.basename(left)}\n"
-                   f"RIGHT: {os.path.basename(right)}")
+                _t(f"Join these {len(paths)} videos in order?\n\n{names}")
                 ) != QMessageBox.StandardButton.Yes:
             return
 
-        out_dir  = os.path.dirname(os.path.abspath(left))
-        out_stem = os.path.splitext(os.path.basename(left))[0]
+        out_dir  = os.path.dirname(os.path.abspath(paths[0]))
+        out_stem = os.path.splitext(os.path.basename(paths[0]))[0]
         final_output = os.path.join(out_dir, f"joined_{out_stem}.mp4")
+        transition, join_mode, aspect, size_choice, fps_choice = self._vj_current_options()
 
-        self.btn_join_selected.setEnabled(False)
+        self._vj_clear_join_results()
+        self._vj_cancel = False
+        self._vj_joining = True
+        self._vj_join_btn_busy()
+        import threading
+        def _work():
+            from PyQt6.QtCore import QMetaObject, Qt as _Qt, Q_ARG
+            import tempfile, shutil as _sh
+            def _status(msg):
+                QMetaObject.invokeMethod(
+                    self.statusBar(), "showMessage",
+                    _Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, msg), Q_ARG(int, 0))
+            tmpdir = tempfile.mkdtemp(prefix="aitan_join_")
+            try:
+                import aitsugi
+                current = paths[0]
+                steps = len(paths) - 1
+                for i, nxt in enumerate(paths[1:], start=1):
+                    def _prog(pct, m, _i=i):
+                        if self._vj_cancel:
+                            raise _JoinCancelled()
+                        _status(f"[{_i}/{steps}] {pct}%  {m}")
+                    dest = (final_output if i == steps
+                            else os.path.join(tmpdir, f"step{i}.mp4"))
+                    result = aitsugi.join_videos(
+                        current, nxt, dest,
+                        transition_frames=transition, mode=join_mode,
+                        aspect=aspect, keep_audio=True, progress=_prog,
+                        output_size=self._vj_resolve_output_size(size_choice, current, nxt),
+                        output_fps=self._vj_resolve_output_fps(fps_choice, current, nxt),
+                        return_info=True)
+                    current = result.output
+                _status(_t(f"✅ Joined {len(paths)} videos → {os.path.basename(current)}"))
+                note_block = self._vj_build_join_note(paths, result)
+                related = json.dumps([os.path.abspath(p) for p in paths])
+                QMetaObject.invokeMethod(
+                    self, "_vj_protect_output",
+                    _Qt.ConnectionType.QueuedConnection, Q_ARG(str, current))
+                QMetaObject.invokeMethod(
+                    self, "_vj_apply_join_metadata",
+                    _Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, current), Q_ARG(str, note_block), Q_ARG(str, related))
+                QMetaObject.invokeMethod(
+                    self, "_vj_record_join_result",
+                    _Qt.ConnectionType.QueuedConnection, Q_ARG(str, current))
+                QMetaObject.invokeMethod(
+                    self, "_vj_open_joined",
+                    _Qt.ConnectionType.QueuedConnection, Q_ARG(str, current))
+            except _JoinCancelled:
+                _status(_t("⏹ Join stopped. / ⏹ 結合を中止しました。"))
+                try:
+                    if os.path.exists(final_output):
+                        os.remove(final_output)
+                except Exception:
+                    pass
+            except Exception as e:
+                _status(_t(f"❌ Join failed: {e}"))
+            finally:
+                _sh.rmtree(tmpdir, ignore_errors=True)
+                QMetaObject.invokeMethod(
+                    self, "_vj_join_done",
+                    _Qt.ConnectionType.QueuedConnection)
+        threading.Thread(target=_work, daemon=True).start()
+        self.statusBar().showMessage(
+            _t(f"Joining {len(paths)} videos… / 結合中…"), 0)
+
+    def _vj_batch_join(self):
+        """Batch join — join the source with EACH search candidate, one
+        output file per candidate (mirrors AItsugi's batch join). Runs on
+        a background thread."""
+        vid_exts = tuple(ext.lower() for ext in logic.EXT_VID)
+        color = getattr(self, "_vj_color", "blue")
+        source_candidates = (
+            (self._vj_right, getattr(self, "_vj_source", None), self._vj_left)
+            if color == "blue"
+            else (self._vj_left, getattr(self, "_vj_source", None), self._vj_right)
+        )
+        source = next(
+            (p for p in source_candidates
+             if p and os.path.exists(p) and p.lower().endswith(vid_exts)),
+            None)
+        if not source:
+            QMessageBox.information(
+                self, _t("Batch Join / 一括結合"),
+                _t("No source video — run a search first. / "
+                   "ソース動画がありません — 先に検索してください。"))
+            return
+        # Batch-join the candidates the user CHECKED in the list.
+        cands = []
+        sa = getattr(self, "_vj_search_area", None)
+        if sa is not None:
+            for i in range(sa.count()):
+                it = sa.item(i)
+                if it is None or it.checkState() != Qt.CheckState.Checked:
+                    continue
+                p = it.data(Qt.ItemDataRole.UserRole)
+                if p and os.path.exists(p) and p.lower().endswith(vid_exts):
+                    cands.append(p)
+        if not cands:
+            QMessageBox.information(
+                self, _t("Batch Join / 一括結合"),
+                _t("Check the candidate rows you want to batch-join (the "
+                   "checkboxes in the list). / "
+                   "一括結合したい候補行のチェックボックスを入れてください。"))
+            return
+        if QMessageBox.question(
+                self, _t("Batch Join / 一括結合"),
+                _t(f"Join '{os.path.basename(source)}' with each of "
+                   f"{len(cands)} candidates?\nProduces {len(cands)} files.")
+                ) != QMessageBox.StandardButton.Yes:
+            return
+
+        transition, join_mode, aspect, size_choice, fps_choice = self._vj_current_options()
+        self._vj_clear_join_results()
+        self._vj_cancel = False
+        self._vj_joining = True
+        self._vj_join_btn_busy()
         import threading
         def _work():
             from PyQt6.QtCore import QMetaObject, Qt as _Qt, Q_ARG
@@ -6789,23 +7894,234 @@ class AISearchApp(QMainWindow):
                     self.statusBar(), "showMessage",
                     _Qt.ConnectionType.QueuedConnection,
                     Q_ARG(str, msg), Q_ARG(int, 0))
+            ok = fail = 0
+            last_out = None
             try:
                 import aitsugi
-                def _prog(pct, m):
-                    _status(f"{pct}%  {m}")
-                out = aitsugi.join_videos(
-                    left, right, final_output,
-                    transition_frames=-1, mode="auto",
-                    aspect="contain", keep_audio=True, progress=_prog)
-                _status(_t(f"✅ Joined → {os.path.basename(out)}"))
+                folder = os.path.dirname(os.path.abspath(source)) or "."
+                total = len(cands)
+                for i, cand in enumerate(cands, start=1):
+                    if self._vj_cancel:
+                        break
+                    # blue search → candidate plays BEFORE source; red → after.
+                    a, b = (cand, source) if color == "blue" else (source, cand)
+                    out = os.path.join(
+                        folder,
+                        f"joined_{os.path.splitext(os.path.basename(a))[0]}__"
+                        f"{os.path.splitext(os.path.basename(b))[0]}.mp4")
+                    def _prog(pct, m, _i=i):
+                        if self._vj_cancel:
+                            raise _JoinCancelled()
+                        _status(f"[{_i}/{total}] {pct}%  {m}")
+                    try:
+                        result = aitsugi.join_videos(
+                            a, b, out, transition_frames=transition, mode=join_mode,
+                            aspect=aspect, keep_audio=True, progress=_prog,
+                            output_size=self._vj_resolve_output_size(size_choice, a, b),
+                            output_fps=self._vj_resolve_output_fps(fps_choice, a, b),
+                            return_info=True)
+                        last_out = result.output
+                        ok += 1
+                        note_block = self._vj_build_join_note([a, b], result)
+                        related = json.dumps([os.path.abspath(a), os.path.abspath(b)])
+                        QMetaObject.invokeMethod(
+                            self, "_vj_protect_output",
+                            _Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(str, last_out))
+                        QMetaObject.invokeMethod(
+                            self, "_vj_apply_join_metadata",
+                            _Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(str, last_out), Q_ARG(str, note_block), Q_ARG(str, related))
+                        QMetaObject.invokeMethod(
+                            self, "_vj_record_join_result",
+                            _Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(str, last_out))
+                    except _JoinCancelled:
+                        try:
+                            if os.path.exists(out):
+                                os.remove(out)
+                        except Exception:
+                            pass
+                        break
+                    except Exception as e:
+                        fail += 1
+                        _status(f"[{_i}/{total}] failed: {e}")
+                _tail = _t(" (stopped)") if self._vj_cancel else ""
+                _status(_t(f"✅ Batch join: {ok} done, {fail} failed") + _tail)
+                if last_out:
+                    QMetaObject.invokeMethod(
+                        self, "_vj_open_joined",
+                        _Qt.ConnectionType.QueuedConnection, Q_ARG(str, last_out))
             except Exception as e:
-                _status(_t(f"❌ Join failed: {e}"))
+                _status(_t(f"❌ Batch join error: {e}"))
             finally:
                 QMetaObject.invokeMethod(
-                    self.btn_join_selected, "setEnabled",
-                    _Qt.ConnectionType.QueuedConnection, Q_ARG(bool, True))
+                    self, "_vj_join_done",
+                    _Qt.ConnectionType.QueuedConnection)
         threading.Thread(target=_work, daemon=True).start()
-        self.statusBar().showMessage(_t("Joining… / 結合中…"), 0)
+        self.statusBar().showMessage(
+            _t(f"Batch joining {len(cands)} pairs… / 一括結合中…"), 0)
+
+    def _vj_join_btn_busy(self):
+        """Switch the Join Selected button into red STOP mode while a join
+        runs — clicking it then requests cancellation."""
+        if hasattr(self, "btn_join_selected"):
+            self.btn_join_selected.setText(_t("⏹ Stop Join / ⏹ 結合を中止"))
+            self.btn_join_selected.setToolTip(_t(
+                "A join is running — click to stop it / "
+                "結合の実行中 — クリックで中止"))
+            self.btn_join_selected.setStyleSheet(self._vj_stop_ss)
+
+    @pyqtSlot()
+    def _vj_join_done(self):
+        """Join thread finished (completed, failed, or stopped) — clear the
+        flags and revert the button to its normal green Join state. Invoked
+        from the join background thread via QMetaObject (UI-thread safe)."""
+        self._vj_joining = False
+        self._vj_cancel = False
+        if hasattr(self, "btn_join_selected"):
+            self.btn_join_selected.setText(_t("🔗 Join Selected / 🔗 選択を結合"))
+            self.btn_join_selected.setToolTip(_t(
+                "Join the checked candidates with the source — one output each. "
+                "No candidates checked → joins the left/right pair. / "
+                "チェックした候補をソースと結合（候補ごとに出力）。未チェックなら左右ペアを結合。"))
+            self.btn_join_selected.setStyleSheet(self._vj_join_ss)
+
+    def _vj_clear_join_results(self):
+        """Clear prior green joined-output rows when a new join run starts."""
+        if getattr(self, "_vj_join_results", None):
+            self._vj_join_results = []
+            try:
+                self._vj_render_list()
+            except Exception:
+                pass
+
+    def _vj_build_join_note(self, sources, join_result=None):
+        """Build the note block that explains how a Video Join output was made."""
+        clean_sources = [os.path.abspath(p) for p in sources if p]
+        note_lines = ["AItsugi"]
+        if clean_sources:
+            note_lines.append(f"START: {clean_sources[0]}")
+            note_lines.append(f"END: {clean_sources[-1]}")
+        if len(clean_sources) > 2:
+            note_lines.append("SOURCES:")
+            note_lines.extend(f"{i}. {p}" for i, p in enumerate(clean_sources, start=1))
+        if join_result is not None:
+            note_lines.append(f"CUT A FRAMES: {getattr(join_result, 'cut_a_frames', 0)}")
+            note_lines.append(f"CUT B FRAMES: {getattr(join_result, 'cut_b_frames', 0)}")
+            note_lines.append(f"OUTPUT B START FRAME: {getattr(join_result, 'cut_b_frames', 0)}")
+            seam_a = getattr(join_result, "seam_a_frame", None)
+            seam_b = getattr(join_result, "seam_b_frame", None)
+            if seam_a is not None and seam_b is not None:
+                note_lines.append(f"SEAM: A frame {seam_a} / B frame {seam_b}")
+        return "\n".join(note_lines)
+
+    @pyqtSlot(str, str, str)
+    def _vj_apply_join_metadata(self, path, note_block, related_json):
+        """Append join status to the output note and embed it in the file."""
+        if not path or not os.path.exists(path):
+            return
+        try:
+            entry = self.attrs_data.setdefault(path, {})
+            entry.setdefault("tags", [])
+            entry.setdefault("confirmed", False)
+            entry.setdefault("project", "")
+            entry.setdefault("scene", "")
+            entry.setdefault("custom", "")
+            entry.setdefault("person_id", "")
+            entry.setdefault("audio", "")
+            entry.setdefault("prompt", "")
+            entry.setdefault("neg_prompt", "")
+            entry.setdefault("seed", "")
+            entry.setdefault("speech", "")
+            entry["editable"] = False
+
+            current_note = (entry.get("note") or "").strip()
+            if note_block and note_block not in current_note:
+                entry["note"] = f"{current_note}\n{note_block}".strip()
+            else:
+                entry["note"] = current_note
+
+            try:
+                related_paths = json.loads(related_json) if related_json else []
+            except Exception:
+                related_paths = []
+            related = list(entry.get("related") or [])
+            for rel_path in related_paths:
+                if rel_path not in related:
+                    related.append(rel_path)
+            entry["related"] = related
+
+            attrs_mod.save(self.current_project, self.attrs_data)
+            try:
+                attrs_mod.embed_aitan_meta(path, entry)
+            except Exception:
+                pass
+            handler = getattr(self, "preview_handler", None)
+            pw = getattr(handler, "window", None) if handler is not None else None
+            if pw is not None and getattr(handler, "current_path", None) == path:
+                try:
+                    pw._refresh_attrs(path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    @pyqtSlot(str)
+    def _vj_open_joined(self, path):
+        """Show a finished join output in the preview window. Invoked from
+        the join background thread via QMetaObject (UI-thread safe)."""
+        if path and os.path.exists(path):
+            try:
+                self.preview_handler.show(path)
+            except Exception:
+                pass
+
+    @pyqtSlot(str)
+    def _vj_record_join_result(self, path):
+        """Record a finished join output and surface it in the candidate
+        list with a green background (green = a complete single video).
+        Invoked from the join background thread via QMetaObject."""
+        if not path or not os.path.exists(path):
+            return
+        results = getattr(self, "_vj_join_results", None)
+        if results is None:
+            results = self._vj_join_results = []
+        _np = os.path.normpath(path)
+        if all(os.path.normpath(r) != _np for r in results):
+            results.append(path)
+        try:
+            self._vj_render_list()
+            self._vj_select_path_in_list(path)
+        except Exception:
+            pass
+
+    @pyqtSlot(str)
+    def _vj_protect_output(self, path):
+        """Mark generated Video Join files as locked (editable=False).
+
+        This covers joined videos and generated still pictures, so auto-rename
+        and auto-detection (CLIP/face/meta) never touch the produced file.
+        Invoked from join background threads too, so keep UI updates guarded."""
+        if not path or not os.path.exists(path):
+            return
+        try:
+            self.attrs_data.setdefault(path, {})["editable"] = False
+            attrs_mod.save(self.current_project, self.attrs_data)
+            self._refresh_row_rim_for_path(path)
+            handler = getattr(self, "preview_handler", None)
+            pw = getattr(handler, "window", None) if handler is not None else None
+            cur = getattr(handler, "current_path", None) if handler is not None else None
+            if pw is not None and cur and os.path.normpath(cur) == os.path.normpath(path):
+                pc = getattr(pw, "_protected_check", None)
+                if pc is not None:
+                    pc.blockSignals(True)
+                    pc.setChecked(True)
+                    pc.blockSignals(False)
+                if hasattr(pw, "_apply_protected_lock"):
+                    pw._apply_protected_lock(True)
+        except Exception:
+            pass
 
     def show_person_group(self, pid):
         """Populate the main table with every file tagged with a
@@ -7350,33 +8666,50 @@ class AISearchApp(QMainWindow):
 
     def _on_right_click(self, pos):
         item = self.table.itemAt(pos)
+        clicked_row = -1
         if item:
-            self.table.selectRow(self.table.row(item))
+            clicked_row = self.table.row(item)
+            self.table.setCurrentCell(clicked_row, item.column())
+            self.table.selectRow(clicked_row)
         # Build a fresh menu so Open with… can be populated per-file
         # type (the cached self.popup_menu can't do that).
         from PyQt6.QtWidgets import QMenu
         from PyQt6.QtGui import QAction
         import aisearch_file_manager as _fm
         menu = QMenu(self.table)
-        row = self._current_row()
+        row = clicked_row if clicked_row >= 0 else self._current_row()
         path = self.table.get_row_path(row) if row >= 0 else None
 
         if path and os.path.isfile(path):
-            # Lock / Unlock toggle — separate from rename. When locked
+            # Lock action — separate from rename. When locked
             # (editable=False), all auto paths (scan worker, Apply
             # Rules) skip this file. Manual UI actions still work.
             _is_locked = not attrs_mod.is_editable(self.attrs_data, path)
             act_lock = QAction(
-                _t("🔓 Unlock / 🔓 ロック解除") if _is_locked
+                _t("🔒 Locked / 🔒 ロック中") if _is_locked
                 else _t("🔒 Lock / 🔒 ロック"),
                 self)
-            act_lock.triggered.connect(
-                lambda _, p=path: self._toggle_file_lock(p))
+            if _is_locked:
+                act_lock.setEnabled(False)
+            else:
+                act_lock.triggered.connect(
+                    lambda _, p=path: self._toggle_file_lock(p))
             menu.addAction(act_lock)
             menu.addSeparator()
             act_open = QAction(_t("Open / 開く"), self)
             act_open.triggered.connect(lambda _, p=path: _fm.open_default(p))
             menu.addAction(act_open)
+            video_exts = tuple(ext.lower() for ext in logic.EXT_VID)
+            if os.path.splitext(path)[1].lower() in video_exts:
+                sub_vj = menu.addMenu(_t("Send to Video Join / 動画結合へ送る"))
+                act_vj_left = QAction(_t("As LEFT (blue) / LEFT(青)へ"), self)
+                act_vj_left.triggered.connect(
+                    lambda _, p=path: self._send_to_video_join(p, side="left"))
+                sub_vj.addAction(act_vj_left)
+                act_vj_right = QAction(_t("As RIGHT (red) / RIGHT(赤)へ"), self)
+                act_vj_right.triggered.connect(
+                    lambda _, p=path: self._send_to_video_join(p, side="right"))
+                sub_vj.addAction(act_vj_right)
             sub = menu.addMenu(_t("Open with / アプリで開く"))
             for label, argv in _fm.app_choices(path):
                 a = QAction(label, self)
@@ -7423,6 +8756,45 @@ class AISearchApp(QMainWindow):
         menu.addSeparator()
         menu.addAction(_t("🗑️ Delete / 🗑️ 削除"), self.delete_file)
         menu.exec(self.table.mapToGlobal(pos))
+
+    def _on_vj_right_click(self, pos):
+        item = self._vj_search_area.itemAt(pos)
+        if item is not None:
+            self._vj_search_area.setCurrentItem(item)
+            item.setSelected(True)
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+        import aisearch_file_manager as _fm
+        menu = QMenu(self._vj_search_area)
+        path = self._vj_current_list_path()
+        if path and os.path.isfile(path):
+            _is_locked = not attrs_mod.is_editable(self.attrs_data, path)
+            act_lock = QAction(
+                _t("🔒 Locked / 🔒 ロック中") if _is_locked
+                else _t("🔒 Lock / 🔒 ロック"),
+                self)
+            if _is_locked:
+                act_lock.setEnabled(False)
+            else:
+                act_lock.triggered.connect(lambda _, p=path: self._toggle_file_lock(p))
+            menu.addAction(act_lock)
+            menu.addSeparator()
+            act_open = QAction(_t("Open / 開く"), self)
+            act_open.triggered.connect(lambda _, p=path: _fm.open_default(p))
+            menu.addAction(act_open)
+            sub = menu.addMenu(_t("Open with / アプリで開く"))
+            for label, argv in _fm.app_choices(path):
+                a = QAction(label, self)
+                a.triggered.connect(lambda _, c=argv, p=path: _fm.open_with(c, p))
+                sub.addAction(a)
+            menu.addSeparator()
+        menu.addAction(_t("📝 Rename (F2) / 📝 改名 (F2)"),
+                       lambda: self.rename_file(from_menu=True))
+        menu.addAction(_t("📦 Move to... (M) / 📦 移動... (M)"),
+                       self.move_to_folder_manually)
+        menu.addSeparator()
+        menu.addAction(_t("🗑️ Delete / 🗑️ 削除"), self.delete_file)
+        menu.exec(self._vj_search_area.mapToGlobal(pos))
 
     def _update_drop_zone_thumb(self, path):
         """Update the header thumbnail to show path (used in browse mode)."""
@@ -7681,8 +9053,11 @@ class AISearchApp(QMainWindow):
                 # a left picture's start searches for the previous file.
                 if _mode == "videojoin":
                     cell.mouseDoubleClickEvent = lambda _e, _p=p, _c=cell, _i=i: self._vj_thumb_double_click(_p, _e, _c, _i)
+                    # Drop on this cell targets ONLY this side (0=left, 1=right).
+                    cell._drop_callback = lambda _dp, _i=i: self._vj_cell_drop(_dp, _i)
                 else:
                     cell.mouseDoubleClickEvent = lambda _e, _p=p: self._click_thumb(_p)
+                    cell._drop_callback = self.on_drop
             else:
                 cell.hide()
 
@@ -8155,6 +9530,9 @@ class AISearchApp(QMainWindow):
                 pass
 
     def move_to_folder_manually(self):
+        if self.config.get("last_mode") == "videojoin":
+            self._vj_move_list_item()
+            return
         row = self._current_row()
         if row < 0: return
         old_path = self.table.get_row_path(row)
@@ -8195,6 +9573,9 @@ class AISearchApp(QMainWindow):
             QMessageBox.critical(self, _t("Move Error / 移動エラー"), _t(f"Could not move file: {err} / ファイルを移動できません: {err}"))
 
     def rename_file(self, from_menu=False):
+        if self.config.get("last_mode") == "videojoin":
+            self._vj_rename_list_item(from_menu=from_menu)
+            return
         row = self._current_row()
         if row < 0: return
         # Defer when called from context menu so it fully closes first
@@ -8204,6 +9585,11 @@ class AISearchApp(QMainWindow):
     def _start_rename(self, row):
         old_path   = self.table.get_row_path(row)
         if not old_path: return
+        if not attrs_mod.is_editable(self.attrs_data, old_path):
+            QMessageBox.warning(
+                self, _t("Locked / ロック中"),
+                _t("This file is locked and cannot be renamed. / このファイルはロック中のため改名できません。"))
+            return
         old_name   = os.path.basename(old_path)
         base       = os.path.splitext(old_name)[0]
         name_item  = self.table.item(row, 2)
@@ -8336,6 +9722,10 @@ class AISearchApp(QMainWindow):
         focused = QApplication.focusWidget()
         if focused and focused.__class__.__name__ in ("QLineEdit", "QTextEdit", "QPlainTextEdit"):
             _del_dbg(f"delete_file BAIL focus={focused.__class__.__name__}")
+            return
+        if self.config.get("last_mode") == "videojoin":
+            _del_dbg("delete_file ROUTE videojoin list")
+            self._vj_delete_list_items()
             return
 
         rows = self._selected_rows()

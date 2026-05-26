@@ -219,10 +219,11 @@ class _DbMixin:
         btn_redetect.clicked.connect(self._auto_detect_all)
         util_row.addWidget(btn_redetect)
 
-        btn_unlock_util = QPushButton(_t("🔓 Unlock All / 🔓 全解除"))
+        btn_unlock_util = QPushButton(_t("🔓 Init Missing Locks / 🔓 未設定だけ初期化"))
         btn_unlock_util.setToolTip(_t(
-            "Run metadata scan on all files to set editable flag — no CLIP scan. / "
-            "全ファイルでメタデータスキャンを実行しeditableフラグを設定 — CLIPスキャンなし。"))
+            "Set editable=True only on files that do not have an editable flag yet. "
+            "Existing locked files stay locked. / "
+            "editableフラグ未設定のファイルだけTrueにします。既存のロック中ファイルは維持します。"))
         btn_unlock_util.setStyleSheet(
             "background-color: #2a3a2a; color: #aaffaa; padding: 4px 8px;")
         btn_unlock_util.clicked.connect(self._unlock_all_metadata)
@@ -1443,7 +1444,7 @@ class _DbMixin:
         self.lbl_scan_project.setStyleSheet("color: #aaa; font-size: 11px;")
 
     def _unlock_all_metadata(self):
-        """Unconditionally set editable=True on every file in the scan dirs — no metadata scan."""
+        """Initialize missing editable flags without unlocking explicit locks."""
         import aisearch_attrs as attrs_mod
         dirs_flags = self._get_dirs_with_flags()
         if not dirs_flags:
@@ -1470,21 +1471,39 @@ class _DbMixin:
         self._stop_scan_all = False
         self.btn_stop_scan.setEnabled(True)
         self.progress_bar.setRange(0, len(all_paths))
-        self.lbl_scan.setText(f"Unlocking {len(all_paths)} files…")
-        unlocked = 0
+        self.lbl_scan.setText(f"Initializing editable flag for {len(all_paths)} files…")
+        initialized = 0
+        kept_locked = 0
+        already_set = 0
         for i, path in enumerate(all_paths):
             if self._stop_scan_all:
-                self.lbl_scan.setText(f"Stopped — {unlocked} files unlocked."); break
-            live_attrs.setdefault(path, {})["editable"] = True
-            unlocked += 1
+                self.lbl_scan.setText(
+                    f"Stopped — {initialized} initialized, {kept_locked} locked kept."
+                )
+                break
+            entry = live_attrs.setdefault(path, {})
+            if "editable" not in entry:
+                entry["editable"] = True
+                initialized += 1
+            elif entry.get("editable") is False:
+                kept_locked += 1
+            else:
+                already_set += 1
             if (i + 1) % 10 == 0 or i == 0:
                 self.progress_bar.setValue(i + 1)
-                self.progress_label.setText(f"Unlock ({i+1}/{len(all_paths)}): {os.path.basename(path)}")
-                self.lbl_scan.setText(f"Unlocking: {i+1}/{len(all_paths)}, done {unlocked}")
+                self.progress_label.setText(
+                    f"Init ({i+1}/{len(all_paths)}): {os.path.basename(path)}"
+                )
+                self.lbl_scan.setText(
+                    f"Initializing: {i+1}/{len(all_paths)}, "
+                    f"new {initialized}, locked kept {kept_locked}, already set {already_set}"
+                )
                 QApplication.processEvents()
         else:
             self.progress_bar.setValue(len(all_paths))
-            self.lbl_scan.setText(f"Done — {unlocked} files unlocked.")
+            self.lbl_scan.setText(
+                f"Done — {initialized} initialized, {kept_locked} locked kept, {already_set} already set."
+            )
             QTimer.singleShot(4000, lambda: self.lbl_scan.setText(""))
         attrs_mod.save(self.app.current_project, live_attrs)
         self.app.attrs_data = live_attrs
@@ -1596,6 +1615,7 @@ class _DbMixin:
 
         # Walk all dirs recursively and index files by basename
         disk_by_name: dict[str, list[str]] = {}
+        disk_by_dir: dict[str, list[str]] = {}
         for d in all_dirs:
             for root, subdirs, files in os.walk(d):
                 subdirs[:] = [s for s in subdirs if s != '_unreadable']
@@ -1605,6 +1625,7 @@ class _DbMixin:
                     if f.lower().endswith(valid_exts):
                         fp = os.path.normpath(os.path.join(root, f))
                         disk_by_name.setdefault(f, []).append(fp)
+                        disk_by_dir.setdefault(os.path.dirname(os.path.abspath(fp)), []).append(fp)
 
         # Match missing → unique candidate on disk
         matches: list[tuple[str, str]] = []   # (old_path, new_path)
@@ -1619,6 +1640,15 @@ class _DbMixin:
             elif len(candidates) > 1:
                 ambiguous.append((old_p, candidates))
             else:
+                old_entry = (self.app.attrs_data or {}).get(old_p) or {}
+                if old_entry.get("editable") is False:
+                    same_dir = disk_by_dir.get(os.path.dirname(os.path.abspath(old_p)), [])
+                    if len(same_dir) == 1:
+                        matches.append((old_p, same_dir[0]))
+                        continue
+                    if len(same_dir) > 1:
+                        ambiguous.append((old_p, same_dir))
+                        continue
                 unmatched.append(old_p)
 
         # ── Shared thumbnail helper (used by both dialogs below) ─────────────────

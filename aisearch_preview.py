@@ -5341,6 +5341,14 @@ class PreviewWindow(QWidget):
                 pass
             return
         app = self.handler.app
+        if not attrs_mod.is_editable(app.attrs_data, path):
+            try:
+                self.handler.app.statusBar().showMessage(
+                    _t(f"Rename skipped — locked: {os.path.basename(path)} / "
+                       f"改名中止 — ロック中: {os.path.basename(path)}"), 7000)
+            except Exception:
+                pass
+            return
         # Suspend the auto-bake side effect of _save_attrs while renaming.
         # _save_attrs's bake thread captures the path string at thread-start
         # time; when the rename below changes the path, the thread's

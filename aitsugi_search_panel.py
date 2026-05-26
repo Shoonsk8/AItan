@@ -15,8 +15,8 @@ import os
 import traceback
 
 from PyQt6.QtCore import (QObject, QRunnable, Qt, QThreadPool,
-                          pyqtSignal as Signal, pyqtSlot as Slot, QSize)
-from PyQt6.QtGui import QImage, QPixmap, QIcon
+                          pyqtSignal as Signal, pyqtSlot as Slot, QSize, QUrl)
+from PyQt6.QtGui import QDesktopServices, QImage, QPixmap, QIcon
 from PyQt6.QtWidgets import (QFrame, QGroupBox, QHBoxLayout, QLabel,
                              QListWidget, QListWidgetItem, QPushButton,
                              QVBoxLayout)
@@ -276,8 +276,8 @@ class SearchPanel(QGroupBox):
         self.results = QListWidget()
         self.results.setIconSize(QSize(96, 72))
         self.results.setMinimumHeight(180)
-        self.results.itemActivated.connect(self._on_item_activated)
-        self.results.itemDoubleClicked.connect(self._on_item_activated)
+        self.results.itemClicked.connect(self._on_item_selected)
+        self.results.itemDoubleClicked.connect(self._on_item_play)
         outer.addWidget(self.results, 1)
 
         bottom_row = QHBoxLayout()
@@ -349,7 +349,9 @@ class SearchPanel(QGroupBox):
         if not hits:
             self.lbl_status.setText("一致候補なし (インデックスを構築済みですか?)")
             return
-        self.lbl_status.setText(f"{len(hits)} 件 — クリックで {'A' if self._last_side=='end' else 'B'} スロットへ")
+        self.lbl_status.setText(
+            f"{len(hits)} 件 — クリックで {'A' if self._last_side=='end' else 'B'}、ダブルクリックで再生"
+        )
         # The column we matched on is the row's "matched edge" thumbnail.
         edge = self._last_side  # 'end' → predecessor's END frame visible
         thumb_jobs: list[tuple[str, str]] = []
@@ -370,7 +372,7 @@ class SearchPanel(QGroupBox):
         if 0 <= idx < self.results.count():
             self.results.item(idx).setIcon(QIcon(pm))
 
-    def _on_item_activated(self, item: QListWidgetItem) -> None:
+    def _on_item_selected(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
@@ -382,3 +384,10 @@ class SearchPanel(QGroupBox):
         else:
             self.load_to_b.emit(path)
             self.status.emit(f"B スロットへ: {os.path.basename(path)}")
+
+    def _on_item_play(self, item: QListWidgetItem) -> None:
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if not path or not os.path.exists(path):
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        self.status.emit(f"再生: {os.path.basename(path)}")

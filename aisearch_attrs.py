@@ -4838,6 +4838,8 @@ def rename_with_person_id(attrs_data, path, pid, flush_stores=True, project=None
                         'P{pid}J{julian}'. Pass True only if a specific caller
                         wants to leave uncoded files untouched.
     Returns the new path (same as path if no rename was needed or rename failed)."""
+    if not is_editable(attrs_data, path):
+        return path
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
     if parts is None:
@@ -4880,6 +4882,8 @@ def strip_person_from_filename(attrs_data, path, project=None, flush_stores=True
     any person, and leaving P### in the name would let the filename
     authority re-bind it on the next scan. Returns the new path
     (== path if the name is uncoded, has no person, or rename failed)."""
+    if not is_editable(attrs_data, path):
+        return path
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
     if parts is None or not parts.get("persons"):
@@ -5060,6 +5064,8 @@ def would_rename(attrs_data, path, project=None):
     entry = get(attrs_data, path)
     if not entry:
         return False
+    if not is_editable(attrs_data, path):
+        return False
     stem, _ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
     if parts is None:
@@ -5124,6 +5130,8 @@ def rename_file_to_match_entry(attrs_data, path, project=None, defer_save=False)
     Returns new path (same as path if unchanged or rename failed)."""
     entry = get(attrs_data, path)
     if not entry:
+        return path
+    if not is_editable(attrs_data, path):
         return path
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
@@ -5200,6 +5208,8 @@ def rename_to_date_first(attrs_data, path, project=None):
     EXIF DateTimeOriginal is used for J (falls back to ctime).
     Preserves existing coded fields if the file is already in coded format.
     Returns new path (same as path if unchanged or on error)."""
+    if not is_editable(attrs_data, path):
+        return path
     stem, ext = os.path.splitext(os.path.basename(path))
     parts = parse_coded_filename(stem)
     j_code = julian_id_for_file(path)
@@ -5759,6 +5769,8 @@ def apply_tag_sync_rules(attrs_data, path, project):
                    if NO  alias pattern is in filename → append the first pattern.
       - tag unset: remove ALL alias patterns from filename.
     Returns the (possibly renamed) path."""
+    if not is_editable(attrs_data, path):
+        return path
     import re as _re
     rules = load_filename_rules(project)
     sync_rules = [r for r in rules

@@ -1794,14 +1794,18 @@ class FilePane(QWidget):
                 menu.addSeparator()
             # Open / Open with — only meaningful for files
             if os.path.isfile(path):
-                # Lock / Unlock toggle
+                # Context-menu locking is one-way. A locked file should not
+                # be easy to unlock by accident while browsing files.
                 import aisearch_attrs as _am
                 _attrs = getattr(self.app, "attrs_data", {}) or {}
                 _is_locked = not _am.is_editable(_attrs, path)
                 act_lock = QAction(
-                    "🔓 Unlock" if _is_locked else "🔒 Lock", self)
-                act_lock.triggered.connect(
-                    lambda _, p=path: self._toggle_lock(p))
+                    "🔒 Locked" if _is_locked else "🔒 Lock", self)
+                if _is_locked:
+                    act_lock.setEnabled(False)
+                else:
+                    act_lock.triggered.connect(
+                        lambda _, p=path: self._toggle_lock(p))
                 menu.addAction(act_lock)
                 menu.addSeparator()
                 act_open_default = QAction("Open", self)
@@ -1871,6 +1875,15 @@ class FilePane(QWidget):
         closes with a non-empty, changed name. Performs the on-disk
         rename + in-memory sync, or reverts the name on failure."""
         old_name = os.path.basename(old_path)
+        try:
+            import aisearch_attrs as _am
+            attrs_data = getattr(self.app, "attrs_data", {}) or {}
+            if not _am.is_editable(attrs_data, old_path):
+                QMessageBox.warning(self, "Locked", "This file is locked and cannot be renamed.")
+                self._revert_item_name(item, old_name)
+                return
+        except Exception:
+            pass
         if "/" in new_name or "\\" in new_name:
             QMessageBox.warning(self, "Rename",
                 "Name cannot contain '/' or '\\'.")

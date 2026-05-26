@@ -347,6 +347,17 @@ def _color_match(source: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def _color_match_amount(source: np.ndarray, target: np.ndarray, amount: float) -> np.ndarray:
+    """Apply color matching partially so transitions can return to source color."""
+    amount = max(0.0, min(1.0, amount))
+    if amount <= 0.0:
+        return source
+    matched = _color_match(source, target)
+    if amount >= 1.0:
+        return matched
+    return cv2.addWeighted(source, 1.0 - amount, matched, amount, 0)
+
+
 def _flow(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     gray_a = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
     gray_b = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY)
@@ -491,9 +502,20 @@ def _motion_samples_from_frames(frames: list[np.ndarray]) -> list[MotionSample]:
 def _find_matching_motion_seam_from_frames(
     frames_a: list[np.ndarray],
     frames_b: list[np.ndarray],
+    window: int = 60,
 ) -> Optional[SeamMatch]:
     samples_a = _motion_samples_from_frames(frames_a)
     samples_b = _motion_samples_from_frames(frames_b)
+    if not samples_a or not samples_b:
+        return None
+
+    # A join seam must be near the actual boundary: the tail of A and the
+    # head of B. Searching all of A can find a coincidental motion match early
+    # in a long base clip, then cut the output shorter than the base video.
+    start_a = max(0, len(frames_a) - window)
+    end_b = min(len(frames_b), window)
+    samples_a = [sample for sample in samples_a if sample.index >= start_a]
+    samples_b = [sample for sample in samples_b if sample.index < end_b]
     if not samples_a or not samples_b:
         return None
 
@@ -641,15 +663,14 @@ def make_transition_frames(
     if frame_a.shape != frame_b.shape:
         frame_b = _resize_to(frame_b, (frame_a.shape[1], frame_a.shape[0]))
 
-    # Match B slightly toward A to reduce sudden color/exposure jumps at the seam.
-    b_for_transition = _color_match(frame_b, frame_a) if color_match else frame_b
-
-    flow_ab = _flow(frame_a, b_for_transition)
-    flow_ba = _flow(b_for_transition, frame_a)
-
     frames: list[np.ndarray] = []
     for i in range(1, steps + 1):
         t = i / (steps + 1)
+        # Strongly match B near A, then fade back to B's original color before
+        # the final B frame. Otherwise the second side of the join can jump.
+        b_for_transition = _color_match_amount(frame_b, frame_a, 1.0 - t) if color_match else frame_b
+        flow_ab = _flow(frame_a, b_for_transition)
+        flow_ba = _flow(b_for_transition, frame_a)
         warped_a = _warp_with_flow(frame_a, flow_ab, t)
         warped_b = _warp_with_flow(b_for_transition, flow_ba, 1.0 - t)
         blended = cv2.addWeighted(warped_a, 1.0 - t, warped_b, t, 0)
@@ -683,7 +704,9 @@ def make_overlap_transition(
             b = _resize_to(b, (a.shape[1], a.shape[0]))
 
         t = _smoothstep((i + 1) / (count + 1))
-        b_for_transition = _color_match(b, a) if color_match else b
+        # Fade color matching out as the overlap approaches normal B frames.
+        # This keeps the A-side connection smooth without creating a B-side pop.
+        b_for_transition = _color_match_amount(b, a, 1.0 - t) if color_match else b
 
         try:
             flow_ab = _flow(a, b_for_transition)
