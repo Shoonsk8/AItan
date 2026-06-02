@@ -94,12 +94,15 @@ def _read_first_last_frames(path: str):
 
 def _encode_pil(img: Image.Image) -> torch.Tensor | None:
     """Encode a PIL image via AItan's CLIP model. L2-normalized."""
-    if _lg.model is None:
+    # Wait for the background CLIP load (see aisearch_logic._load_model_bg)
+    # so this can't race with launch and return None spuriously.
+    _m = _lg.get_model()
+    if _m is None:
         return None
     if max(img.width, img.height) > 512:
         img.thumbnail((512, 512), Image.LANCZOS)
     with torch.no_grad():
-        emb = _lg.model.encode(img, convert_to_tensor=True)
+        emb = _m.encode(img, convert_to_tensor=True)
     emb = emb.float().cpu()
     emb = emb / (emb.norm() + 1e-8)
     return emb

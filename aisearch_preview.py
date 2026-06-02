@@ -2458,6 +2458,13 @@ class PreviewWindow(QWidget):
                             "CLIP_BG", "CLIP_X", "CLIP_CL",
                             "FACE", "FACE_PW"):
                     entry[_ek] = _off_text
+            # Project tag groups can include a "filename" text field — its
+            # value is DERIVED from the file path (basename), not stored
+            # in attrs. Inject the current basename into the entry view
+            # so the canvas widget shows it. _save_attrs reads it back
+            # and treats a change as a rename request, not an attribute
+            # write — see _maybe_rename_from_canvas below.
+            entry["filename"] = os.path.basename(path)
             _sc.load_file(path, entry, raw_meta=_raw_meta)
             # Mark that the canvas now reflects THIS path. _save_attrs uses this
             # to refuse writes when the widgets haven't been reloaded yet.
@@ -4987,6 +4994,25 @@ class PreviewWindow(QWidget):
             _matrix_vals = {}
             _pathlist_vals = {}
             _collected = _sc.collect_soft_data()
+            # Canvas "filename" tile is a virtual text field — its value is
+            # the basename, not attribute data. If the user typed a new
+            # name, treat it as a rename request: rename on disk, lock the
+            # entry (editable=False), update path everywhere, and continue
+            # the save against the new path. Run this BEFORE the rest of
+            # _save_attrs reads attrs[path] so the lock + new path land in
+            # the same write.
+            try:
+                _tv = _collected[1] if len(_collected) >= 2 else {}
+                _new_bn = (_tv.get("filename") or "").strip()
+                _cur_bn = os.path.basename(path)
+                if _new_bn and _new_bn != _cur_bn:
+                    _renamed = self._maybe_rename_from_canvas(path, _new_bn)
+                    if _renamed:
+                        path = _renamed
+                        self._attr_path = _renamed
+                        entry = attrs_mod.get(app.attrs_data, _renamed)
+            except Exception:
+                pass
             if len(_collected) == 5:
                 _extra_tags, _text_vals, _coded_vals, _matrix_vals, _pathlist_vals = _collected
             elif len(_collected) == 4:
@@ -5318,6 +5344,93 @@ class PreviewWindow(QWidget):
                 self._update_rename_btn("idle")
         except Exception:
             pass
+
+    def _maybe_rename_from_canvas(self, path, new_base):
+        """Treat the canvas's 'filename' text tile as a rename request.
+
+        Renames `path` to `new_base` in the same directory, then locks the
+        entry (editable=False) so auto-rename / Apply Rules won't undo it.
+        Returns the new path on success, None on validation failure or OS
+        error. Called from inside _save_attrs while it has the project
+        ready, so the rename and the rest of the save land in one write.
+
+        Distinct from _on_manual_rename (the 🪪 Rename button), which
+        rebuilds the basename from coded attrs. This one respects exactly
+        what the user typed into the canvas tile."""
+        app = self.handler.app
+        def _msg(msg, ms=5000):
+            try:
+                app.statusBar().showMessage(msg, ms)
+            except Exception:
+                pass
+        if not path or not os.path.exists(path):
+            _msg(_t(f"⚠ File not found: {path} / ⚠ ファイル不在: {path}"), 6000)
+            return None
+        new_base = (new_base or "").strip()
+        if not new_base or new_base == os.path.basename(path):
+            return None
+        if "/" in new_base or "\\" in new_base or new_base in (".", ".."):
+            _msg(_t("Basename only — no slashes or .. allowed. / "
+                    "ファイル名のみ — スラッシュや .. は使えません。"), 6000)
+            return None
+        new_path = os.path.join(os.path.dirname(path), new_base)
+        if os.path.exists(new_path):
+            _msg(_t(f"Target already exists: {new_base} / 既に存在します: {new_base}"), 6000)
+            return None
+        # Pause the watch-dir scanner so a parallel scan can't read the
+        # rename as delete-then-add. Same guard pattern as the coded
+        # 🪪 Rename path in _on_manual_rename.
+        _was_paused = getattr(app, "_watcher_paused", False)
+        app._watcher_paused = True
+        try:
+            try:
+                os.rename(path, new_path)
+            except OSError as e:
+                _msg(_t(f"Rename failed: {e} / 改名失敗: {e}"), 6000)
+                return None
+            try:
+                attrs_mod.update_path_in_all_stores(path, new_path, app.current_project)
+            except Exception:
+                pass
+            if app.data and "paths" in app.data and path in app.data["paths"]:
+                app.data["paths"][app.data["paths"].index(path)] = new_path
+            for _row in range(app.table.rowCount()):
+                if app.table.get_row_path(_row) == path:
+                    app.table.set_row_path(_row, new_path)
+                    _name_item = app.table.item(_row, 2)
+                    if _name_item:
+                        _name_item.setText(new_base)
+                    break
+            if self._canvas_loaded_path is not None:
+                self._canvas_loaded_path = new_path
+            self.handler.current_path = new_path
+            self._update_title_with_info(new_path)
+            # Move the old entry to the new path key. Without this, the
+            # old entry's note / related / editable / tags etc. are left
+            # at attrs_data[old_path] — an orphan key that the next save
+            # cleans up, taking the join metadata (and the lock) with it.
+            # Matches rename_file_to_match_entry's `attrs_data[new] = pop(old)`.
+            if path in app.attrs_data:
+                app.attrs_data[new_path] = app.attrs_data.pop(path)
+            else:
+                app.attrs_data.setdefault(new_path, {})
+            # Auto-lock — same policy as the coded 🪪 Rename below.
+            app.attrs_data[new_path]["editable"] = False
+            try:
+                pc = getattr(self, "_protected_check", None)
+                if pc is not None:
+                    pc.blockSignals(True)
+                    pc.setChecked(True)
+                    pc.blockSignals(False)
+                    if hasattr(self, "_apply_protected_lock"):
+                        self._apply_protected_lock(True)
+                self._update_preview_rim(new_path, True)
+            except Exception:
+                pass
+            _msg(_t(f"✔ {os.path.basename(path) if path else ''} → {new_base}"), 5000)
+            return new_path
+        finally:
+            app._watcher_paused = _was_paused
 
     def _on_manual_rename(self):
         """Manual rename — rebuilds the filename from entry's current

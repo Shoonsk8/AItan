@@ -2589,6 +2589,14 @@ class AttrViewerWidget(QWidget):
 
             grp         = key_to_group.get(key)
             color       = (group_colors or {}).get(grp, "#2a2a2a")
+            # Per-field color override — lets a single tile pick its own
+            # background regardless of its group's color (e.g. `filename`
+            # is blue per the locked-value convention even though it
+            # lives in the Internal group with everything else). Read
+            # from cfg["__field_colors__"][key]; missing → group color.
+            _field_color = (cfg.get("__field_colors__") or {}).get(key)
+            if _field_color:
+                color = _field_color
             sz          = (sizes or {}).get(key)
             collapsible = False
             collapsed   = False

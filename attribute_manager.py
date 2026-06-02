@@ -79,6 +79,10 @@ BLUE_PREFIXES = {
     "P", "J", "PI", "PW",
     # Per-file lineage list — universal/system attribute
     "related",
+    # filename — derived from the file path itself; editing it triggers
+    # a rename + lock (see aisearch_preview._maybe_rename_from_canvas).
+    # Belongs with the other file-identity fields, not the user palette.
+    "filename",
 }
 
 

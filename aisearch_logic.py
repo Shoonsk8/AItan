@@ -29,9 +29,27 @@ _cuda_dead = False
 # None; any code path that touches it will raise, which is the right
 # signal that the caller leaked a non-face dependency into a face-only
 # context.
-if os.environ.get("AISEARCH_SKIP_MODEL") == "1":
-    model = None
-else:
+#
+# Background CLIP load. Loading clip-ViT-L-14 at import time blocks the
+# GUI for ~25 s before the AItan window can paint. We start the load on
+# a daemon thread instead — the import returns immediately, the window
+# appears, and the model finishes loading in the background. Any code
+# path that needs the model goes through get_model() which blocks until
+# the load completes (or returns None if it permanently failed).
+model = None
+_model_event = threading.Event()
+_model_load_failed = False
+
+def _load_model_bg():
+    """Daemon-thread entry point that does the actual SentenceTransformer
+    load. Sets the module-global `model` (and `device` on OOM fallback)
+    then signals `_model_event` so waiters in get_model() can proceed."""
+    global model, device, _model_load_failed
+    if os.environ.get("AISEARCH_SKIP_MODEL") == "1":
+        # Subprocess opt-out — leave model=None, signal so callers don't
+        # hang forever expecting a model that's never coming.
+        _model_event.set()
+        return
     try:
         model = SentenceTransformer(MODEL_NAME, device=device)
     except torch.OutOfMemoryError:
@@ -45,12 +63,45 @@ else:
         except Exception:
             pass
         device = "cpu"
-        model = SentenceTransformer(MODEL_NAME, device=device)
+        try:
+            model = SentenceTransformer(MODEL_NAME, device=device)
+        except Exception as e:
+            import sys as _sys
+            print(f"[aisearch] CLIP CPU fallback failed: {type(e).__name__}: {e}",
+                  file=_sys.stderr, flush=True)
+            model = None
+            _model_load_failed = True
     except Exception as e:
         import sys as _sys
         print(f"[aisearch] CLIP model load failed: {type(e).__name__}: {e}",
               file=_sys.stderr, flush=True)
         model = None
+        _model_load_failed = True
+    finally:
+        _model_event.set()
+
+# daemon=True so a hung load can't keep the process alive at shutdown.
+threading.Thread(target=_load_model_bg, daemon=True,
+                 name="aisearch-clip-load").start()
+
+
+def get_model(timeout=None):
+    """Block until the background CLIP load finishes (success or failure),
+    then return the model. Use this anywhere you need to actually call
+    `.encode(...)` — direct access to the module-global `model` may see
+    None during the first ~25 s after import.
+
+    Returns None if the load permanently failed or AISEARCH_SKIP_MODEL=1
+    was set; the caller decides whether that's a hard error or a graceful
+    no-op. `timeout` is in seconds; None waits forever."""
+    _model_event.wait(timeout=timeout)
+    return model
+
+
+def model_ready():
+    """Non-blocking check — True once the background load has finished
+    (whether or not it succeeded; check `model is not None` for that)."""
+    return _model_event.is_set()
 
 
 def load_db_logic(name):
@@ -298,10 +349,16 @@ def extract_feature(path):
     # torch.no_grad() prevents autograd graph buildup — without this each
     # encode keeps activations alive in memory, leaks ~hundreds of MB.
     global _cuda_dead, model, device
-    if model is None:
+    # Block until the background load finishes — first search after
+    # launch will wait here for the remaining model-load time, the rest
+    # are instant. None means permanent load failure (logged at load
+    # time) or AISEARCH_SKIP_MODEL=1; either way, can't extract.
+    _m = get_model()
+    if _m is None:
         print(f"[extract_feature] CLIP model is not loaded  path={path}",
               file=_sys.stderr, flush=True)
         return None
+    model = _m
     import torch as _torch
     # CUDA already poisoned earlier in this process — go straight to CPU
     # without touching cuda again. Saves the failed-GPU-then-failed-CPU

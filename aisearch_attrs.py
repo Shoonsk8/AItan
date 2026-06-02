@@ -3772,10 +3772,16 @@ def _get_clip_label_cache():
         _clip_label_cache = None   # stale — rebuild below
     try:
         import aisearch_logic as _logic
+        # Background model load (see aisearch_logic._load_model_bg) means
+        # _logic.model may still be None right after import; block here
+        # until the load finishes so this cache build doesn't AttributeError.
+        _m = _logic.get_model()
+        if _m is None:
+            return None
         cache = []
         for spec in CLIP_AUTO_DETECT:
             texts = [opt[1] for opt in spec["options"]]
-            embs = _logic.model.encode(texts, convert_to_tensor=True).to(_logic.device)
+            embs = _m.encode(texts, convert_to_tensor=True).to(_logic.device)
             cache.append(embs)
         _clip_label_cache = cache
         return cache

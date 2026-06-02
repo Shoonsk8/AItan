@@ -778,7 +778,76 @@ class AISearchApp(QMainWindow):
             "1行下へ移動。離れたファイルは自動改名されます。"))
         self.btn_apply_rules.clicked.connect(self._apply_rules_step)
         self.btn_apply_rules.hide()
-        mode_col.addWidget(self.btn_apply_rules)
+
+        # Recursive toggle for Apply Rules — when checked, _apply_rules_step
+        # walks the current browse directory tree instead of only the visible
+        # table rows. Setting persists across sessions. Compact checkbox style
+        # — sits inline on the same row as 🔧 Apply Rules to save vertical
+        # space, no grey pill background.
+        from PyQt6.QtWidgets import QCheckBox as _QCB_AR
+        self.chk_apply_rules_recursive = _QCB_AR(_t("🔁"))
+        self.chk_apply_rules_recursive.setToolTip(_t(
+            "🔁 Recursive — walk sub-folders when running Apply Rules / "
+            "🔁 サブフォルダも — ルール適用時にサブフォルダも対象にする"))
+        self.chk_apply_rules_recursive.setChecked(
+            bool(self.config.get("apply_rules_recursive", False)))
+        self.chk_apply_rules_recursive.setStyleSheet(
+            "QCheckBox { color: white; padding: 0 4px; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; }")
+        def _on_apply_rules_recursive_toggled(checked):
+            self.config["apply_rules_recursive"] = bool(checked)
+            try:
+                cfg.save_config(self.config, getattr(self, "current_project", None))
+            except Exception:
+                pass
+        self.chk_apply_rules_recursive.toggled.connect(_on_apply_rules_recursive_toggled)
+        self.chk_apply_rules_recursive.hide()
+        _ar_row = QHBoxLayout()
+        _ar_row.setContentsMargins(0, 0, 0, 0)
+        _ar_row.setSpacing(2)
+        _ar_row.addWidget(self.btn_apply_rules, stretch=1)
+        _ar_row.addWidget(self.chk_apply_rules_recursive)
+        mode_col.addLayout(_ar_row)
+
+        # Speech rename — Browse mode only. Transcribes each visible file's
+        # audio with faster-whisper and renames it to the first sentence.
+        # Locks the entry on success so re-runs skip it.
+        self.btn_speech = QPushButton(_t("🎙 Speech / 🎙 音声"))
+        self.btn_speech.setToolTip(_t(
+            "Walk visible files: transcribe each via faster-whisper and "
+            "rename to its first sentence. Locks the entry on success. / "
+            "可視ファイルを順に処理：faster-whisperで文字起こしし、"
+            "最初の文をファイル名に。成功すればロックされます。"))
+        self.btn_speech.clicked.connect(self._speech_step)
+        self.btn_speech.hide()
+
+        # Recursive toggle for Speech — when checked, _speech_step walks
+        # the browse directory tree instead of only the visible table rows.
+        # Compact 🔁-only checkbox; sits inline next to 🎙 Speech.
+        from PyQt6.QtWidgets import QCheckBox as _QCB_SP
+        self.chk_speech_recursive = _QCB_SP(_t("🔁"))
+        self.chk_speech_recursive.setToolTip(_t(
+            "🔁 Recursive — walk sub-folders when running Speech / "
+            "🔁 サブフォルダも — 音声処理時にサブフォルダも対象にする"))
+        self.chk_speech_recursive.setChecked(
+            bool(self.config.get("speech_recursive", False)))
+        self.chk_speech_recursive.setStyleSheet(
+            "QCheckBox { color: white; padding: 0 4px; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; }")
+        def _on_speech_recursive_toggled(checked):
+            self.config["speech_recursive"] = bool(checked)
+            try:
+                cfg.save_config(self.config, getattr(self, "current_project", None))
+            except Exception:
+                pass
+        self.chk_speech_recursive.toggled.connect(_on_speech_recursive_toggled)
+        self.chk_speech_recursive.hide()
+        _sp_row = QHBoxLayout()
+        _sp_row.setContentsMargins(0, 0, 0, 0)
+        _sp_row.setSpacing(2)
+        _sp_row.addWidget(self.btn_speech, stretch=1)
+        _sp_row.addWidget(self.chk_speech_recursive)
+        mode_col.addLayout(_sp_row)
 
         # Video Join mode — browse-style folder listing of videos with a
         # "Join Selected" action that runs the AItsugi optical-flow join
@@ -813,19 +882,29 @@ class AISearchApp(QMainWindow):
         self.btn_vj_search_area.setStyleSheet(_VJ_BTN_SS)
         self.btn_vj_search_area.clicked.connect(self._vj_choose_search_area)
         self.btn_vj_search_area.hide()
-        mode_col.addWidget(self.btn_vj_search_area)
 
-        self.btn_vj_recursive = QPushButton(_t("🔁 Recursive / 🔁 サブフォルダも"))
+        # Recursive toggle for Video Join — a real QCheckBox (was a checkable
+        # QPushButton). Variable name kept as btn_vj_recursive so existing
+        # isChecked() / visibility callers don't need to change. 🔁-only
+        # compact style; sits inline next to 📁 Search Area to save space.
+        from PyQt6.QtWidgets import QCheckBox as _QCB_VJ
+        self.btn_vj_recursive = _QCB_VJ(_t("🔁"))
         self.btn_vj_recursive.setToolTip(_t(
-            "Include sub-folders in the Video Join search area / "
-            "検索範囲にサブフォルダを含める"))
-        self.btn_vj_recursive.setCheckable(True)
+            "🔁 Recursive — include sub-folders in the Video Join search area / "
+            "🔁 サブフォルダも — 検索範囲にサブフォルダを含める"))
         self.btn_vj_recursive.setChecked(
             bool(self.config.get("video_join_recursive", False)))
-        self.btn_vj_recursive.setStyleSheet(_VJ_TOGGLE_SS)
+        self.btn_vj_recursive.setStyleSheet(
+            "QCheckBox { color: white; padding: 0 4px; }"
+            "QCheckBox::indicator { width: 14px; height: 14px; }")
         self.btn_vj_recursive.toggled.connect(self._vj_toggle_recursive)
         self.btn_vj_recursive.hide()
-        mode_col.addWidget(self.btn_vj_recursive)
+        _vj_sa_row = QHBoxLayout()
+        _vj_sa_row.setContentsMargins(0, 0, 0, 0)
+        _vj_sa_row.setSpacing(2)
+        _vj_sa_row.addWidget(self.btn_vj_search_area, stretch=1)
+        _vj_sa_row.addWidget(self.btn_vj_recursive)
+        mode_col.addLayout(_vj_sa_row)
 
         self.btn_vj_gen_pic = QPushButton(_t("🖼 Generate Picture / 🖼 静止画を生成"))
         self.btn_vj_gen_pic.setToolTip(_t(
@@ -1571,6 +1650,11 @@ class AISearchApp(QMainWindow):
                 self.btn_apply_rules.setText(_t("⏸ Stop / ⏸ 停止"))
             else:
                 self.btn_apply_rules.setText(_t("🔧 Apply Rules / 🔧 規則適用"))
+        if hasattr(self, 'btn_speech'):
+            if getattr(self, '_speech_running', False):
+                self.btn_speech.setText(_t("⏸ Stop / ⏸ 停止"))
+            else:
+                self.btn_speech.setText(_t("🎙 Speech / 🎙 音声"))
         # Inline attrs
         if hasattr(self, '_inline_note'):
             self._inline_note.setPlaceholderText(_t("Note… / ノート…"))
@@ -3352,8 +3436,13 @@ class AISearchApp(QMainWindow):
             try:
                 import numpy as np
                 from PIL import Image as _PIL
+                # get_model() blocks until the import-time background
+                # load finishes; only then is encode() callable.
+                _m = logic.get_model()
+                if _m is None:
+                    return
                 img = _PIL.fromarray(np.zeros((32, 32, 3), dtype=np.uint8))
-                logic.model.encode(img, convert_to_tensor=True)
+                _m.encode(img, convert_to_tensor=True)
             except Exception:
                 pass
         self._search_executor.submit(_warmup)
@@ -6198,10 +6287,22 @@ class AISearchApp(QMainWindow):
                 _final_idx = cand_idx[order]
                 _raw_at_final = raw_sims[_final_idx].cpu()
                 top = (_raw_at_final, _final_idx)
+                try:
+                    from aisearch_debug import dbg as _dbg
+                    _dbg(f"search worker DONE n_allowed={n_allowed} top_len={len(_final_idx)} "
+                         f"emb_dev={emb.device} embs_dev={_embeddings.device}")
+                except Exception:
+                    pass
                 _q.put(("done", (emb, top)))
             except Exception as e:
                 import traceback
-                _q.put(("error", f"{e}\n\n{traceback.format_exc()}"))
+                _tb = traceback.format_exc()
+                try:
+                    from aisearch_debug import dbg as _dbg
+                    _dbg(f"search worker EXCEPTION {type(e).__name__}: {e}\n{_tb}")
+                except Exception:
+                    pass
+                _q.put(("error", f"{e}\n\n{_tb}"))
 
         def _poll():
             # This search was superseded — stop polling silently
@@ -6242,6 +6343,12 @@ class AISearchApp(QMainWindow):
         QTimer.singleShot(50, _poll)
 
     def _populate_search_results(self, top, query_path, data):
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"populate START top_len={len(top[0]) if top and top[0] is not None else 'None'} "
+                 f"data_paths={len(data.get('paths') or [])} q={os.path.basename(query_path)}")
+        except Exception:
+            pass
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         self._append_row("1.0000",
@@ -6254,11 +6361,16 @@ class AISearchApp(QMainWindow):
         # missing on disk) don't count toward the cap.
         _display_cap = max(1, int(self.config.get("max_search_results", 500)))
         _displayed = 0
+        _skip_q = _skip_missing = 0
         for s, i in zip(top[0], top[1]):
             if _displayed >= _display_cap: break
             fp = data["paths"][i]
-            if os.path.abspath(fp) == query_path: continue
-            if not os.path.exists(fp): continue
+            if os.path.abspath(fp) == query_path:
+                _skip_q += 1
+                continue
+            if not os.path.exists(fp):
+                _skip_missing += 1
+                continue
             _displayed += 1
             # Cap at 0.9999 so the query image (1.0000) is always row 0 even after
             # feedback boost pushes some scores above 1.0
@@ -6268,6 +6380,11 @@ class AISearchApp(QMainWindow):
                              os.path.basename(fp),
                              self._mask_path(fp),
                              fp)
+        try:
+            from aisearch_debug import dbg as _dbg
+            _dbg(f"populate DONE displayed={_displayed} skip_q={_skip_q} skip_missing={_skip_missing}")
+        except Exception:
+            pass
         # Sort by score descending — query image (1.0000) is always on top
         self.table.horizontalHeader().setSortIndicator(0, Qt.SortOrder.DescendingOrder)
         self.table.setSortingEnabled(True)
@@ -6307,6 +6424,12 @@ class AISearchApp(QMainWindow):
         self._dup_controls_widget.setVisible(mode == "dup")
         if hasattr(self, "btn_apply_rules"):
             self.btn_apply_rules.setVisible(mode == "browse")
+        if hasattr(self, "chk_apply_rules_recursive"):
+            self.chk_apply_rules_recursive.setVisible(mode == "browse")
+        if hasattr(self, "btn_speech"):
+            self.btn_speech.setVisible(mode == "browse")
+        if hasattr(self, "chk_speech_recursive"):
+            self.chk_speech_recursive.setVisible(mode == "browse")
         if hasattr(self, "btn_join_selected"):
             self.btn_join_selected.setVisible(mode == "videojoin")
         if hasattr(self, "btn_vj_select_all"):
@@ -6959,9 +7082,24 @@ class AISearchApp(QMainWindow):
         header.setFlags(header.flags() & ~Qt.ItemFlag.ItemIsSelectable & _no_check)
         sa.addItem(header)
         white = QColor("#ffffff")
+        # Render paths as <relative-dir>/<basename> when they sit under
+        # the current VJ Search Area (recursive mode walks subdirs, so
+        # the dir context matters for telling candidates apart). Anything
+        # outside the search area falls back to absolute. ".." is allowed
+        # for the rare case where a hand-picked file lives one level up;
+        # if you want only paths inside the area, switch off Recursive.
+        _vj_base = getattr(self, "_browse_dir", None)
+        def _vj_label(p):
+            try:
+                if _vj_base and os.path.isdir(_vj_base):
+                    rel = os.path.relpath(p, _vj_base)
+                    return rel if not rel.startswith("..") else p
+            except (ValueError, OSError):
+                pass
+            return p if not _vj_base else os.path.basename(p)
         # LEFT (blue) / RIGHT (red) anchor rows always show the current pair.
         if self._vj_left and os.path.exists(self._vj_left):
-            it = QListWidgetItem(f"LEFT    {os.path.basename(self._vj_left)}")
+            it = QListWidgetItem(f"LEFT    {_vj_label(self._vj_left)}")
             it.setToolTip(self._vj_left)
             it.setData(Qt.ItemDataRole.UserRole, self._vj_left)
             it.setFlags(it.flags() & _no_check)
@@ -6969,7 +7107,7 @@ class AISearchApp(QMainWindow):
             it.setForeground(white)
             sa.addItem(it)
         if self._vj_right and os.path.exists(self._vj_right):
-            it = QListWidgetItem(f"RIGHT   {os.path.basename(self._vj_right)}")
+            it = QListWidgetItem(f"RIGHT   {_vj_label(self._vj_right)}")
             it.setToolTip(self._vj_right)
             it.setData(Qt.ItemDataRole.UserRole, self._vj_right)
             it.setFlags(it.flags() & _no_check)
@@ -6986,7 +7124,7 @@ class AISearchApp(QMainWindow):
             _norm = os.path.normpath(path)
             _is_left = bool(self._vj_left and _norm == os.path.normpath(self._vj_left))
             _is_right = bool(self._vj_right and _norm == os.path.normpath(self._vj_right))
-            text = f"{score:.3f} / {raw_score:.1f}    {os.path.basename(path)}"
+            text = f"{score:.3f} / {raw_score:.1f}    {_vj_label(path)}"
             item = QListWidgetItem(text)
             item.setToolTip(path)
             item.setData(Qt.ItemDataRole.UserRole, path)
@@ -7022,7 +7160,7 @@ class AISearchApp(QMainWindow):
         for jp in (getattr(self, "_vj_join_results", []) or []):
             if not (jp and os.path.exists(jp)):
                 continue
-            jit = QListWidgetItem(f"✅ Joined    {os.path.basename(jp)}")
+            jit = QListWidgetItem(f"✅ Joined    {_vj_label(jp)}")
             jit.setToolTip(jp)
             jit.setData(Qt.ItemDataRole.UserRole, jp)
             jit.setData(Qt.ItemDataRole.UserRole + 2, "joined")
@@ -8405,6 +8543,32 @@ class AISearchApp(QMainWindow):
                f"{_no_face} no-face / 顔距離で並べ替え — "
                f"{_n_face}件採点、{_no_face}件顔なし"), 7000)
 
+    def _browse_walk_files(self):
+        """Return [(row_or_-1, path)] for files in the current browse
+        directory tree. Uses logic.EXT_IMG + EXT_VID as the filter so it
+        matches what Browse mode itself lists. Rows that happen to be
+        visible in the table get their real row index for highlighting;
+        files outside the visible window get -1.
+        Used by Apply Rules / Speech when their Recursive checkbox is on.
+        """
+        d = getattr(self, "_browse_dir", None)
+        if not d or not os.path.isdir(d):
+            return []
+        # Build path → row map for whatever's visible (cheap, ~hundreds).
+        path_to_row = {}
+        for r in range(self.table.rowCount()):
+            p = self.table.get_row_path(r)
+            if p:
+                path_to_row[os.path.normpath(p)] = r
+        exts = tuple(e.lower() for e in (logic.EXT_IMG + logic.EXT_VID))
+        out = []
+        for root, _dirs, fns in os.walk(d):
+            for fn in fns:
+                if fn.lower().endswith(exts):
+                    fp = os.path.join(root, fn)
+                    out.append((path_to_row.get(os.path.normpath(fp), -1), fp))
+        return out
+
     def _apply_rules_step(self):
         """Toggle the bulk Apply Rules walk.
 
@@ -8421,7 +8585,12 @@ class AISearchApp(QMainWindow):
             self._apply_rules_running = False
             return
         tbl = self.table
-        if tbl is None or tbl.rowCount() == 0:
+        # When Recursive is off we still need a populated table; when on,
+        # the file list comes from os.walk(_browse_dir) so an empty table
+        # is fine (e.g. user just entered an unscanned folder).
+        _recursive = (hasattr(self, "chk_apply_rules_recursive")
+                      and self.chk_apply_rules_recursive.isChecked())
+        if not _recursive and (tbl is None or tbl.rowCount() == 0):
             return
         proj = getattr(self, "current_project", None)
         rules = attrs_mod.load_filename_rules(proj)
@@ -8439,11 +8608,14 @@ class AISearchApp(QMainWindow):
                           and '/' in r.get("pattern", "")]
         # Snapshot the row → path map at start of run so concurrent table
         # mutations (e.g. row removal) don't shift indices mid-walk.
-        paths = []
-        for r in range(tbl.rowCount()):
-            p = tbl.get_row_path(r)
-            if p:
-                paths.append((r, p))
+        if _recursive:
+            paths = self._browse_walk_files()
+        else:
+            paths = []
+            for r in range(tbl.rowCount()):
+                p = tbl.get_row_path(r)
+                if p:
+                    paths.append((r, p))
         if not paths:
             return
         self._apply_rules_running = True
@@ -8571,6 +8743,253 @@ class AISearchApp(QMainWindow):
         # paths are now stale. Repopulate it so the new filenames
         # appear. (refresh_rims_only doesn't help here because the
         # tree's UserRole entries still hold the old paths.)
+        fm_win = getattr(self, "_fm_win", None)
+        if fm_win is not None:
+            try:
+                fm_win.refresh_all()
+            except Exception:
+                pass
+
+    # ----- Speech rename -------------------------------------------------
+    #
+    # Walk the visible Browse table. For each file with an audio track,
+    # transcribe via faster-whisper, slugify the first sentence, rename
+    # the file to that, and lock the entry. Same toggle pattern as
+    # Apply Rules but one file per tick because transcription is heavy.
+
+    _SPEECH_MAX_CHARS = 60
+    _SPEECH_SENTENCES = 2
+
+    def _speech_step(self):
+        from PyQt6.QtCore import QTimer
+        if getattr(self, "_speech_running", False):
+            self._speech_running = False
+            return
+        tbl = self.table
+        _recursive = (hasattr(self, "chk_speech_recursive")
+                      and self.chk_speech_recursive.isChecked())
+        if not _recursive and (tbl is None or tbl.rowCount() == 0):
+            return
+        if _recursive:
+            paths = self._browse_walk_files()
+        else:
+            paths = []
+            for r in range(tbl.rowCount()):
+                p = tbl.get_row_path(r)
+                if p:
+                    paths.append((r, p))
+        if not paths:
+            return
+        self._speech_running = True
+        self._speech_paths = paths
+        self._speech_idx = 0
+        self._speech_renamed = 0
+        self._speech_locked_skipped = 0
+        self._speech_noaudio = 0
+        self._speech_silent = 0
+        self._speech_errors = 0
+        self._speech_proj = getattr(self, "current_project", None)
+        try:
+            self.btn_speech.setText(_t("⏸ Stop / ⏸ 停止"))
+        except Exception:
+            pass
+        if not hasattr(self, "_speech_timer") or self._speech_timer is None:
+            self._speech_timer = QTimer(self)
+            self._speech_timer.setSingleShot(False)
+            self._speech_timer.timeout.connect(self._speech_tick)
+        # Transcription is heavy; 1 file per tick @ 200ms gives the UI
+        # room to repaint and the toggle to stay responsive.
+        self._speech_timer.start(50)
+        try:
+            self.statusBar().showMessage(
+                f"Speech: starting on {len(paths)} file(s)…", 2000)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _speech_sanitize(text: str, max_chars: int) -> str:
+        import re as _re
+        t = (text or "").strip()
+        t = _re.sub(r"[^\w\s-]", "", t, flags=_re.UNICODE)
+        t = _re.sub(r"\s+", "-", t)
+        t = _re.sub(r"-+", "-", t)
+        if len(t) <= max_chars:
+            return t.strip("-")
+        cut = t[:max_chars]
+        boundary = cut.rfind("-")
+        if boundary >= max_chars // 2:
+            cut = cut[:boundary]
+        return cut.strip("-")
+
+    @staticmethod
+    def _speech_has_audio(path: str) -> bool:
+        import subprocess as _sp
+        try:
+            r = _sp.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a",
+                 "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+                capture_output=True, text=True, check=False)
+            return bool(r.stdout.strip())
+        except Exception:
+            return True
+
+    def _speech_get_model(self):
+        """Lazy-load (and cache) a faster-whisper model. CPU fallback on OOM."""
+        if getattr(self, "_speech_model", None) is not None:
+            return self._speech_model
+        from faster_whisper import WhisperModel
+        size = "base.en"
+        try:
+            self._speech_model = WhisperModel(size, device="auto", compute_type="auto")
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "cuda" in msg or "out of memory" in msg or "cudnn" in msg:
+                self._speech_model = WhisperModel(size, device="cpu", compute_type="int8")
+            else:
+                raise
+        return self._speech_model
+
+    def _speech_first_caption(self, path: str) -> str:
+        """Return a slug of the first N sentences or '' if no voice."""
+        if not self._speech_has_audio(path):
+            return ""
+        model = self._speech_get_model()
+        try:
+            segments, _info = model.transcribe(path, word_timestamps=False)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "cuda" in msg or "out of memory" in msg or "cudnn" in msg:
+                # Drop GPU model, retry once on CPU
+                from faster_whisper import WhisperModel
+                self._speech_model = WhisperModel("base.en", device="cpu", compute_type="int8")
+                segments, _info = self._speech_model.transcribe(path, word_timestamps=False)
+            else:
+                raise
+        texts = []
+        for s in segments:
+            t = (s.text or "").strip()
+            if t:
+                texts.append(t)
+            if len(texts) >= self._SPEECH_SENTENCES:
+                break
+        return self._speech_sanitize(" ".join(texts), self._SPEECH_MAX_CHARS)
+
+    def _speech_tick(self):
+        if not getattr(self, "_speech_running", False):
+            self._speech_finish()
+            return
+        paths = self._speech_paths
+        i = self._speech_idx
+        n = len(paths)
+        if i >= n:
+            self._speech_finish()
+            return
+        row, path = paths[i]
+        self._speech_idx = i + 1
+
+        try:
+            self.statusBar().showMessage(
+                f"Speech [{i + 1}/{n}] {os.path.basename(path)}", 4000)
+        except Exception:
+            pass
+
+        if not os.path.exists(path):
+            return
+        # Skip files marked non-editable (locked) — same convention as
+        # Apply Rules.
+        if not attrs_mod.is_editable(self.attrs_data, path):
+            self._speech_locked_skipped += 1
+            return
+
+        try:
+            slug = self._speech_first_caption(path)
+        except Exception as exc:
+            self._speech_errors += 1
+            try:
+                self.statusBar().showMessage(
+                    f"Speech error on {os.path.basename(path)}: {exc}", 4000)
+            except Exception:
+                pass
+            return
+
+        if not slug:
+            # No audio stream or no voice detected.
+            if not self._speech_has_audio(path):
+                self._speech_noaudio += 1
+            else:
+                self._speech_silent += 1
+            return
+
+        # Build the new path. Collide-avoid with _2, _3 …
+        directory = os.path.dirname(path)
+        ext = os.path.splitext(path)[1]
+        candidate = os.path.join(directory, slug + ext)
+        if candidate != path:
+            k = 2
+            while os.path.exists(candidate):
+                candidate = os.path.join(directory, f"{slug}_{k}{ext}")
+                k += 1
+            try:
+                os.rename(path, candidate)
+            except OSError as exc:
+                self._speech_errors += 1
+                try:
+                    self.statusBar().showMessage(
+                        f"Rename failed for {os.path.basename(path)}: {exc}", 4000)
+                except Exception:
+                    pass
+                return
+
+            # Update attrs: move entry under new path key, set speech +
+            # lock (editable=False).
+            entry = self.attrs_data.pop(path, None) or {}
+            entry["speech"] = slug.replace("-", " ")
+            entry["editable"] = False
+            self.attrs_data[candidate] = entry
+
+            # Update app.data["paths"] and the visible table row.
+            if self.data and "paths" in self.data and path in self.data["paths"]:
+                self.data["paths"][self.data["paths"].index(path)] = candidate
+            try:
+                self.table.set_row_path(row, candidate)
+            except Exception:
+                pass
+            try:
+                self._replace_dup_display_path(path, candidate)
+            except Exception:
+                pass
+            self._speech_renamed += 1
+        else:
+            # Same name already — just lock the entry.
+            entry = self.attrs_data.setdefault(path, {})
+            entry["speech"] = slug.replace("-", " ")
+            entry["editable"] = False
+
+    def _speech_finish(self):
+        if getattr(self, "_speech_timer", None):
+            self._speech_timer.stop()
+        try:
+            attrs_mod.save(getattr(self, "current_project", None), self.attrs_data)
+        except Exception:
+            pass
+        self._speech_running = False
+        try:
+            self.btn_speech.setText(_t("🎙 Speech / 🎙 音声"))
+        except Exception:
+            pass
+        renamed = getattr(self, "_speech_renamed", 0)
+        locked = getattr(self, "_speech_locked_skipped", 0)
+        noaudio = getattr(self, "_speech_noaudio", 0)
+        silent = getattr(self, "_speech_silent", 0)
+        errors = getattr(self, "_speech_errors", 0)
+        total = len(getattr(self, "_speech_paths", []))
+        try:
+            msg = (f"Speech done: {renamed}/{total} renamed"
+                   f" — locked {locked}, no-audio {noaudio}, silent {silent}, errors {errors}")
+            self.statusBar().showMessage(msg, 8000)
+        except Exception:
+            pass
+        # Refresh the file manager tree if open — paths changed.
         fm_win = getattr(self, "_fm_win", None)
         if fm_win is not None:
             try:
