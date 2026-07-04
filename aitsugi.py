@@ -111,8 +111,9 @@ def _mux_audio_segments(
     segments: list[AudioSegment],
     progress: ProgressCallback = None,
 ) -> str:
-    usable = [segment for segment in segments if segment.duration > 0.01 and _has_audio_stream(segment.path)]
-    if not usable:
+    playable = [segment for segment in segments if segment.duration > 0.01]
+    with_audio = [_has_audio_stream(segment.path) for segment in playable]
+    if not any(with_audio):
         if rendered_video != output:
             _replace_output_file(rendered_video, output)
         return output
@@ -130,17 +131,38 @@ def _mux_audio_segments(
         f"aitsugi_{uuid.uuid4().hex[:8]}.audio_tmp.mp4",
     )
     cmd = ["ffmpeg", "-y", "-i", rendered_video]
-    for segment in usable:
-        cmd.extend(["-i", segment.path])
+    input_index = []
+    next_input = 1
+    for segment, ok in zip(playable, with_audio):
+        if ok:
+            cmd.extend(["-i", segment.path])
+            input_index.append(next_input)
+            next_input += 1
+        else:
+            input_index.append(None)
 
+    # EVERY segment keeps its lane in the concat: a segment whose source has
+    # no audio stream becomes generated SILENCE of the same duration. The
+    # old code dropped soundless segments entirely, which closed the gap and
+    # shifted every later segment's audio earlier by the dropped length —
+    # a soundless LEFT clip made the right clip's audio play over the left
+    # clip's video. All lanes are normalized to one format so concat can
+    # splice silence and real audio safely.
+    norm = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
     filters: list[str] = []
     labels: list[str] = []
-    for index, segment in enumerate(usable):
+    for index, (segment, in_idx) in enumerate(zip(playable, input_index)):
         label = f"a{index}"
-        filters.append(
-            f"[{index + 1}:a:0]atrim=start={segment.start:.6f}:duration={segment.duration:.6f},"
-            f"asetpts=PTS-STARTPTS[{label}]"
-        )
+        if in_idx is not None:
+            filters.append(
+                f"[{in_idx}:a:0]atrim=start={segment.start:.6f}:duration={segment.duration:.6f},"
+                f"asetpts=PTS-STARTPTS,{norm}[{label}]"
+            )
+        else:
+            filters.append(
+                f"aevalsrc=0|0:s=48000:d={segment.duration:.6f},"
+                f"asetpts=PTS-STARTPTS,{norm}[{label}]"
+            )
         labels.append(f"[{label}]")
 
     if len(labels) == 1:
