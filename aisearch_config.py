@@ -66,6 +66,7 @@ def load_config(project=None):
         "video_join_aspect": "contain",
         "video_join_size": "auto",
         "video_join_fps": "auto",
+        "ui_font_family":   "Noto Sans CJK JP",
         "attr_font_size":    10,
         "ui_font_size":      10,
         "project_font_size": 30,

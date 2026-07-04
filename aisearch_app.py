@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                               QAbstractItemView, QHeaderView, QFrame,
                               QMessageBox, QDialog, QCheckBox, QApplication,
                               QLineEdit, QSpinBox, QProgressBar, QComboBox, QTextEdit,
-                              QGridLayout, QListWidget, QListWidgetItem)
+                              QGridLayout, QListWidget, QListWidgetItem,
+                              QStyledItemDelegate, QStyle, QStyleOptionViewItem)
 from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QItemSelectionModel, QFileSystemWatcher, QEvent, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QPixmap, QShortcut, QKeySequence, QIcon, QCursor, QDrag, QColor, QFont
 
@@ -23,7 +24,7 @@ import aisearch_attrs as attrs_mod
 from aisearch_file_manager import FileManagerWindow
 from attr_viewer import _lang_label as _t
 
-VERSION = "2.7"
+VERSION = "2.7.1"
 
 
 # ── Custom table item types for correct column sorting ──────────────────────
@@ -238,6 +239,28 @@ class DropZoneFrame(QFrame):
 
 # ── Results table ────────────────────────────────────────────────────────────
 
+class _LeftElideDelegate(QStyledItemDelegate):
+    """Elide from the LEFT so a path's distinguishing tail stays visible.
+
+    Setting ``option.textElideMode = ElideLeft`` via ``initStyleOption`` is
+    silently ignored by the item painter in this Qt build. So we pre-elide the
+    text on the left ourselves, then let the style draw the whole cell — that
+    keeps selection / foreground colors correct (drawing the text by hand lost
+    the highlighted-text colour, giving white-on-light unreadable rows).
+    """
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = opt.widget
+        style = widget.style() if widget else QApplication.style()
+        rect = style.subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText, opt, widget)
+        opt.text = opt.fontMetrics.elidedText(
+            opt.text, Qt.TextElideMode.ElideLeft, rect.width())
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
+
+
 class FileTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(0, 6, parent)
@@ -266,6 +289,9 @@ class FileTable(QTableWidget):
         self.setColumnWidth(3, 300)
         self.setColumnWidth(4, 130)
         self.setColumnWidth(5, 60)
+        # Path (col 3) elides from the LEFT so the distinguishing tail
+        # folder stays visible; Name (col 2) keeps default right-elision.
+        self.setItemDelegateForColumn(3, _LeftElideDelegate(self))
 
         self.move_callback      = None
         self.delete_callback    = None
@@ -1685,14 +1711,15 @@ class AISearchApp(QMainWindow):
                 self.drop_zone.setText(_t("drop image or video / 画像・動画をドロップ"))
 
     def reload_fonts(self):
+        family = self.config.get("ui_font_family", "Noto Sans CJK JP")
         # Table
         fs_table = self.config.get("table_font_size", 10)
-        f_table = QFont("", fs_table)
+        f_table = QFont(family, fs_table)
         self.table.setFont(f_table)
         self.table.horizontalHeader().setStyleSheet(f"font-size: {fs_table}pt;")
         if hasattr(self, "_vj_search_area"):
             fs_vj = self.config.get("video_join_font_size", fs_table)
-            self._vj_search_area.setFont(QFont("", fs_vj))
+            self._vj_search_area.setFont(QFont(family, fs_vj))
             self._vj_search_area.setStyleSheet(self._vj_search_area_stylesheet())
         # Attr panels — rebuild so font applies cleanly (setFont unreliable with stylesheets)
         fs_attr = self.config.get("attr_font_size", 10)
@@ -1723,7 +1750,7 @@ class AISearchApp(QMainWindow):
         self._apply_header_theme(font_size_only=True, pfs=pfs)
         # General — explicitly walk all widgets, skip those with dedicated font controls
         fs_ui = self.config.get("ui_font_size", 10)
-        f_ui = QFont("", fs_ui)
+        f_ui = QFont(family, fs_ui)
         excluded = {self.table, self.lbl_project}
         if hasattr(self, "_vj_search_area"):
             excluded.add(self._vj_search_area)
@@ -1916,7 +1943,8 @@ class AISearchApp(QMainWindow):
         vbox.setContentsMargins(6, 4, 6, 4)
         vbox.setSpacing(3)
 
-        panel.setFont(QFont("", self.config.get("attr_font_size", 10)))
+        panel.setFont(QFont(self.config.get("ui_font_family", "Noto Sans CJK JP"),
+                            self.config.get("attr_font_size", 10)))
 
         # File info bar (resolution · ratio · fps · duration)
         self._inline_file_info = QLabel("")
@@ -3166,6 +3194,13 @@ class AISearchApp(QMainWindow):
             attrs_mod.save(proj, self.attrs_data)
         except Exception:
             pass
+        # Write the lock into the file itself so it survives a rename/move done
+        # outside the app. _build_aitan_block embeds editable=False when locked
+        # and drops it when unlocked, so this sets and clears symmetrically.
+        try:
+            attrs_mod.embed_aitan_meta(path, entry)
+        except Exception:
+            pass
         # Refresh FM thumbnail rims (every pane, every depth) without
         # rebuilding the tree — files in expanded subfolders pick up
         # the new rim immediately. Was: refresh_all() rebuilt the
@@ -3218,6 +3253,50 @@ class AISearchApp(QMainWindow):
             self._open_file_manager(self.base_dirs[0])
         else:
             self._open_file_manager(os.path.expanduser("~"))
+
+    def _ingest_captured_frame(self, frame_path, source_video=None):
+        """Register a freshly-captured frame PNG into the search DB so it's
+        findable, mirroring the watch-dir new-file path: CLIP embedding +
+        paths/embeddings + basic attrs, persisted to disk. Links it to its
+        source video via `related` both ways. Returns True on success."""
+        try:
+            if not frame_path or not os.path.exists(frame_path):
+                return False
+            norm = os.path.normpath(frame_path)
+            if self.data and "paths" in self.data and self.data.get("embeddings") is not None:
+                if any(os.path.normpath(p) == norm for p in self.data["paths"]):
+                    return True   # already indexed
+                emb = logic.extract_feature(frame_path)
+                if emb is not None:
+                    import torch
+                    self.data["paths"].append(frame_path)
+                    self.data["embeddings"] = torch.cat(
+                        [self.data["embeddings"], emb.unsqueeze(0)])
+                    try:
+                        attrs_mod.atomic_torch_save(
+                            self.data,
+                            os.path.join(attrs_mod.DATA_DIR,
+                                         f"features_{self.current_project}.pt"))
+                    except Exception:
+                        pass
+            # Basic attrs (resolution/orientation/etc.) — light, no MediaPipe.
+            try:
+                self.attrs_data = attrs_mod.auto_set_all(
+                    self.attrs_data, frame_path, self.current_project, skip_heavy=True)
+            except Exception:
+                pass
+            # Two-way "related" link to the source video so they stay associated.
+            if source_video and os.path.exists(source_video):
+                for a, b in ((frame_path, source_video), (source_video, frame_path)):
+                    _e = self.attrs_data.setdefault(a, {})
+                    _rel = list(_e.get("related") or [])
+                    if os.path.abspath(b) not in _rel:
+                        _rel.append(os.path.abspath(b))
+                    _e["related"] = _rel
+            attrs_mod.save(self.current_project, self.attrs_data)
+            return True
+        except Exception:
+            return False
 
     def _open_settings(self, tab=0):
         if not hasattr(self, '_settings_win') or self._settings_win is None:
@@ -3665,6 +3744,73 @@ class AISearchApp(QMainWindow):
         # checkbox UI is gone. Watch is implicitly an explicit user setup
         # (they configured a watch dir), so renaming on detection is fine.
         _auto_rename = True
+        # Orphan-attrs adoption — second-chance rename detection beyond
+        # the self.data["paths"] match above. An entry can exist in
+        # attrs_data WITHOUT being in self.data["paths"] when the file
+        # was created and locked after the previous watch scan but
+        # before this one (Video Join outputs are the canonical case:
+        # _vj_apply_join_metadata writes editable=False before the next
+        # scan indexes the file). If the user then renames that file
+        # via Nemo during the same window, the rename detection above
+        # misses it (no entry in paths to mark as missing), the new
+        # path falls into new_files, and auto_set_all below stamps it
+        # editable=True — silently unlocking a join output.
+        # Adopt by dir+size: for each new_file, look for an attrs entry
+        # whose path is in the same directory, has the same byte size,
+        # has editable=False (= the user wants this protected), and
+        # whose file no longer exists on disk. Move that entry to the
+        # new path. Same `dict.pop` semantics rename_file_to_match_entry
+        # uses, so note / related / editable=False ride along intact.
+        if new_files:
+            try:
+                import os as _os_orph
+                _orphans_by_dir_size = {}
+                for _op, _oe in list(self.attrs_data.items()):
+                    if not isinstance(_oe, dict):
+                        continue
+                    if _oe.get("editable") is not False:
+                        continue  # not a locked entry — leave alone
+                    if _os_orph.path.exists(_op):
+                        continue  # file still there — not an orphan
+                    _od = _os_orph.path.dirname(_os_orph.path.abspath(_op))
+                    _osz = known_sizes.get(_op)
+                    if _osz is None:
+                        continue   # no recorded size — can't match safely
+                    _orphans_by_dir_size.setdefault((_od, _osz), []).append(_op)
+                _adopted_new = set()
+                if _orphans_by_dir_size:
+                    for _np in new_files:
+                        try:
+                            _nd = _os_orph.path.dirname(_os_orph.path.abspath(_np))
+                            _nsz = _os_orph.path.getsize(_np)
+                        except OSError:
+                            continue
+                        cands = _orphans_by_dir_size.get((_nd, _nsz), [])
+                        if len(cands) != 1:
+                            continue
+                        _orig = cands[0]
+                        if _orig == _np:
+                            continue
+                        # Move the locked entry — preserves note / related /
+                        # editable=False — and tell the rest of the pipeline
+                        # this isn't a brand-new file.
+                        self.attrs_data[_np] = self.attrs_data.pop(_orig)
+                        _adopted_new.add(_np)
+                        scan_renames[_orig] = _np
+                        attrs_dirty = True
+                        try:
+                            from aisearch_debug import dbg as _dbg
+                            _dbg(f"watch_scan adopted orphan locked entry "
+                                 f"{_os_orph.path.basename(_orig)} → {_os_orph.path.basename(_np)}")
+                        except Exception:
+                            pass
+                if _adopted_new:
+                    # Adopted files are NOT first-touch — drop them from
+                    # new_files so auto_set_all doesn't reset editable=True.
+                    new_files = [p for p in new_files if p not in _adopted_new]
+            except Exception:
+                pass
+
         # Track sizes from last check for two-stage stability test
         _prev_sizes = getattr(self, '_watch_prev_sizes', {})
         _next_sizes = {}
@@ -6645,6 +6791,17 @@ class AISearchApp(QMainWindow):
         if (seed_path and os.path.exists(seed_path)
                 and os.path.splitext(seed_path)[1].lower() in media_exts):
             selected_source = os.path.abspath(seed_path)
+        # Switching INTO Video Join from another mode with a file selected:
+        # adopt that file (the one on the thumbnail) as the seed so it lands on
+        # the LEFT side below. Only on a real mode switch — internal re-entries
+        # (search-area change, recursive toggle, cell drop) keep their own state.
+        if selected_source is None and previous_mode != "videojoin":
+            _row = self._current_row()
+            if _row >= 0:
+                _cand = self.table.get_row_path(_row)
+                if (_cand and os.path.exists(_cand)
+                        and os.path.splitext(_cand)[1].lower() in media_exts):
+                    selected_source = os.path.abspath(_cand)
 
         if directory is None:
             if selected_source:
@@ -6764,6 +6921,12 @@ class AISearchApp(QMainWindow):
         # send/drop entry: show the seeded source in the Video Join header.
         if not fresh_entry and (self._vj_left or self._vj_right or getattr(self, "_vj_matches", None)):
             self._vj_set_pair(self._vj_left, self._vj_right)
+        elif fresh_entry and selected_source:
+            # Fresh switch into Video Join with a file in hand: put it on the
+            # LEFT (blue) side so it's the working left video immediately, not
+            # just a neutral source preview.
+            self._vj_source = selected_source
+            self._vj_set_pair(selected_source, None)
         else:
             self._vj_source = selected_source
             if selected_source:
@@ -8895,9 +9058,18 @@ class AISearchApp(QMainWindow):
 
         if not os.path.exists(path):
             return
-        # Skip files marked non-editable (locked) — same convention as
-        # Apply Rules.
-        if not attrs_mod.is_editable(self.attrs_data, path):
+        # Skip files marked non-editable (locked). Check BOTH the path-keyed
+        # flag AND the lock embedded in the file's bytes: a file locked in-app
+        # then moved/renamed outside the app loses its path-keyed lock, but the
+        # embedded lock survives. auto_set_all recovers it the same way; speech
+        # must too, or it would transcribe-and-rename a locked file whose path
+        # key drifted.
+        _locked = not attrs_mod.is_editable(self.attrs_data, path)
+        if not _locked:
+            _entry = attrs_mod.get(self.attrs_data, path)
+            if attrs_mod.restore_lock_from_embed_entry(_entry, path):
+                _locked = True
+        if _locked:
             self._speech_locked_skipped += 1
             return
 
@@ -9206,6 +9378,27 @@ class AISearchApp(QMainWindow):
                 a = QAction(label, self)
                 a.triggered.connect(lambda _, c=argv, p=path: _fm.open_with(c, p))
                 sub.addAction(a)
+            # Open the file's folder in the built-in File Manager (highlighting
+            # the file) or in Nemo — same folder-openers the main table offers.
+            act_fm = QAction(_t("🗂 File Manager / 🗂 ファイルマネージャ"), self)
+            def _open_fm_vj(_=False, p=path):
+                self._open_file_manager(os.path.dirname(os.path.abspath(p)))
+                try:
+                    self._fm_win.navigate_to_file(os.path.abspath(p))
+                except Exception:
+                    pass
+            act_fm.triggered.connect(_open_fm_vj)
+            menu.addAction(act_fm)
+            act_nemo = QAction(_t("📂 Open in Nemo / 📂 Nemo で開く"), self)
+            def _open_nemo_vj(_=False, p=path):
+                import subprocess
+                try:
+                    subprocess.Popen(["nemo", p],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            act_nemo.triggered.connect(_open_nemo_vj)
+            menu.addAction(act_nemo)
             menu.addSeparator()
         menu.addAction(_t("📝 Rename (F2) / 📝 改名 (F2)"),
                        lambda: self.rename_file(from_menu=True))

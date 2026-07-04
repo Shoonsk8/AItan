@@ -5,10 +5,16 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QMenu,
                               QApplication, QDialog, QHBoxLayout, QPushButton,
                               QCheckBox, QComboBox, QGridLayout, QLineEdit,
                               QTextEdit, QPlainTextEdit, QScrollArea, QSizePolicy,
-                              QSplitter, QSplitterHandle, QToolButton, QMessageBox)
+                              QSplitter, QSplitterHandle, QToolButton, QMessageBox,
+                              QStackedWidget, QSlider)
 import aisearch_attrs as attrs_mod
 from PyQt6.QtCore import Qt, QTimer, QUrl, QMimeData, QPoint, QEvent, QSize, pyqtSignal, pyqtSlot, Q_ARG, QMetaObject
 from PyQt6.QtGui import QPixmap, QIcon, QDrag, QCursor, QFont, QPainter, QColor, QImage
+try:
+    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
+    _HAS_QTMULTIMEDIA = True
+except Exception:
+    _HAS_QTMULTIMEDIA = False
 
 from aisearch_config import FolderPickerDialog
 import aisearch_front_page as front_page
@@ -455,7 +461,37 @@ class PreviewWindow(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setMinimumHeight(0)   # allow splitter to shrink the image pane freely
-        self._splitter.addWidget(self.scroll_area)
+
+        # Media pane = the image/thumbnail scroll area + an optional video
+        # control bar below it. Video plays by painting decoded frames onto the
+        # SAME label that shows images, via a QVideoSink — there is NO native
+        # QVideoWidget (which segfaulted on window/splitter resize) and no
+        # layout restructuring, so images and resizing behave exactly as before.
+        self._video_controls = None
+        self._player = None
+        if _HAS_QTMULTIMEDIA:
+            self._player = QMediaPlayer(self)
+            self._audio = QAudioOutput(self)
+            self._player.setAudioOutput(self._audio)
+            self._video_sink = QVideoSink(self)
+            self._player.setVideoOutput(self._video_sink)
+            self._video_sink.videoFrameChanged.connect(self._on_video_frame)
+            self._player.positionChanged.connect(self._on_player_position)
+            self._player.durationChanged.connect(self._on_player_duration)
+            self._player.playbackStateChanged.connect(self._on_player_state)
+            self._video_controls = self._build_video_controls()
+        self._cur_is_video = False
+        self._video_mode = False
+
+        self._media_top = QWidget()
+        _topv = QVBoxLayout(self._media_top)
+        _topv.setContentsMargins(0, 0, 0, 0)
+        _topv.setSpacing(0)
+        _topv.addWidget(self.scroll_area, 1)
+        if self._video_controls is not None:
+            _topv.addWidget(self._video_controls)
+            self._video_controls.setVisible(False)
+        self._splitter.addWidget(self._media_top)
 
         # Bottom pane: outer HBox holds a left-edge strip (horizontal mode) + inner VBox
         self._bottom_pane = QWidget()
@@ -712,6 +748,16 @@ class PreviewWindow(QWidget):
             self.handler.app.rename_file()
         elif key == Qt.Key.Key_S and not mods:
             self.handler.app._open_settings()
+        elif key == Qt.Key.Key_Space and getattr(self, "_cur_is_video", False):
+            # Space toggles play/pause for videos. Only fires when no text
+            # widget has focus (those consume the key first), so typing a
+            # space in note/prompt fields is unaffected.
+            self._toggle_video_play()
+            event.accept()
+        elif key == Qt.Key.Key_Calculator and (mods & Qt.KeyboardModifier.ControlModifier):
+            # Ctrl+Calculator → extract the current frame as a PNG.
+            self._extract_current_frame()
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -719,6 +765,267 @@ class PreviewWindow(QWidget):
         super().resizeEvent(event)
         # Debounce: reset the timer on every resize; render fires 80ms after last one
         self._resize_timer.start()
+
+    # ── Video playback ──────────────────────────────────────────────────────
+    def _build_video_controls(self):
+        """Build the play/pause + seek + time + mute control bar shown under
+        the media pane while a video is being played."""
+        bar = QWidget()
+        bar.setStyleSheet("background:#141414;")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(6, 3, 6, 3)
+        h.setSpacing(6)
+        # The bar's stylesheet disables Qt's automatic font fallback, so the
+        # emoji glyphs render as tofu. Force the installed color-emoji font on
+        # the icon buttons so 🔁 📷 🔊 etc. actually show.
+        from PyQt6.QtGui import QFont as _QFont
+        self._ctl_emoji_font = _QFont("Noto Color Emoji")
+        self._ctl_emoji_font.setPointSize(11)
+        self._btn_play = QPushButton("▶")
+        self._btn_play.setFont(self._ctl_emoji_font)
+        self._btn_play.setFixedWidth(34)
+        self._btn_play.setToolTip(_t("Play / Pause (Space) / 再生・一時停止 (スペース)"))
+        self._btn_play.clicked.connect(self._toggle_video_play)
+        h.addWidget(self._btn_play)
+        self._loop_on = False
+        self._btn_loop = QPushButton("🔁")
+        self._btn_loop.setFont(self._ctl_emoji_font)
+        self._btn_loop.setFixedWidth(30)
+        self._btn_loop.setCheckable(True)
+        self._btn_loop.setToolTip(_t("Loop replay / ループ再生"))
+        self._btn_loop.clicked.connect(self._toggle_loop)
+        self._style_loop_btn()
+        h.addWidget(self._btn_loop)
+        self._video_slider = QSlider(Qt.Orientation.Horizontal)
+        self._video_slider.setRange(0, 0)
+        self._video_slider.sliderMoved.connect(self._on_slider_moved)
+        self._video_slider.sliderPressed.connect(lambda: setattr(self, "_slider_held", True))
+        self._video_slider.sliderReleased.connect(self._on_slider_released)
+        self._slider_held = False
+        h.addWidget(self._video_slider, 1)
+        self._time_lbl = QLabel("0:00 / 0:00")
+        self._time_lbl.setStyleSheet("color:#ccc; font-size:9pt;")
+        h.addWidget(self._time_lbl)
+        self._btn_grab = QPushButton("📷")
+        self._btn_grab.setFont(self._ctl_emoji_font)
+        self._btn_grab.setFixedWidth(30)
+        self._btn_grab.setToolTip(_t("Extract current frame → PNG (Ctrl+Calc) / "
+                                     "現在のフレームを抽出 → PNG (Ctrl+Calc)"))
+        self._btn_grab.clicked.connect(self._extract_current_frame)
+        h.addWidget(self._btn_grab)
+        self._btn_mute = QPushButton("🔊")
+        self._btn_mute.setFont(self._ctl_emoji_font)
+        self._btn_mute.setFixedWidth(30)
+        self._btn_mute.setToolTip(_t("Mute / Unmute / ミュート切替"))
+        self._btn_mute.clicked.connect(self._toggle_mute)
+        h.addWidget(self._btn_mute)
+        self._btn_video_close = QPushButton("✕")
+        self._btn_video_close.setFont(self._ctl_emoji_font)
+        self._btn_video_close.setFixedWidth(28)
+        self._btn_video_close.setToolTip(_t("Back to thumbnail / サムネイルに戻る"))
+        self._btn_video_close.clicked.connect(self._exit_video_mode)
+        h.addWidget(self._btn_video_close)
+        return bar
+
+    @staticmethod
+    def _fmt_ms(ms):
+        s = max(0, int(ms // 1000))
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _on_media_shown(self, path, is_video):
+        """Called by the handler each time a file is rendered. Tracks whether
+        the current file is a video (enables Space/▶) and drops out of video
+        mode when navigating to a different file so each file opens on its
+        thumbnail."""
+        self._cur_is_video = bool(is_video) and self._player is not None
+        if self._video_mode and (not self._cur_is_video
+                                 or path != getattr(self, "_video_mode_path", None)):
+            self._exit_video_mode()
+        if self._video_controls is not None:
+            # Bar (with ▶) is available for any video, so the user can start
+            # playback from the thumbnail; hidden entirely for images.
+            self._video_controls.setVisible(self._cur_is_video)
+
+    def _toggle_video_play(self):
+        if self._player is None or not self._cur_is_video:
+            return
+        if not self._video_mode:
+            self._enter_video_mode()
+            return
+        from PyQt6.QtMultimedia import QMediaPlayer as _QMP
+        if self._player.playbackState() == _QMP.PlaybackState.PlayingState:
+            self._player.pause()
+        else:
+            self._player.play()
+
+    def _enter_video_mode(self):
+        if self._player is None:
+            return
+        path = self.handler.current_path
+        if not path or not os.path.exists(path):
+            return
+        self._video_mode = True
+        self._video_mode_path = path
+        if self._video_controls is not None:
+            self._video_controls.setVisible(True)
+        self._player.setSource(QUrl.fromLocalFile(path))
+        self._apply_loops()   # honor the 🔁 loop toggle for this video
+        self._player.play()
+
+    def _on_video_frame(self, frame):
+        """Paint each decoded video frame onto the shared media label. Cheap
+        FastTransformation scale keeps 24-30 fps light; only runs while the
+        user is actually playing (video mode)."""
+        if not self._video_mode:
+            return
+        try:
+            if not frame.isValid():
+                return
+            img = frame.toImage()
+            if img.isNull():
+                return
+            vw = self.scroll_area.viewport().width()
+            vh = self.scroll_area.viewport().height()
+            if vw < 10 or vh < 10:
+                vw, vh = 700, 700
+            scaled = QPixmap.fromImage(img).scaled(
+                vw, vh, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation)
+            self.label.setPixmap(scaled)
+            self.label.setFixedSize(scaled.size())
+        except Exception:
+            pass
+
+    def _exit_video_mode(self):
+        if self._player is not None:
+            try:
+                self._player.stop()
+                self._player.setSource(QUrl())
+            except Exception:
+                pass
+        self._video_mode = False
+        self._video_mode_path = None
+        if self._video_controls is not None:
+            # Keep the bar (with ▶) visible if the current file is still a video.
+            self._video_controls.setVisible(getattr(self, "_cur_is_video", False))
+        # Restore the still thumbnail onto the label (it currently holds the
+        # last video frame).
+        try:
+            h = self.handler
+            if h is not None and h.current_path:
+                h._cached_pixmap = None   # force a fresh thumbnail decode
+                h._render(h.current_path,
+                          is_video=True, fast=True)
+        except Exception:
+            pass
+
+    def _on_slider_moved(self, val):
+        if self._player is not None:
+            self._player.setPosition(val)
+
+    def _on_slider_released(self):
+        self._slider_held = False
+        if self._player is not None:
+            self._player.setPosition(self._video_slider.value())
+
+    def _toggle_mute(self):
+        if self._player is None:
+            return
+        muted = not self._audio.isMuted()
+        self._audio.setMuted(muted)
+        self._btn_mute.setText("🔇" if muted else "🔊")
+
+    def _style_loop_btn(self):
+        on = getattr(self, "_loop_on", False)
+        self._btn_loop.setChecked(on)
+        self._btn_loop.setStyleSheet(
+            "QPushButton { background:#2f7d32; color:#fff; border:none; }" if on
+            else "")
+
+    def _apply_loops(self):
+        """Push the current loop choice onto the player."""
+        if self._player is None:
+            return
+        from PyQt6.QtMultimedia import QMediaPlayer as _QMP
+        try:
+            self._player.setLoops(_QMP.Loops.Infinite if self._loop_on
+                                  else _QMP.Loops.Once)
+        except Exception:
+            pass
+
+    def _toggle_loop(self):
+        self._loop_on = not getattr(self, "_loop_on", False)
+        self._style_loop_btn()
+        self._apply_loops()
+
+    def _extract_current_frame(self):
+        """Save the currently-shown frame as a PNG next to the source file.
+        Uses the full-resolution frame from the video sink while playing;
+        falls back to whatever is on the label (thumbnail / last frame)."""
+        path = getattr(self, "_attr_path", None) or self.handler.current_path
+        def _status(msg, ms=5000):
+            try:
+                self.handler.app.statusBar().showMessage(_t(msg), ms)
+            except Exception:
+                pass
+        if not path:
+            return
+        img = None
+        if self._player is not None and self._video_mode:
+            try:
+                fr = self._video_sink.videoFrame()
+                if fr.isValid():
+                    img = fr.toImage()
+            except Exception:
+                img = None
+        if img is None or img.isNull():
+            pm = self.label.pixmap()
+            if pm is not None and not pm.isNull():
+                img = pm.toImage()
+        if img is None or img.isNull():
+            _status("No frame to extract / 抽出するフレームがありません")
+            return
+        stem, _ = os.path.splitext(os.path.basename(path))
+        pos_ms = (self._player.position()
+                  if (self._player is not None and self._video_mode) else 0)
+        d = os.path.dirname(path)
+        out = os.path.join(d, f"{stem}_frame_{pos_ms}.png")
+        _n = 1
+        while os.path.exists(out):
+            out = os.path.join(d, f"{stem}_frame_{pos_ms}_{_n}.png")
+            _n += 1
+        if img.save(out):
+            # Register it in the search DB (embedding + attrs + link to the
+            # source video) so search/browse can find it — otherwise it's just
+            # a loose file on disk the DB never indexed.
+            _indexed = False
+            try:
+                _indexed = self.handler.app._ingest_captured_frame(out, source_video=path)
+            except Exception:
+                _indexed = False
+            if _indexed:
+                _status(f"📷 Frame saved + indexed: {os.path.basename(out)} / "
+                        f"フレーム保存＋登録: {os.path.basename(out)}")
+            else:
+                _status(f"📷 Frame saved: {os.path.basename(out)} (not indexed) / "
+                        f"フレーム保存: {os.path.basename(out)}（未登録）")
+        else:
+            _status("Frame save failed / フレーム保存に失敗")
+
+    def _on_player_position(self, pos):
+        if not self._slider_held:
+            self._video_slider.setValue(pos)
+        self._time_lbl.setText(f"{self._fmt_ms(pos)} / {self._fmt_ms(self._player.duration())}")
+
+    def _on_player_duration(self, dur):
+        self._video_slider.setRange(0, dur)
+        self._time_lbl.setText(f"{self._fmt_ms(self._player.position())} / {self._fmt_ms(dur)}")
+
+    def _on_player_state(self, state):
+        from PyQt6.QtMultimedia import QMediaPlayer as _QMP
+        playing = (state == _QMP.PlaybackState.PlayingState)
+        if hasattr(self, "_btn_play"):
+            self._btn_play.setText("⏸" if playing else "▶")
 
     def _on_resize_settled(self):
         if self.handler.current_path:
@@ -1231,6 +1538,12 @@ class PreviewWindow(QWidget):
         self._soft_canvas.data_changed.connect(self._mark_user_edited)
         self._soft_canvas.action_triggered.connect(self._on_canvas_action)
         self._wire_canvas_bool_flags()
+        # Wire the filename canvas tile: Enter on the text edit commits a
+        # rename + lock (single-line semantic — newlines are illegal in
+        # basenames anyway). Typing letters DOES NOT rename — the user
+        # has to explicitly press Enter, so a half-typed name is never
+        # acted on. Mirrors the original "Press rename and lock it" intent.
+        self._install_filename_commit_handler()
         # Make CLIP and FACE canvas tiles auto-expand to show full detection text
         self._setup_clip_face_autoheight()
         # Drag / Editable toggles stay enabled regardless of "Arrangement
@@ -1486,6 +1799,7 @@ class PreviewWindow(QWidget):
     def _on_splitter_moved(self):
         # User is dragging — remove height cap so they can pull the boundary down freely
         self.scroll_area.setMaximumHeight(16777215)
+        self._media_top.setMaximumHeight(16777215)
         sizes = self._splitter.sizes()
         bottom = sizes[1] if len(sizes) > 1 else 0
         if bottom > 36:
@@ -1503,6 +1817,7 @@ class PreviewWindow(QWidget):
         if self._attr_scroll.isVisible():
             # Expanded → collapse: remove the height cap so image pane fills window
             self.scroll_area.setMaximumHeight(16777215)
+            self._media_top.setMaximumHeight(16777215)
             bottom = self._splitter.sizes()[1] if len(self._splitter.sizes()) > 1 else 0
             if bottom > 36:
                 self._store_size(bottom)
@@ -1572,6 +1887,14 @@ class PreviewWindow(QWidget):
         try:
             from aisearch_debug import dbg as _dbg
             _dbg(f"refresh_attrs START {os.path.basename(path) if path else None}")
+        except Exception:
+            pass
+        # Ensure the filename tile's Enter-commits-rename handler is wired. It's
+        # idempotent (skips if already done), so this safely covers cases where
+        # the canvas rebuilt its widgets (e.g. Canvas reload) after the one-time
+        # install in __init__.
+        try:
+            self._install_filename_commit_handler()
         except Exception:
             pass
         if not self._attr_panel_built:
@@ -1893,10 +2216,13 @@ class PreviewWindow(QWidget):
                     # HC="500" (color set, style+length empty) still get CLIP
                     # to fill in the missing digits.
                     _skip = {f for f in _clip_fields if _field_filled(f)}
+                    # If EVERY CLIP field is already filled (only the person is
+                    # missing), skip the CLIP encode entirely — face still runs.
+                    _clip_all_filled = (len(_skip) == len(set(_clip_fields)))
                     # Always run face detection so a confident different
                     # match can override a stale stored pid via
                     # _auto_apply_face's similarity check.
-                    self._schedule_inspect(skip_fields=_skip)
+                    self._schedule_inspect(skip_fields=_skip, skip_clip=_clip_all_filled)
             else:  # _mode == "always"
                 # Detect every time, full scores for every field.
                 self._schedule_inspect()
@@ -3107,7 +3433,8 @@ class PreviewWindow(QWidget):
         name_label = attrs_mod.get_person_id_label(app.current_project, new_pid)
         self._person_name_edit.setText(name_label if name_label != new_pid else "")
 
-    def _schedule_inspect(self, overwrite=False, skip_fields=None, delay_ms=250):
+    def _schedule_inspect(self, overwrite=False, skip_fields=None, delay_ms=250,
+                          skip_clip=False):
         """Debounce wrapper around _on_inspect — rapid arrow-key navigation
         was firing CLIP/face on every file, racing native code in the worker
         thread with main-thread widget updates and occasionally segfaulting.
@@ -3175,18 +3502,19 @@ class PreviewWindow(QWidget):
         except Exception:
             pass
         from PyQt6.QtCore import QTimer as _QT
-        self._inspect_pending_args = (overwrite, skip_fields)
+        self._inspect_pending_args = (overwrite, skip_fields, skip_clip)
         if not hasattr(self, "_inspect_debounce"):
             self._inspect_debounce = _QT(self)
             self._inspect_debounce.setSingleShot(True)
             def _fire():
                 args = getattr(self, "_inspect_pending_args", None)
                 if args is not None:
-                    self._on_inspect(overwrite=args[0], skip_fields=args[1])
+                    self._on_inspect(overwrite=args[0], skip_fields=args[1],
+                                     skip_clip=args[2] if len(args) > 2 else False)
             self._inspect_debounce.timeout.connect(_fire)
         self._inspect_debounce.start(delay_ms)
 
-    def _on_inspect(self, overwrite=False, skip_fields=None):
+    def _on_inspect(self, overwrite=False, skip_fields=None, skip_clip=False):
         """Run CLIP + face detection and write raw scores into the inspect text box.
         overwrite=True: clear all CLIP fields and re-detect from scratch (Refresh mode).
         overwrite=False: only fill empty fields, never touch manual input.
@@ -3323,6 +3651,14 @@ class PreviewWindow(QWidget):
             if _clip_inspect_on and not attrs_mod.is_editable(app.attrs_data, path):
                 _clip_inspect_on = False
                 _dbg("    CLIP skipped — file is locked (editable=False)")
+            # Every CLIP-detectable field is already filled (the file was
+            # inspected before — e.g. its coded filename holds the values), so
+            # there's nothing for CLIP to add. Skip the whole encode; only the
+            # face pass (person) still needs to run. This is the big win on the
+            # 30s CPU-fallback path: an already-tagged file costs ~0 CLIP time.
+            if _clip_inspect_on and skip_clip and not overwrite:
+                _clip_inspect_on = False
+                _dbg("    CLIP skipped — all CLIP fields already filled (skip_clip)")
             # In Refresh-CLIP mode (overwrite=True), wipe the canonical
             # lowercase keys for every CLIP-detectable field BEFORE detection
             # runs. Without this, fields that CLIP doesn't detect this round
@@ -3922,6 +4258,18 @@ class PreviewWindow(QWidget):
         sc = getattr(self, "_soft_canvas", None)
         if not sc:
             return
+        # Animal detection suppressed (Settings ▸ Animal ▸ "Always set Animal
+        # to (no animal)"): the CLIP_A tile would otherwise show CLIP's live
+        # animal GUESS — which is never written to the file (proven: 0 animal
+        # codes stored project-wide). Seeing a guess made it look like AI was
+        # still detecting animals. This is the single chokepoint every tile-
+        # text update flows through (inspect thread, cached refresh, nav
+        # re-populate), so overriding here covers all of them. Only the
+        # animal tile is affected; other CLIP_* fields are untouched.
+        if key == "CLIP_A" and getattr(
+                getattr(getattr(self, "handler", None), "app", None),
+                "config", {}).get("animal_force_none", False):
+            text = "(animal detection off — Settings ▸ Animal)"
         # Cap text size — long debug strings (25k+ chars seen on combined CLIP
         # output) trigger QTextCursor out-of-range warnings and have been
         # implicated in segfaults during layout. 8KB is plenty for the user
@@ -4829,7 +5177,17 @@ class PreviewWindow(QWidget):
                     _set_input_locked(_hex, locked)
                 _pl = getattr(w, "_pathlist", None)
                 if _pl is not None:
-                    _set_input_locked(_pl, locked)
+                    # Keep the list itself live so double-click-to-open (a
+                    # read-only navigation action) still works while locked.
+                    # Only the add/remove edit controls get disabled.
+                    _pl.setEnabled(True)
+                    for _eb in getattr(w, "_pathlist_edit_widgets", []):
+                        try: _eb.setEnabled(not locked)
+                        except Exception: pass
+                    _dsc = getattr(w, "_pathlist_del_shortcut", None)
+                    if _dsc is not None:
+                        try: _dsc.setEnabled(not locked)
+                        except Exception: pass
                 # Coded-digit / matrix sub-combos
                 for tup in getattr(w, "_coded_combos", []):
                     if len(tup) >= 2 and tup[1] is not None:
@@ -4994,25 +5352,15 @@ class PreviewWindow(QWidget):
             _matrix_vals = {}
             _pathlist_vals = {}
             _collected = _sc.collect_soft_data()
-            # Canvas "filename" tile is a virtual text field — its value is
-            # the basename, not attribute data. If the user typed a new
-            # name, treat it as a rename request: rename on disk, lock the
-            # entry (editable=False), update path everywhere, and continue
-            # the save against the new path. Run this BEFORE the rest of
-            # _save_attrs reads attrs[path] so the lock + new path land in
-            # the same write.
-            try:
-                _tv = _collected[1] if len(_collected) >= 2 else {}
-                _new_bn = (_tv.get("filename") or "").strip()
-                _cur_bn = os.path.basename(path)
-                if _new_bn and _new_bn != _cur_bn:
-                    _renamed = self._maybe_rename_from_canvas(path, _new_bn)
-                    if _renamed:
-                        path = _renamed
-                        self._attr_path = _renamed
-                        entry = attrs_mod.get(app.attrs_data, _renamed)
-            except Exception:
-                pass
+            # DISABLED — the filename tile's value used to be turned into a
+            # rename request right here. _save_attrs runs on every canvas
+            # data_changed (200 ms after each keystroke), so typing a
+            # single letter would rename the file mid-edit and lock it.
+            # The user has to commit the rename explicitly now — see
+            # commit_filename_rename() / its caller (Enter key handler or
+            # the 🪪 Rename button). The filename canvas widget still
+            # displays the current basename via the entry["filename"]
+            # injection in _refresh_attrs_inner.
             if len(_collected) == 5:
                 _extra_tags, _text_vals, _coded_vals, _matrix_vals, _pathlist_vals = _collected
             elif len(_collected) == 4:
@@ -5345,6 +5693,86 @@ class PreviewWindow(QWidget):
         except Exception:
             pass
 
+    def _install_filename_commit_handler(self):
+        """Find the canvas's filename text widget and override its
+        key-press handler so Enter commits a rename instead of inserting
+        a newline. Called once after _soft_canvas is built — the canvas
+        keeps the same FieldWidget instances across file navs, so a
+        single install survives every _refresh_attrs.
+
+        Logic:
+          - Plain Enter / Return → commit (rename file to typed basename,
+            lock the entry). Same behavior as pressing the old
+            🪪 Rename & Lock button.
+          - Shift+Enter → fall through (no-op for now; left as escape
+            hatch in case we ever allow multi-line).
+          - All other keys → default text-edit behavior.
+        """
+        from PyQt6.QtCore import Qt as _Qt
+        _sc = getattr(self, "_soft_canvas", None)
+        if _sc is None:
+            return
+        for w in getattr(_sc, "widgets", []):
+            if getattr(w, "key", None) != "filename":
+                continue
+            te = getattr(w, "_te", None)
+            if te is None:
+                continue
+            if getattr(te, "_fn_commit_wired", False):
+                continue   # already wired (idempotent across refreshes/rebuilds)
+            # Enter commits the rename (instead of inserting a newline).
+            _orig_keyPress = te.keyPressEvent
+            def _filename_keyPressEvent(ev, _te=te, _orig=_orig_keyPress):
+                if (ev.key() in (_Qt.Key.Key_Return, _Qt.Key.Key_Enter)
+                        and not (ev.modifiers() & _Qt.KeyboardModifier.ShiftModifier)):
+                    ev.accept()
+                    self._commit_filename_rename(_te.toPlainText().strip())
+                    return
+                _orig(ev)
+            te.keyPressEvent = _filename_keyPressEvent
+            # Leaving the box (click away / nav) also commits — so the user
+            # doesn't have to know to press Enter. _commit_filename_rename is a
+            # no-op when the text equals the current basename, so an unchanged
+            # box (or just clicking through) never triggers a rename.
+            _orig_focusOut = te.focusOutEvent
+            def _filename_focusOut(ev, _te=te, _orig=_orig_focusOut):
+                _orig(ev)   # run the normal text save first
+                try:
+                    self._commit_filename_rename(_te.toPlainText().strip())
+                except Exception:
+                    pass
+            te.focusOutEvent = _filename_focusOut
+            te._fn_commit_wired = True
+            # wire every filename widget (no early return) in case a rebuild
+            # left more than one instance around.
+
+    def _commit_filename_rename(self, new_base):
+        """Explicit commit path for a filename edit on the canvas tile.
+        Bound to Enter on the canvas's filename text widget. Validates
+        and delegates to _maybe_rename_from_canvas; the latter handles
+        os.rename, attrs move, table/path/preview updates, and lock.
+
+        Status-bar messaging is the user feedback. We never auto-fire
+        from _save_attrs anymore (typing a single letter would have
+        renamed the file mid-edit — see the disabled block in _save_attrs)."""
+        app = self.handler.app
+        path = getattr(self, "_attr_path", None)
+        if not path:
+            return
+        new_path = self._maybe_rename_from_canvas(path, new_base)
+        if not new_path:
+            return
+        # Update outer state so the next save / preview action uses the
+        # new path. _save_attrs without a rename would otherwise still
+        # write to the old key.
+        self._attr_path = new_path
+        try:
+            app.statusBar().showMessage(
+                _t(f"🪪 Renamed → {os.path.basename(new_path)} (locked) / "
+                   f"🪪 改名 → {os.path.basename(new_path)} (ロック)"), 5000)
+        except Exception:
+            pass
+
     def _maybe_rename_from_canvas(self, path, new_base):
         """Treat the canvas's 'filename' text tile as a rename request.
 
@@ -5394,13 +5822,20 @@ class PreviewWindow(QWidget):
                 pass
             if app.data and "paths" in app.data and path in app.data["paths"]:
                 app.data["paths"][app.data["paths"].index(path)] = new_path
+            _old_norm = os.path.normpath(path)
+            _matched_row = -1
             for _row in range(app.table.rowCount()):
-                if app.table.get_row_path(_row) == path:
+                if os.path.normpath(app.table.get_row_path(_row) or "") == _old_norm:
                     app.table.set_row_path(_row, new_path)
                     _name_item = app.table.item(_row, 2)
                     if _name_item:
                         _name_item.setText(new_base)
+                    _matched_row = _row
                     break
+            print(f"[RENAME-DBG] tile rename: {os.path.basename(path)} -> {new_base} | "
+                  f"last_mode={app.config.get('last_mode')} | table_rows={app.table.rowCount()} | "
+                  f"matched_row={_matched_row} | in_join_results="
+                  f"{any(os.path.normpath(p)==_old_norm for p in (getattr(app,'_vj_join_results',[]) or []))}")
             if self._canvas_loaded_path is not None:
                 self._canvas_loaded_path = new_path
             self.handler.current_path = new_path
@@ -5416,6 +5851,28 @@ class PreviewWindow(QWidget):
                 app.attrs_data.setdefault(new_path, {})
             # Auto-lock — same policy as the coded 🪪 Rename below.
             app.attrs_data[new_path]["editable"] = False
+            # Persist the lock NOW. Previously this only lived in memory, so a
+            # reload / watch-scan / stale save could resurrect editable=True and
+            # let the on-nav auto-rename rebuild the name the user just typed.
+            try:
+                attrs_mod.save(app.current_project, app.attrs_data)
+            except Exception:
+                pass
+            # Belt-and-suspenders against the on-navigation auto-rename: mark
+            # this freshly user-named path as already handled so auto-rename
+            # skips it on the next nav even if the lock state ever desyncs. The
+            # user explicitly named this file — auto-rename must not rebuild it.
+            self._last_autorenamed_path = new_path
+            # Video Join mode keeps its own in-memory state (left/right/source,
+            # candidate list, filmstrip) separate from the table. The generic
+            # table refresh above doesn't touch it, so the rename wouldn't show
+            # on the VJ list/header. Route through the VJ updater + re-render.
+            if app.config.get("last_mode") == "videojoin" and hasattr(app, "_vj_state_replace_path"):
+                try:
+                    app._vj_state_replace_path(path, new_path)
+                    app._vj_set_pair(app._vj_left, app._vj_right)
+                except Exception:
+                    pass
             try:
                 pc = getattr(self, "_protected_check", None)
                 if pc is not None:
@@ -5933,6 +6390,13 @@ class PreviewWindow(QWidget):
             btn.setStyleSheet(btn_ss)
 
     def closeEvent(self, event):
+        # Stop playback so the player releases the file handle and audio device.
+        if getattr(self, "_player", None) is not None:
+            try:
+                self._player.stop()
+                self._player.setSource(QUrl())
+            except Exception:
+                pass
         import aisearch_config as _cfg_mod
         g = self.geometry()
         self.handler.app.config["preview_geometry"] = [g.x(), g.y(), g.width(), g.height()]
@@ -6454,7 +6918,10 @@ class PreviewHandler:
         nh = self.window.label.height()
         if nh <= 0:
             return
+        _vc = getattr(self.window, "_video_controls", None)
+        _ctrl_h = _vc.sizeHint().height() if (_vc is not None and _vc.isVisible()) else 0
         self.window.scroll_area.setMaximumHeight(nh)
+        self.window._media_top.setMaximumHeight(nh + _ctrl_h)
 
     def _update_splitter_orientation(self):
         pass  # orientation is set manually via the ⇔ button
@@ -6494,6 +6961,12 @@ class PreviewHandler:
     def _render(self, path, is_video, fast=False):
         if not self.window: return
         if not path: return
+        # Tell the window whether this file is a video so it can offer the
+        # play controls (and drop out of any active playback on nav).
+        try:
+            self.window._on_media_shown(path, is_video)
+        except Exception:
+            pass
         # Show loading indicator and flush paint events before slow image load
         _needs_load = (self._cached_pixmap is None or self._cached_pixmap_path != path)
         if _needs_load:
@@ -6548,19 +7021,27 @@ class PreviewHandler:
             sp = self.window._splitter
             if (sp.orientation() == Qt.Orientation.Vertical
                     and self.window._attr_scroll.isVisible()):
+                # The splitter sizes the whole top pane (_media_top = media stack
+                # + the video control bar), NOT scroll_area. Cap _media_top to
+                # the image height plus the control-bar height — capping only the
+                # inner scroll_area left _media_top full-height with a big empty
+                # gap below the image.
+                _vc = getattr(self.window, "_video_controls", None)
+                _ctrl_h = _vc.sizeHint().height() if (_vc is not None and _vc.isVisible()) else 0
+                _pane_h = nh + _ctrl_h
                 self.window.scroll_area.setMaximumHeight(nh)
-                # Zoom-in path: setMaximumHeight only caps the upper bound;
-                # if the splitter handle is currently allocating less than nh
-                # to the image pane (e.g. user zoomed in via wheel), the image
-                # can't actually grow. Force the splitter to allocate nh to
-                # the top pane when nh exceeds the current allocation.
-                cur_h = self.window.scroll_area.height()
-                if nh > cur_h:
+                self.window._media_top.setMaximumHeight(_pane_h)
+                # Zoom-in path: setMaximumHeight only caps the upper bound; if the
+                # splitter is allocating less than _pane_h, force it so the image
+                # can actually grow.
+                cur_h = self.window._media_top.height()
+                if _pane_h > cur_h:
                     total = sp.size().height()
-                    bottom_size = max(0, total - nh - sp.handleWidth())
-                    sp.setSizes([nh, bottom_size])
+                    bottom_size = max(0, total - _pane_h - sp.handleWidth())
+                    sp.setSizes([_pane_h, bottom_size])
             else:
                 self.window.scroll_area.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+                self.window._media_top.setMaximumHeight(16777215)
         except Exception as e:
             if self.window:
                 self.window.label.setText(f"Render Error: {e}")

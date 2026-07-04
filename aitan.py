@@ -40,7 +40,7 @@ if sys.platform == "linux":
             os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _plugins
 
 from PyQt6.QtWidgets import QApplication, QComboBox
-from PyQt6.QtGui import QIcon, QImageReader
+from PyQt6.QtGui import QFont, QIcon, QImageReader
 from aisearch_app import AISearchApp
 
 # Disable scroll-wheel on all combo boxes app-wide
@@ -310,6 +310,8 @@ if __name__ == "__main__":
     import aisearch_config as _cfg
     app = QApplication(sys.argv)
     _config = _cfg.load_config()
+    app.setFont(QFont(_config.get("ui_font_family", "Noto Sans CJK JP"),
+                      _config.get("ui_font_size", 10)))
     app.setStyleSheet(THEMES.get(_config.get("theme", "Dark"), DARK_STYLE))
     from attr_viewer import _UI_LANG as _ui_lang_init
     _ui_lang_init["val"] = _config.get("ui_language", "en")
@@ -321,9 +323,15 @@ if __name__ == "__main__":
     window = AISearchApp()
     window.show()
 
+    # Start the background CLIP load only now that the window is up.
+    # Started any earlier it contends with imports / UI construction
+    # and the window takes ~3x longer to appear.
+    from PyQt6.QtCore import QTimer as _QT
+    import aisearch_logic as _logic
+    _QT.singleShot(0, _logic.start_model_load)
+
     # Poll the drop file every 500ms — when paths show up, hand them to the
     # window and clear the file. Same handler as drag-and-drop.
-    from PyQt6.QtCore import QTimer as _QT
     def _poll_drops():
         if not os.path.exists(_DROP_FILE):
             return

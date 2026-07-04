@@ -29,6 +29,11 @@ def main():
     except Exception as e:
         _emit({"specs": [], "error": f"import failed: {e}"})
         return
+    # Begin the CLIP load now so it overlaps with waiting for the first
+    # request — aisearch_logic no longer auto-starts it at import, and
+    # the first extract_feature call must finish within the parent's
+    # call_timeout (30 s), which a cold model load can exceed.
+    lg.start_model_load()
     # Signal "ready" so parent knows startup is done
     _emit({"ready": True})
     for line in sys.stdin:

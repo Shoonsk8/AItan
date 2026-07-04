@@ -30,12 +30,14 @@ _cuda_dead = False
 # signal that the caller leaked a non-face dependency into a face-only
 # context.
 #
-# Background CLIP load. Loading clip-ViT-L-14 at import time blocks the
-# GUI for ~25 s before the AItan window can paint. We start the load on
-# a daemon thread instead — the import returns immediately, the window
-# appears, and the model finishes loading in the background. Any code
-# path that needs the model goes through get_model() which blocks until
-# the load completes (or returns None if it permanently failed).
+# Background CLIP load. Loading clip-ViT-L-14 synchronously blocks the
+# GUI for ~25 s before the AItan window can paint, and even a daemon
+# thread started at import time contends with the remaining imports and
+# UI construction (GIL/disk/CUDA). So the thread is NOT started here —
+# aitan.py calls start_model_load() after window.show(), and get_model()
+# lazy-starts it for standalone importers. Any code path that needs the
+# model goes through get_model() which blocks until the load completes
+# (or returns None if it permanently failed).
 model = None
 _model_event = threading.Event()
 _model_load_failed = False
@@ -80,9 +82,26 @@ def _load_model_bg():
     finally:
         _model_event.set()
 
-# daemon=True so a hung load can't keep the process alive at shutdown.
-threading.Thread(target=_load_model_bg, daemon=True,
-                 name="aisearch-clip-load").start()
+_model_thread = None
+_model_thread_lock = threading.Lock()
+
+def start_model_load():
+    """Kick off the background CLIP load (idempotent). aitan.py calls
+    this right after window.show() — starting the thread at import time
+    made the load contend with the rest of startup (GIL, disk, CUDA
+    init) and tripled the time until the window appeared (~21 s vs
+    ~7 s). get_model() also calls this, so standalone scripts that
+    import this module without going through aitan.py still get the
+    model on first use."""
+    global _model_thread
+    with _model_thread_lock:
+        if _model_thread is None:
+            # daemon=True so a hung load can't keep the process alive
+            # at shutdown.
+            _model_thread = threading.Thread(
+                target=_load_model_bg, daemon=True,
+                name="aisearch-clip-load")
+            _model_thread.start()
 
 
 def get_model(timeout=None):
@@ -94,6 +113,7 @@ def get_model(timeout=None):
     Returns None if the load permanently failed or AISEARCH_SKIP_MODEL=1
     was set; the caller decides whether that's a hard error or a graceful
     no-op. `timeout` is in seconds; None waits forever."""
+    start_model_load()
     _model_event.wait(timeout=timeout)
     return model
 

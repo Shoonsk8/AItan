@@ -4,13 +4,47 @@ import json, os, sys, cv2, re, datetime, time as _time, threading as _threading
 _face_lock = _threading.Lock()
 
 
+def malloc_trim():
+    """Return freed glibc heap pages to the OS. gc.collect() frees
+    Python objects but glibc keeps the underlying arenas; after dlib's
+    large native allocations that retained-but-free memory is what
+    keeps RSS high. No-op on failure (non-glibc platforms)."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+# Max dimension for face detection input. dlib's HOG pyramid on a
+# full-res photo — 4x the area again on the upsample-2 retry — makes
+# huge varied-size native allocations that fragment glibc's heap:
+# measured RSS grew ~130 MB per no-face 4K file and malloc_trim could
+# not return the holes (1.5 GB retained after 5 files). Bounding the
+# input bounds every downstream allocation (RSS flat, trim returns
+# ~everything) and cuts per-file time 3-7x. Encodings come from a
+# 150x150 aligned chip, so matching quality is unaffected; small
+# faces are still caught by the upsample-2 retry. Same precedent as
+# MediaPipe's 1024 downscale in detect_shot_and_pose.
+_FACE_DETECT_MAX_DIM = 1600
+
+
 def _face_encodings_with_fallback(img):
     """face_recognition.face_encodings(img) but with an upsample-2
     retry when the default HOG-1 finds nothing. Many small / off-
     angle / AI-generated faces are missed by the default settings;
     upsampling once typically catches them. Caller still owns the
-    _face_lock; this helper just adds the fallback."""
+    _face_lock; this helper just adds the fallback.
+
+    Input is downscaled to _FACE_DETECT_MAX_DIM first (see comment
+    there). Callers only consume the returned 128-d encodings, never
+    pixel coordinates, so the resize is invisible to them."""
     import face_recognition as _fr
+    h, w = img.shape[:2]
+    _scale = _FACE_DETECT_MAX_DIM / float(max(h, w))
+    if _scale < 1.0:
+        img = cv2.resize(img, (max(1, int(w * _scale)), max(1, int(h * _scale))),
+                         interpolation=cv2.INTER_AREA)
     encodings = _fr.face_encodings(img)
     if encodings:
         return encodings
@@ -1939,6 +1973,31 @@ def is_editable(attrs_data, path):
         return True   # untouched file — user actions (move/delete) still allowed
     return bool(entry["editable"])
 
+def restore_lock_from_embed_entry(entry, path):
+    """Re-apply a user lock (editable=False) that lives inside the file's
+    embedded AItan block.
+
+    The lock is normally stored path-keyed in attrs.json, so a rename/move done
+    outside the app (e.g. via Nemo) orphans it: the file arrives under a path
+    the DB has never seen and would default back to editable. But the lock is
+    also written into the file's bytes (see _build_aitan_block), and that
+    survives any rename. This reads it back.
+
+    Only fills when the entry has no explicit editable flag yet, so an in-app
+    unlock still wins. Operates on the entry dict directly (auto_set_all holds a
+    detached entry from get() that isn't in attrs_data until set_file runs).
+    Returns True if a lock was restored."""
+    if entry is None or "editable" in entry:
+        return False
+    try:
+        blk = _read_embedded_aitan_block(path)
+    except Exception:
+        blk = None
+    if blk and blk.get("editable") is False:
+        entry["editable"] = False
+        return True
+    return False
+
 def is_confirmed(attrs_data, path):
     return attrs_data.get(path, {}).get("confirmed", False)
 
@@ -2009,10 +2068,19 @@ def _build_aitan_block(entry: dict) -> str:
     "ver" is stamped first so future readers can branch on writer version."""
     # Redundant flags that don't carry portable info — confirmed/editable are
     # session-scoped UI state, audio_probed is a "we already ffprobed this
-    # file" cache marker, not file-level metadata.
-    _SKIP_FIELDS = {"meta", "ver", "confirmed", "editable", "audio_probed"}
+    # file" cache marker, _ino is the local inode used to re-anchor the lock
+    # across renames (not portable). None belong in the file-embedded block.
+    # confirmed is session UI state; audio_probed is a probe-cache marker.
+    # editable is normally UI state too, with one exception: the *lock*
+    # (editable=False) is written into the file so an external rename/move
+    # can't silently unlock it. editable=True is the default and carries no info.
+    _SKIP_FIELDS = {"meta", "ver", "confirmed", "audio_probed"}
     slim = {"ver": _AITAN_VERSION}
     for k, v in entry.items():
+        if k == "editable":
+            if v is False:
+                slim["editable"] = False   # the lock travels inside the file
+            continue
         if (k in _SKIP_FIELDS
                 or _is_transient_key(k)
                 or _is_aitan_skip_key(k)        # CLIP_*/FACE stay out of file embed
@@ -2200,14 +2268,39 @@ def _read_embedded_aitan_block(path: str) -> dict | None:
                 except Exception:
                     return _store(None)
         else:
-            raw = read_raw_embedded_text(path)
-            for line in raw.split("\n"):
-                line = line.strip()
-                if line.startswith(_PREFIX):
-                    try:
-                        return _store(json.loads(line[len(_PREFIX):]))
-                    except Exception:
-                        pass
+            # Video / other container: the current write location is the
+            # "description" tag. Old versions wrote AItan to "comment" (which
+            # also clobbered any ComfyUI workflow there). A file can carry BOTH
+            # — a stale "comment" block and the current "description" block — so
+            # we must NOT just take the first AItan we see (ffprobe lists
+            # comment before description). Prefer description, then comment,
+            # then any stream-level tag. This keeps a stale comment block from
+            # shadowing the real one (e.g. an old editable:true hiding the
+            # current editable:false lock).
+            import subprocess as _sp
+            try:
+                _r = _sp.run(["ffprobe", "-v", "quiet", "-print_format", "json",
+                              "-show_format", "-show_streams", path],
+                             capture_output=True, text=True, timeout=10)
+                _probe = json.loads(_r.stdout)
+            except Exception:
+                _probe = {}
+            _candidates = []
+            _ftags = _probe.get("format", {}).get("tags", {}) or {}
+            # Case-insensitive: MP4 uses "description"/"comment", Matroska uses
+            # "DESCRIPTION"/"COMMENT". Lower-case the keys so both match.
+            _lc = {str(_k).lower(): _v for _k, _v in _ftags.items()}
+            for _key in ("description", "comment"):
+                if _lc.get(_key):
+                    _candidates.append(str(_lc[_key]))
+            for _s in _probe.get("streams", []):
+                for _v in (_s.get("tags", {}) or {}).values():
+                    if _v:
+                        _candidates.append(str(_v))
+            for _text in _candidates:
+                _blk = _extract_aitan_block(_text)
+                if _blk is not None:
+                    return _store(_blk)
     except Exception:
         pass
     return _store(None)
@@ -3202,9 +3295,15 @@ def parse_filename_rules(stem, rules, basename=None, fullpath=None, _return_path
             continue
         if rule.get("extract"):
             field  = rule["field"].upper()
-            digits = rule.get("digits", 2)
-            m = re.search(rf'(?<![A-Z]){re.escape(field)}([0-9a-f]{{{digits}}})',
-                          stem, re.IGNORECASE)
+            # Capital letters ARE the field separators in coded names, so a
+            # value is the run of value-chars (lowercase + digits, base-36)
+            # up to the next capital — not a fixed digit count. Reading to
+            # that boundary makes a wrong/stale `digits` harmless. NO
+            # IGNORECASE: case-insensitive matching let a following separator
+            # that is itself a hex letter (B, E, F…) be swallowed as a value
+            # digit, e.g. A20B0a → "20b" (the B of the Bust field). Matching
+            # uppercase-exact means a capital can never be eaten as a value.
+            m = re.search(rf'(?<![A-Z]){re.escape(field)}([0-9a-z]+)', stem)
             if m:
                 result[rule["field"]] = m.group(1).lower()
                 _result_is_path[rule["field"]] = False
@@ -5995,6 +6094,10 @@ def apply_path_rules(attrs_data, path, project, _path_rules=None):
 def auto_set_all(attrs_data, path, project, skip_heavy=False):
     """Auto-detect and save: resolution, audio tag, AI source, prompt, seed, metadata."""
     entry        = get(attrs_data, path)
+    # If the file carries a user lock in its embedded metadata but arrived under
+    # a path the DB hasn't seen (external rename/move), restore the lock now —
+    # before this function can stamp editable=True or auto-rename it.
+    restore_lock_from_embed_entry(entry, path)
     was_editable = entry.get("editable", False)   # only rename files the app has previously touched
     current_tags = list(entry.get("tags", []))
     changed      = False

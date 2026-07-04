@@ -219,6 +219,18 @@ class _DbMixin:
         btn_redetect.clicked.connect(self._auto_detect_all)
         util_row.addWidget(btn_redetect)
 
+        btn_face_only = QPushButton(_t("👤 Face Only / 👤 顔のみ"))
+        btn_face_only.setToolTip(_t(
+            "Run face detection ONLY across all DB files — no metadata, no\n"
+            "filename rules, no tags. Backfills faces on files embedded while\n"
+            "face detection was off. Already-identified files are skipped fast. / "
+            "全DBファイルで顔検出のみ実行 — メタデータ・ファイル名ルール・タグは変更なし。\n"
+            "顔検出オフで取り込んだファイルの顔を補完。識別済みファイルは高速スキップ。"))
+        btn_face_only.setStyleSheet(
+            "background-color: #3a2a3a; color: #ffaaff; padding: 4px 8px;")
+        btn_face_only.clicked.connect(self._auto_detect_faces_only)
+        util_row.addWidget(btn_face_only)
+
         btn_unlock_util = QPushButton(_t("🔓 Init Missing Locks / 🔓 未設定だけ初期化"))
         btn_unlock_util.setToolTip(_t(
             "Set editable=True only on files that do not have an editable flag yet. "
@@ -373,21 +385,23 @@ class _DbMixin:
             self.lbl_schedule_status.setText(_t(
                 f"Updating now… / 更新中…"))
 
-        # Logo ON when scan starts: the scan IS doing AI work, so the logo
-        # should reflect that. Without this, a previously-tripped ceiling
-        # could leave the logo stuck OFF while the scan ran AI for hours
-        # — visually disconnected from what's actually happening. Restore
-        # from the stored _prev modes if present, otherwise set sensible
-        # defaults (when_empty = run AI only on files missing the data).
+        # Only restore a mode that a PRIOR mid-scan ceiling pause stashed in
+        # _prev. A genuine user "never" (no _prev) is an explicit AI-OFF
+        # choice and must be honored — defaulting the pop to "when_empty"
+        # forced dlib/CLIP on for every file, leaking native memory until
+        # RSS hit the ceiling and the scan hung. Honoring "never" lets the
+        # loop's "AI OFF respect" check skip face + CLIP detection.
         try:
             _changed_logo = False
-            if self.app.config.get("face_inspect_mode", "when_empty") == "never":
-                _prev = self.app.config.pop("_face_inspect_prev", "when_empty")
-                self.app.config["face_inspect_mode"] = _prev
+            if (self.app.config.get("face_inspect_mode") == "never"
+                    and "_face_inspect_prev" in self.app.config):
+                self.app.config["face_inspect_mode"] = \
+                    self.app.config.pop("_face_inspect_prev")
                 _changed_logo = True
-            if self.app.config.get("clip_inspect_mode", "never") == "never":
-                _prev = self.app.config.pop("_clip_inspect_prev", "when_empty")
-                self.app.config["clip_inspect_mode"] = _prev
+            if (self.app.config.get("clip_inspect_mode") == "never"
+                    and "_clip_inspect_prev" in self.app.config):
+                self.app.config["clip_inspect_mode"] = \
+                    self.app.config.pop("_clip_inspect_prev")
                 _changed_logo = True
             if _changed_logo:
                 cfg.save_config(self.app.config,
@@ -788,7 +802,10 @@ class _DbMixin:
                     # Bound memory growth from CLIP/MediaPipe/cv2/dlib
                     # accumulators every 50 files. gc.collect() trims Python
                     # cycles; empty_cache() returns VRAM to the driver so
-                    # the next forward pass doesn't grow the cache further.
+                    # the next forward pass doesn't grow the cache further;
+                    # malloc_trim() returns the freed glibc arenas to the OS
+                    # — without it dlib's native churn keeps RSS high even
+                    # though nothing is leaked.
                     # Gate on `i` so locked/failed files (which still run
                     # CLIP) also get cleaned up.
                     if (i + 1) % 50 == 0:
@@ -798,6 +815,7 @@ class _DbMixin:
                             torch.cuda.empty_cache()
                         except Exception:
                             pass
+                        attrs_mod.malloc_trim()
 
                     # Pause-on-ceiling: same RSS cap the AI inspect logo
                     # uses (clip_inspect_rss_limit_mb, default 1500). When
@@ -827,6 +845,11 @@ class _DbMixin:
                                         torch.cuda.empty_cache()
                                     except Exception:
                                         pass
+                                    # gc alone can't lower RSS after native
+                                    # churn — glibc keeps the freed arenas.
+                                    # Without this trim the pause never saw
+                                    # RSS drop and slept forever.
+                                    attrs_mod.malloc_trim()
                                     _rss = _psutil.Process().memory_info().rss / (1024 * 1024)
                                     if _rss <= _resume:
                                         break
@@ -946,16 +969,20 @@ class _DbMixin:
                     sb.showMessage(self.lbl_scan.text())
                     # Logo back ON — scan is doing AI work again, so the
                     # OFF state would lie. Restores the modes that were
-                    # active before the pause flipped them OFF.
+                    # active before the pause flipped them OFF. Only restore
+                    # what the pause actually stashed in _prev: a genuine
+                    # user "never" (no _prev) must stay "never".
                     try:
                         _changed_logo = False
-                        if self.app.config.get("face_inspect_mode", "when_empty") == "never":
-                            _prev = self.app.config.pop("_face_inspect_prev", "when_empty")
-                            self.app.config["face_inspect_mode"] = _prev
+                        if (self.app.config.get("face_inspect_mode") == "never"
+                                and "_face_inspect_prev" in self.app.config):
+                            self.app.config["face_inspect_mode"] = \
+                                self.app.config.pop("_face_inspect_prev")
                             _changed_logo = True
-                        if self.app.config.get("clip_inspect_mode", "never") == "never":
-                            _prev = self.app.config.pop("_clip_inspect_prev", "when_empty")
-                            self.app.config["clip_inspect_mode"] = _prev
+                        if (self.app.config.get("clip_inspect_mode") == "never"
+                                and "_clip_inspect_prev" in self.app.config):
+                            self.app.config["clip_inspect_mode"] = \
+                                self.app.config.pop("_clip_inspect_prev")
                             _changed_logo = True
                         if _changed_logo:
                             cfg.save_config(self.app.config,
@@ -1013,8 +1040,11 @@ class _DbMixin:
                     else:
                         _ai_state = "AI INSPECT: ON"
                     self._active_scan_btn.setText(_t("Done / 完了"))
+                    # Failed files may not pop a dialog (dedupe in
+                    # _show_failed_files), so keep the count visible here.
+                    skip_info = f"  |  Skipped: {len(failed)}" if failed else ""
                     self.lbl_scan.setText(
-                        f"Done — added {added}, removed {removed}{face_info}{err_info}  |  {_ai_state}")
+                        f"Done — added {added}, removed {removed}{face_info}{err_info}{skip_info}  |  {_ai_state}")
                     QTimer.singleShot(8000, lambda: self.lbl_scan.setText(""))
                     sb.clearMessage()
                     sb.showMessage(_ai_state, 6000)
@@ -1262,7 +1292,27 @@ class _DbMixin:
 
     def _show_failed_files(self, failed):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QLabel
+        # Non-modal singleton. The old modal exec() stacked dialogs: 0-byte
+        # files fail again on every scan, the recurring-update timer keeps
+        # firing inside the modal's nested event loop, and each finished
+        # scan opened a fresh modal on top of the one being closed. One
+        # reusable window + skip-if-same-files keeps it to a single
+        # closable dialog no matter how many scans complete.
+        _key = frozenset(failed)
+        if _key == getattr(self, '_failed_dlg_set', None):
+            _old = getattr(self, '_failed_dlg', None)
+            if _old is not None and _old.isVisible():
+                return      # identical report already on screen
+            return          # user already closed this exact report
+        self._failed_dlg_set = _key
+        _old = getattr(self, '_failed_dlg', None)
+        if _old is not None:
+            try:
+                _old.close(); _old.deleteLater()
+            except Exception:
+                pass
         dlg = QDialog(self)
+        self._failed_dlg = dlg
         dlg.setWindowTitle(f"Skipped Files ({len(failed)})")
         dlg.resize(700, 400)
         vl = QVBoxLayout(dlg)
@@ -1302,11 +1352,27 @@ class _DbMixin:
         btn_close.clicked.connect(dlg.accept)
         hl.addWidget(btn_copy); hl.addWidget(btn_move); hl.addStretch(); hl.addWidget(btn_close)
         vl.addLayout(hl)
-        dlg.exec()
+        dlg.show(); dlg.raise_(); dlg.activateWindow()
 
     def _show_face_errors(self, face_errors):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QLabel
+        # Same non-modal singleton + dedupe pattern as _show_failed_files —
+        # recurring scans must never stack modal dialogs.
+        _key = frozenset(face_errors)
+        if _key == getattr(self, '_face_err_dlg_set', None):
+            _old = getattr(self, '_face_err_dlg', None)
+            if _old is not None and _old.isVisible():
+                return
+            return
+        self._face_err_dlg_set = _key
+        _old = getattr(self, '_face_err_dlg', None)
+        if _old is not None:
+            try:
+                _old.close(); _old.deleteLater()
+            except Exception:
+                pass
         dlg = QDialog(self)
+        self._face_err_dlg = dlg
         dlg.setWindowTitle(f"Face Detection Errors ({len(face_errors)})")
         dlg.resize(700, 350)
         vl = QVBoxLayout(dlg)
@@ -1323,7 +1389,7 @@ class _DbMixin:
         btn_close.clicked.connect(dlg.accept)
         hl.addWidget(btn_copy); hl.addStretch(); hl.addWidget(btn_close)
         vl.addLayout(hl)
-        dlg.exec()
+        dlg.show(); dlg.raise_(); dlg.activateWindow()
 
     def _stop_auto_detect(self):
         self._stop_scan_all = True
@@ -1358,15 +1424,57 @@ class _DbMixin:
         if reply != QMessageBox.StandardButton.Yes: return
         self._run_scan(paths)
 
-    def _run_scan(self, paths):
-        """Shared scan loop used by both Scan All and Scan New."""
+    def _auto_detect_faces_only(self):
+        """Face-only backfill: run face detection across the DB without
+        touching metadata/filename rules. For files embedded while face
+        detection was off (the 'scan separately' workflow). Already-named
+        files are skipped by _run_scan's face step without a detector call,
+        so the real cost is only the unidentified remainder."""
+        paths = self.app.data.get("paths", []) if self.app.data else []
+        if not paths:
+            self.lbl_scan.setText("No database loaded."); return
+        attrs_data = self.app.attrs_data or {}
+        # Count what actually needs the detector so the prompt is honest —
+        # a file with a person_id (or a P-coded filename) is a fast skip.
+        import aisearch_attrs as attrs_mod
+        need = 0
+        for p in paths:
+            if attrs_mod.get(attrs_data, p).get("person_id"):
+                continue
+            _stem = os.path.splitext(os.path.basename(p))[0]
+            _parsed = attrs_mod.parse_coded_filename(_stem)
+            if _parsed and _parsed.get("persons"):
+                continue
+            need += 1
+        reply = QMessageBox.question(
+            self, "Face Only",
+            f"Run FACE detection only across {len(paths):,} files?\n\n"
+            f"{need:,} file(s) still need detection; the rest are already "
+            f"identified and will be skipped instantly.\n\n"
+            f"Metadata, filename rules, and tags are NOT touched in this pass.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes: return
+        self._run_scan(paths, face_mode=2)
+
+    def _run_scan(self, paths, face_mode=1):
+        """Shared scan loop used by Re-detect All, Scan New, and Face Only.
+
+        face_mode:
+          1 = metadata (auto_set_all) + face detection   (default)
+          2 = face detection ONLY — skips auto_set_all so no filename/tag
+              re-derivation, no metadata writes. This is the "Face Only"
+              backfill pass for files embedded while face was off; the
+              face step's own rules (filename-P wins, existing person_id
+              never overwritten) make it skip already-identified files
+              without ever calling the detector.
+          0 = metadata only, no face.
+        """
         import aisearch_attrs as attrs_mod
         self._stop_scan_all = False
         self.btn_stop_scan.setEnabled(True)
         self.lbl_scan.setText(f"Scanning {len(paths)} files…")
         self.progress_bar.setRange(0, len(paths))
         self.progress_bar.setValue(0)
-        face_mode       = 1  # always include face
         # Always rename during scan — Update DB is an explicit batch op, the
         # user already clicked it. The auto_rename UI was removed so this
         # no longer needs to be conditional on a checkbox.
@@ -1385,13 +1493,43 @@ class _DbMixin:
                 self.app.attrs_data = attrs_mod.auto_set_all(
                     self.app.attrs_data, path, self.app.current_project)
             if face_mode >= 1:
-                pid = attrs_mod.detect_or_assign_person_id(path, self.app.current_project)
-                if pid:
-                    self.app.attrs_data.setdefault(path, {})["person_id"] = pid
-                    if auto_rename:
-                        new_path = attrs_mod.rename_with_person_id(
-                            self.app.attrs_data, path, pid,
-                            flush_stores=False, skip_uncoded=False)
+                # Same authority rules as execute_generate's Step 3:
+                # a filename-encoded P-code is the user's explicit label
+                # and wins without running the detector (a misidentified
+                # face here would rename the file to the wrong person),
+                # and an existing person_id is never overwritten — so
+                # Detect ALL doubles as a safe "backfill missing faces"
+                # pass that skips already-identified files quickly.
+                _stem_for_pid = os.path.splitext(os.path.basename(path))[0]
+                _parsed_pid = attrs_mod.parse_coded_filename(_stem_for_pid)
+                _filename_persons = (_parsed_pid.get("persons", [])
+                                     if _parsed_pid else [])
+                if _filename_persons:
+                    self.app.attrs_data.setdefault(path, {})["person_id"] = \
+                        _filename_persons[0]
+                elif before.get("person_id"):
+                    pass    # already identified — auto never overwrites
+                else:
+                    pid = attrs_mod.detect_or_assign_person_id(path, self.app.current_project)
+                    if pid:
+                        self.app.attrs_data.setdefault(path, {})["person_id"] = pid
+                        if auto_rename:
+                            new_path = attrs_mod.rename_with_person_id(
+                                self.app.attrs_data, path, pid,
+                                flush_stores=False, skip_uncoded=False)
+                            if new_path != path:
+                                scan_renames[path] = new_path
+                                if (self.app.data and "paths" in self.app.data
+                                        and path in self.app.data["paths"]):
+                                    idx2 = self.app.data["paths"].index(path)
+                                    self.app.data["paths"][idx2] = new_path
+                                path = new_path
+                    elif auto_rename:
+                        # No face → fall back to date-first coded name (J{j}…) so
+                        # the file still gets a structured filename instead of
+                        # staying as an arbitrary download stem.
+                        new_path = attrs_mod.rename_to_date_first(
+                            self.app.attrs_data, path, self.app.current_project)
                         if new_path != path:
                             scan_renames[path] = new_path
                             if (self.app.data and "paths" in self.app.data
@@ -1399,19 +1537,6 @@ class _DbMixin:
                                 idx2 = self.app.data["paths"].index(path)
                                 self.app.data["paths"][idx2] = new_path
                             path = new_path
-                elif auto_rename:
-                    # No face → fall back to date-first coded name (J{j}…) so
-                    # the file still gets a structured filename instead of
-                    # staying as an arbitrary download stem.
-                    new_path = attrs_mod.rename_to_date_first(
-                        self.app.attrs_data, path, self.app.current_project)
-                    if new_path != path:
-                        scan_renames[path] = new_path
-                        if (self.app.data and "paths" in self.app.data
-                                and path in self.app.data["paths"]):
-                            idx2 = self.app.data["paths"].index(path)
-                            self.app.data["paths"][idx2] = new_path
-                        path = new_path
             after = attrs_mod.get(self.app.attrs_data, path)
             if after != before:
                 updated += 1
@@ -1421,7 +1546,8 @@ class _DbMixin:
                 if i > 0:
                     elapsed = time.monotonic() - _scan_start
                     eta_str = f"  ~{self._fmt_eta(elapsed / (i + 1) * (len(paths) - i - 1))} left"
-                self.progress_label.setText(f"Metadata ({i+1}/{len(paths)}){eta_str}: {os.path.basename(path)}")
+                _phase = "Face" if face_mode == 2 else "Metadata"
+                self.progress_label.setText(f"{_phase} ({i+1}/{len(paths)}){eta_str}: {os.path.basename(path)}")
                 self.lbl_scan.setText(f"Update: {i+1}/{len(paths)}, updated {updated}{eta_str}")
                 QApplication.processEvents()
         else:
@@ -1459,8 +1585,15 @@ class _DbMixin:
                         all_paths.append(os.path.abspath(os.path.join(d, f)))
             else:
                 for r, subdirs, fs in os.walk(d):
-                    subdirs[:] = [s for s in subdirs if s != '_unreadable']
-                    if os.path.basename(r) == '_unreadable': continue
+                    # Match the Update walker: "Move All to _unreadable"
+                    # actually creates 'unreadable/' (no underscore), so
+                    # filter both spellings or moved files get re-scanned.
+                    subdirs[:] = [s for s in subdirs
+                                  if s != '_unreadable'
+                                  and not s.lower().startswith('unreadable')]
+                    _bn = os.path.basename(r)
+                    if _bn == '_unreadable' or _bn.lower().startswith('unreadable'):
+                        continue
                     for f in fs:
                         if f.lower().endswith(valid_exts):
                             all_paths.append(os.path.abspath(os.path.join(r, f)))
@@ -1618,8 +1751,11 @@ class _DbMixin:
         disk_by_dir: dict[str, list[str]] = {}
         for d in all_dirs:
             for root, subdirs, files in os.walk(d):
-                subdirs[:] = [s for s in subdirs if s != '_unreadable']
-                if os.path.basename(root) == '_unreadable':
+                subdirs[:] = [s for s in subdirs
+                              if s != '_unreadable'
+                              and not s.lower().startswith('unreadable')]
+                _bn = os.path.basename(root)
+                if _bn == '_unreadable' or _bn.lower().startswith('unreadable'):
                     continue
                 for f in files:
                     if f.lower().endswith(valid_exts):

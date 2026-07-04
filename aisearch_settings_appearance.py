@@ -2,9 +2,9 @@ import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QGroupBox, QCheckBox, QRadioButton,
                               QButtonGroup, QComboBox, QScrollArea, QSpinBox,
-                              QColorDialog)
+                              QColorDialog, QFontComboBox)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QFont
 
 import aisearch_config as cfg
 from attr_viewer import _lang_label as _t
@@ -289,6 +289,22 @@ class _AppearanceMixin:
         fl.addWidget(_hsep())
 
         # Font sizes
+        fl.addWidget(QLabel(_t("Font family: / フォント：")))
+        family_row = QHBoxLayout()
+        family_row.addWidget(QLabel(_t("UI font / UIフォント")))
+        family_row.addStretch()
+        family_cb = QFontComboBox()
+        family_cb.setCurrentFont(QFont(self.app.config.get("ui_font_family", "Noto Sans CJK JP")))
+        family_cb.setMinimumWidth(220)
+        def _family_changed(font):
+            self.app.config["ui_font_family"] = font.family()
+            cfg.save_config(self.app.config, getattr(self.app, "current_project", None))
+            self.app.reload_fonts()
+        family_cb.currentFontChanged.connect(_family_changed)
+        family_row.addWidget(family_cb)
+        fl.addLayout(family_row)
+
+        fl.addWidget(_hsep())
         fl.addWidget(QLabel(_t("Font sizes: / フォントサイズ：")))
 
         def font_row(label, key, default):

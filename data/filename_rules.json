@@ -1,95 +1,95 @@
 {
-  "auto_rename": false,
-  "rules": [
-    {
-      "field": "P",
-      "digits": 3,
-      "extract": true
-    },
-    {
-      "field": "A",
-      "digits": 3,
-      "extract": true
-    },
-    {
-      "field": "PI",
-      "digits": 3,
-      "extract": true
-    },
-    {
-      "field": "E",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "HC",
-      "digits": 3,
-      "extract": true
-    },
-    {
-      "field": "FA",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "X",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "SK",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "B",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "WH",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "PM",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "T",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "CS",
-      "digits": 3,
-      "extract": true
-    },
-    {
-      "field": "O",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "R",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "K",
-      "digits": 2,
-      "extract": true
-    },
-    {
-      "field": "J",
-      "digits": 8,
-      "extract": true
-    },
-    {
-      "pattern": "WM",
-      "field": "WM",
-      "value": "true"
-    }
-  ]
+ "auto_rename": false,
+ "rules": [
+  {
+   "field": "P",
+   "digits": 3,
+   "extract": true
+  },
+  {
+   "field": "A",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "PI",
+   "digits": 3,
+   "extract": true
+  },
+  {
+   "field": "E",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "HC",
+   "digits": 3,
+   "extract": true
+  },
+  {
+   "field": "FA",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "X",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "SK",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "B",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "WH",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "PM",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "T",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "CS",
+   "digits": 3,
+   "extract": true
+  },
+  {
+   "field": "O",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "R",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "K",
+   "digits": 2,
+   "extract": true
+  },
+  {
+   "field": "J",
+   "digits": 8,
+   "extract": true
+  },
+  {
+   "pattern": "WM",
+   "field": "WM",
+   "value": "true"
+  }
+ ]
 }

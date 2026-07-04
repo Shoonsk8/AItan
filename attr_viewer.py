@@ -697,6 +697,12 @@ class FieldWidget(QGroupBox):
             from PyQt6.QtGui import QShortcut, QKeySequence
             _del_sc = QShortcut(QKeySequence("Delete"), self._pathlist)
             _del_sc.activated.connect(_remove_paths)
+            # Editing controls, kept separate so a locked file can still
+            # disable add/remove WITHOUT disabling the list itself — the list
+            # must stay live so double-click-to-open (read-only navigation)
+            # keeps working while locked.
+            self._pathlist_edit_widgets = [btn_addf, btn_addd, btn_rm]
+            self._pathlist_del_shortcut = _del_sc
 
         elif style in ("taglist", "boolean", "radio"):
             self._btns = {}
