@@ -3726,10 +3726,26 @@ class AISearchApp(QMainWindow):
 
         # ── Remove truly missing files (not matched as moves) ─────────────────
         if missing_idx:
-            keep = [i for i in range(len(self.data["paths"])) if i not in set(missing_idx)]
-            self.data["paths"]      = [self.data["paths"][i] for i in keep]
-            self.data["embeddings"] = self.data["embeddings"][keep]
-            paths = self.data["paths"]
+            _total = len(self.data["paths"])
+            # Transient mass-miss guard. This scan fires every 30s and on any
+            # watch-dir change, stat-ing every indexed path. A briefly
+            # unresponsive mount (/mnt/1TBSSD saturated during a heavy FM
+            # move/copy) makes os.path.exists lie "missing" for a huge slice of
+            # the DB at once; pruning then wipes the in-memory embeddings and
+            # collapses search to just the query row until the next restart.
+            # A real bulk deletion is bounded by what the user removed — it is
+            # not ~half the whole library in one tick. So skip the prune when
+            # the removal is implausibly large and let the next scan (files back
+            # once the mount settles) or a real rebuild reconcile. Genuinely
+            # deleted files are still cleaned lazily by _remove_missing_file.
+            if _total > 200 and len(missing_idx) > max(100, int(_total * 0.5)):
+                _wdbg(f"watch_scan SKIP prune — {len(missing_idx)}/{_total} "
+                      f"reported missing in one scan (transient mass-miss guard)")
+            else:
+                keep = [i for i in range(len(self.data["paths"])) if i not in set(missing_idx)]
+                self.data["paths"]      = [self.data["paths"][i] for i in keep]
+                self.data["embeddings"] = self.data["embeddings"][keep]
+                paths = self.data["paths"]
 
         # Sort by mtime so we process and preview the most recently created file
         new_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
