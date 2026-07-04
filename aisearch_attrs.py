@@ -3966,7 +3966,12 @@ def add_correction(project, path_key, image_emb, coded_entry):
         emb = image_emb
         if hasattr(emb, "dim") and emb.dim() > 1:
             emb = emb.squeeze(0)
-        emb = emb.cpu()
+        # .clone() is load-bearing: a DB-hit bake passes image_emb as a VIEW
+        # into the features matrix (_embeddings[idx]); torch.save serializes by
+        # storage, so saving one 768-float view writes the whole ~47 MB backing
+        # buffer per correction (this ballooned corrections_AIX.pt to 2.8 GB).
+        # clone() gives a fresh 3 KB storage holding only this vector.
+        emb = emb.detach().cpu().clone().contiguous()
         # Iterate every coded field with digits > 0. Read by long storage
         # key (post-migration entries store at "hair", "background", …).
         for cf in CODED_FIELDS:

@@ -6802,6 +6802,17 @@ class AISearchApp(QMainWindow):
                 if (_cand and os.path.exists(_cand)
                         and os.path.splitext(_cand)[1].lower() in media_exts):
                     selected_source = os.path.abspath(_cand)
+        # Search mode shows the query on the thumbnail, not always as a
+        # selected row; browse may be previewing without a row focus. Fall
+        # back to whatever media is actually on screen so "the video from
+        # search / browse" is carried into Video Join.
+        if selected_source is None and previous_mode != "videojoin":
+            for _cand in (getattr(self.preview_handler, "current_path", None),
+                          getattr(self, "query_path", None)):
+                if (_cand and os.path.exists(_cand)
+                        and os.path.splitext(_cand)[1].lower() in media_exts):
+                    selected_source = os.path.abspath(_cand)
+                    break
 
         if directory is None:
             if selected_source:
